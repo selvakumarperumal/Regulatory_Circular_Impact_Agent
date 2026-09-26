@@ -1,0 +1,17 @@
+[project]
+name = "common"
+version = "0.1.0"
+description = "The database tables shared by the watcher, worker and api services"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "psycopg[binary]>=3.3.6",
+    "sqlmodel>=0.0.47",
+]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""

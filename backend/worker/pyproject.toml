@@ -1,0 +1,20 @@
+[project]
+name = "worker"
+version = "0.1.0"
+description = "The agent: OCRs new circulars, maps them to internal policies with Gemini, opens gap tickets"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "boto3>=1.43.101",
+    "common",
+    "google-genai>=2.25.0",
+    "httpx>=0.28.1",
+    "langchain-google-genai>=4.4.0",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.11",
+    "pymupdf>=1.26",
+    "sqlmodel>=0.0.47",
+]
+
+[tool.uv.sources]
+common = { path = "../common", editable = true }

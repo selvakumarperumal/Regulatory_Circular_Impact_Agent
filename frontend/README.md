@@ -1,0 +1,90 @@
+# frontend
+
+The compliance desk: a console over the backend's API. It's plain HTML, CSS and JavaScript,
+with no build step and no dependencies.
+
+Every list is a table, and every gap, circular and policy has its own page. The content is on
+the left, and a sidebar holds its properties and actions. Breadcrumbs at the top lead back to the
+list, with its filters as you left them.
+
+| Page | What you can do |
+|---|---|
+| **Overview** | A dashboard: your regulatory exposure (gaps to close, by severity) with the setup steps or headline numbers, KPI cards with 30-day trends, exposure per policy, what's due next and the latest circulars. Every card opens its filtered list |
+| **Gaps** | A table you can filter by status, owner or overdue. A gap's page shows what the policy is missing, the proposed wording (with Copy) and the activity, with a comment box. Its sidebar changes the status, owner or due date |
+| **Circulars** | A table you can filter by regulator and status, and search by title or addressee. A circular's page shows the summary, what it requires, the gaps it opened and the OCR text. Its sidebar holds the addressee, whether it applies to you and why, the source links, and **Reprocess** |
+| **Company** | Describe your company in a few sentences. Until you do, circulars are summarised but not judged, and nothing says "Applies to us" |
+| **Policies** | Build the library: **New policy** (the text can be loaded from a `.txt` or `.md` file), or **Import JSON** for many at once. Search it, read a policy, edit it (a text change makes a new version), add controls, see its gaps |
+
+The agent ships knowing nothing about your company. The overview shows a two-step setup (describe
+the company, add policies) until both are done. The library starts empty. A policy you add is checked by the worker against the circulars of
+the last `LOOKBACK_DAYS` that apply to the company, so its gaps appear within a minute or two.
+
+Import file format: a list of policies. `text` is either one string or a list of clauses.
+`controls` is optional.
+
+```json
+[
+  {
+    "code": "POL-KYC",
+    "title": "Know Your Customer and Anti-Money Laundering Policy",
+    "owner": "head.kyc@yourbank.com",
+    "regulators": ["RBI", "SEBI"],
+    "text": ["1. Scope: ...", "2. Customer due diligence: ..."],
+    "controls": [
+      { "code": "CTL-KYC-01", "description": "Upload new KYC records to CKYCR",
+        "owner": "ops.kyc@yourbank.com", "frequency": "daily" }
+    ]
+  }
+]
+```
+
+A policy whose code already exists is skipped, so importing the same file twice is safe.
+
+Put your name or email under **Signed in as** in the sidebar before changing a gap. Every
+change and comment is recorded under it. The dot below it shows whether the API answers.
+
+## Run it
+
+With the stack: `docker compose up -d frontend`, then open http://localhost:8080. nginx
+serves the page and forwards `/api/*` to the api service (see `nginx.conf`), so the browser
+only ever talks to one origin.
+
+By hand, against an API on http://localhost:8000:
+
+```bash
+cd frontend
+python3 -m http.server 5500          # then open http://localhost:5500
+```
+
+To use a different API, set `window.__API_URL__` in `config.js`. The Docker image swaps in
+`config.docker.js` instead, which sets it to `/api`.
+
+```
+index.html            the sidebar, the top bar (breadcrumbs), the page frame
+css/
+  tokens.css          every colour, radius and font (one dark theme)
+  layout.css          sidebar, top bar, list and detail page frames
+  components.css      panels, tables, tags, buttons, forms, timeline, toasts
+  pages.css           overview charts and setup checklist, the company page
+js/                   ES modules, loaded by the browser directly
+  main.js             registers the routes and starts the app
+  lib/                api.js (the API client), html.js (escaping), format.js (dates, due, ...)
+  ui/                 icons.js, components.js (tags, panels, tables, ...), feedback.js (toast, tooltip)
+  app/                router.js (#/gaps/12 → a page), session.js ("Signed in as"),
+                      state.js (list filters), status.js (API status, badges)
+  views/              overview.js, gaps.js, circulars.js, policies.js, company.js
+nginx.conf, Dockerfile   the image: nginx serving the files and forwarding /api
+```
+
+To add a page, write a function that renders into `#view` in `js/views/`, and register it
+with `route("name/:id", page)` in `main.js`.
+
+The fonts are Sora (headings and figures), Plus Jakarta Sans (text) and JetBrains Mono (codes),
+from Google Fonts. Without internet the page falls back to system fonts.
+
+The console has one dark theme: near-black navy with a lime-to-mint accent. Each regulator keeps
+one colour everywhere (RBI blue, SEBI green, IRDAI orange), severity is one rose hue (lighter is
+more severe), and states always show a word beside their colour dot.
+
+Everything from the API is HTML-escaped before it's shown (the
+`html` template tag in `js/lib/html.js`), because circular titles come from outside websites.

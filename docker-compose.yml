@@ -1,0 +1,124 @@
+# Regulatory Circular Impact Agent — the whole backend.
+#
+#   cp .env.example .env                        # then set GEMINI_API_KEY
+#   docker compose up -d --build
+#   open http://localhost:8080                  # the console: add your policies there
+#
+# One folder per service under backend/:
+#   watcher   new RBI / SEBI / IRDAI circulars -> PDF in S3 + a row in Postgres
+#   ocr       Baidu Unlimited-OCR on the GPU (vLLM)
+#   worker    OCR -> Gemini -> gap tickets for the policy owners
+#   api       FastAPI on :8000
+# plus Postgres, and frontend/ (a static console served by nginx, which forwards
+# /api to the api service). Floci (local S3) runs outside this file, on the host's port 4566,
+# and Gemini is Google's API, reached over the internet.
+#
+# Settings come from .env beside this file; every one except GEMINI_API_KEY has a
+# default (in each service's config.py), so unset ones are passed as "" and ignored.
+
+name: rci
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rci}:${POSTGRES_PASSWORD:-rci}@postgres:5432/${POSTGRES_DB:-rci}
+  # Floci on the host. Not taken from .env: a shell with S3_ENDPOINT_URL=http://localhost:4566
+  # (right for `uv run` on the host) would point the containers at themselves. "" = real AWS.
+  S3_ENDPOINT_URL: http://host.docker.internal:4566
+  S3_BUCKET: ${S3_BUCKET:-rci}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rci}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rci}
+      POSTGRES_DB: ${POSTGRES_DB:-rci}
+    ports:
+      - "5432:5432"          # so services run on the host with `uv run` can reach it too
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rci} -d ${POSTGRES_DB:-rci}"]
+      interval: 5s
+      retries: 10
+
+  watcher:
+    build:
+      context: ./backend              # not ./backend/watcher: the image also needs backend/common
+      dockerfile: watcher/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      INTERVAL_MINUTES: ${WATCH_INTERVAL_MINUTES:-60}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Floci on the host (Linux needs this line)
+
+  ocr:
+    build: ./backend/ocr              # the official vLLM image + flags, see backend/ocr/README.md
+    restart: unless-stopped
+    ports:
+      - "8001:8000"                   # so a worker run on the host can reach it
+    volumes:
+      - hf-cache:/root/.cache/huggingface   # the 6.7 GB model, downloaded on first start
+    ipc: host
+    # GPU via the NVIDIA runtime (snap Docker rejects `deploy.resources...devices`)
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)"]
+      interval: 30s
+      start_period: 20m               # the first start downloads the model
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      OCR_URL: http://ocr:8000/v1
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL_NAME: ${GEMINI_MODEL_NAME:-}
+      GEMINI_EMBEDDING_MODEL_NAME: ${GEMINI_EMBEDDING_MODEL_NAME:-}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-}
+      MATCH_TOP_K: ${MATCH_TOP_K:-}
+      LOOKBACK_DAYS: ${LOOKBACK_DAYS:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rci}:${POSTGRES_PASSWORD:-rci}@postgres:5432/${POSTGRES_DB:-rci}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+
+volumes:
+  pgdata:
+  hf-cache:

@@ -1,0 +1,71 @@
+/* Design tokens: one dark theme. Every colour, radius, shadow and font lives here.
+ *
+ * Brand: near-black navy with a lime -> mint accent and soft teal glows.
+ * Type: Sora for headings and figures, Plus Jakarta Sans for text, JetBrains Mono for codes.
+ * Chart colours are validated on the card surface (dataviz palette checks, dark):
+ *   - regulators (RBI, SEBI, IRDAI): three categorical hues, all pairs colour-blind safe;
+ *   - severity: one rose hue ordered low -> high (on dark, lighter = more severe).
+ * States are always shown as a dot plus a word, never colour alone. */
+
+:root {
+  color-scheme: dark;
+
+  --page: #05070d;
+  --surface: #0b0f19;
+  --surface-2: #0f1522;
+  --surface-3: #161d2d;
+  --field: #080c15;                 /* inputs */
+  --paper: #0d1321;                 /* policy wording and draft changes */
+  --line: rgba(148, 163, 184, 0.12);
+  --line-strong: rgba(148, 163, 184, 0.22);
+  --card: linear-gradient(180deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0) 140px), var(--surface);
+
+  --ink: #eef2f8;
+  --ink-2: #a3adc2;
+  --muted: #7a859c;
+
+  --accent: #a7ef6f;                /* lime: links, focus, the primary action */
+  --accent-strong: #c8f79e;
+  --accent-soft: rgba(167, 239, 111, 0.1);
+  --accent-ink: #0b1a06;            /* text on the accent */
+  --teal: #5eead4;
+  --focus: rgba(167, 239, 111, 0.35);
+  --grad-button: linear-gradient(135deg, #c5f26b 0%, #6fe3a8 100%);
+
+  --sidebar: #070a12;
+  --sidebar-2: #10151f;
+  --sidebar-line: rgba(148, 163, 184, 0.1);
+  --sidebar-ink: #8a94aa;
+  --sidebar-ink-strong: #f1f5f9;
+
+  /* severity: one rose hue, low -> high */
+  --sev-low: #9f1239;
+  --sev-medium: #e11d48;
+  --sev-high: #fda4af;
+
+  /* regulators: categorical, fixed per regulator everywhere */
+  --reg-rbi: #3987e5;
+  --reg-sebi: #199e70;
+  --reg-irdai: #d95926;
+
+  /* states */
+  --st-open: #818cf8;
+  --st-progress: #fbbf24;
+  --st-closed: #34d399;
+  --st-quiet: #64748b;
+  --st-info: #38bdf8;
+  --danger: #fb7185;
+  --danger-soft: rgba(251, 113, 133, 0.1);
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.1);
+  --warn: #fbbf24;
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow-sm: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 40px -18px rgba(0, 0, 0, 0.8);
+
+  --sans: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --display: "Sora", "Plus Jakarta Sans", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}

@@ -1,0 +1,22 @@
+[project]
+name = "api"
+version = "0.1.0"
+description = "REST API over circulars, the policy/control library and gap tickets"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "common",
+    "fastapi>=0.141",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.11",
+    "sqlmodel>=0.0.47",
+    "uvicorn>=0.54",
+]
+
+[tool.uv.sources]
+common = { path = "../common", editable = true }
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]

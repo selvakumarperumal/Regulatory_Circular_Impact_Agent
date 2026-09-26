@@ -1,0 +1,18 @@
+[project]
+name = "watcher"
+version = "0.1.0"
+description = "Finds new RBI, SEBI and IRDAI circulars, stores the PDFs in S3 and queues them for the worker"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "boto3>=1.43.101",
+    "common",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.11",
+    "sqlmodel>=0.0.47",
+]
+
+[tool.uv.sources]
+common = { path = "../common", editable = true }

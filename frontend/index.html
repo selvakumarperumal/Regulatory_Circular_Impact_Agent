@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#05070d" />
+  <title>Circular Impact Desk</title>
+  <meta name="description" content="Compliance desk for the Regulatory Circular Impact Agent: circulars, the company, the policy library and gap tickets." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23a7ef6f%22/%3E%3Cpath d=%22M11 9h7l4 4v10a1 1 0 0 1-1 1H11a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1z%22 fill=%22none%22 stroke=%22%230b1a06%22 stroke-width=%222%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M13 18l2 2 4-4%22 fill=%22none%22 stroke=%22%230b1a06%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#/overview">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7z" /><path d="M14 3v4h4" /><path d="M9.5 14l2 2 3.5-3.5" /></svg>
+      </span>
+      <span class="brand-text"><b>Circular Impact</b><small>Compliance desk</small></span>
+    </a>
+
+    <nav class="nav" aria-label="Sections">
+      <div class="nav-group">
+        <div class="nav-label">Work</div>
+        <a href="#/overview" data-view="overview">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></svg>
+          <span>Overview</span>
+        </a>
+        <a href="#/gaps" data-view="gaps">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4" /><path d="M5 4h11l-2 4 2 4H5" /></svg>
+          <span>Gaps</span><em class="badge" id="badge-gaps" title="Open or in progress"></em>
+        </a>
+        <a href="#/circulars" data-view="circulars">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7z" /><path d="M14 3v4h4" /><path d="M9 12h6M9 16h6" /></svg>
+          <span>Circulars</span><em class="badge" id="badge-circulars" title="Waiting for the worker"></em>
+        </a>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Library</div>
+        <a href="#/policies" data-view="policies">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>
+          <span>Policies</span><em class="badge" id="badge-policies"></em>
+        </a>
+        <a href="#/company" data-view="company">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16" /><path d="M15 9h4a1 1 0 0 1 1 1v11" /><path d="M3 21h18" /><path d="M8 8h3M8 12h3M8 16h3" /></svg>
+          <span>Company</span><em class="badge todo" id="badge-company" title="Not described yet" hidden>Set up</em>
+        </a>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <label class="you" for="actor">
+        <span>Signed in as</span>
+        <input id="actor" type="text" placeholder="your.name@bank.com" autocomplete="email" />
+      </label>
+      <div class="api-status" id="api-status"><i></i><span>Checking the API…</span></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+      <div class="topbar-actions">
+        <span id="last-refresh"></span>
+        <button class="icon-btn" id="refresh" title="Reload this page's data" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8" /><path d="M20 3v5h-5" /></svg>
+        </button>
+      </div>
+    </header>
+    <main id="view" aria-live="polite"></main>
+  </div>
+
+  <div class="tip" id="tip" role="tooltip" hidden></div>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <input type="file" id="import-file" accept=".json,application/json" hidden />
+
+  <!-- Where the API is: config.js (served by hand) or config.docker.js (in the image) -->
+  <script src="config.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
