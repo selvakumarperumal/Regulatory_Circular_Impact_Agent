@@ -1,6 +1,7 @@
 """The company's policy library, and the controls under each policy."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import defer
 from sqlmodel import col, select
 
 from common.models import OPEN_STATUSES, Control, ControlIn, Gap, GapEvent, Policy, PolicyIn, now
@@ -17,7 +18,8 @@ class PolicyDetail(BaseModel):
 
 @router.get("")
 def list_policies(session: SessionDep) -> list[Policy]:
-    return session.exec(select(Policy).order_by(Policy.code)).all()
+    # the embeddings are never sent out, so don't read them
+    return session.exec(select(Policy).options(defer(Policy.embeddings)).order_by(Policy.code)).all()
 
 
 @router.post("", status_code=201)
@@ -42,11 +44,15 @@ def get_policy(policy_id: int, session: SessionDep) -> PolicyDetail:
 @router.put("/{policy_id}")
 def update_policy(policy_id: int, body: PolicyIn, session: SessionDep) -> Policy:
     """Replace the policy. A text change bumps the version and is noted on its open gaps,
-    so the owner can close them against the new version."""
+    so the owner can close them against the new version. The worker re-embeds the policy
+    if its title or text changed, and checks it against the recent circulars again."""
     policy = get_or_404(session, Policy, policy_id)
+    if body.code != policy.code and session.exec(select(Policy).where(Policy.code == body.code)).first():
+        raise HTTPException(409, f"policy {body.code} already exists")
     text_changed = body.text != policy.text
+    if text_changed or body.title != policy.title:
+        policy.embeddings = None          # what gets embedded changed
     policy.sqlmodel_update(body)
-    policy.embedding = None               # the worker re-embeds it
     policy.updated_at = now()
     if text_changed:
         policy.version += 1

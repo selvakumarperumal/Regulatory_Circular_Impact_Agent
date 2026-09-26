@@ -1,10 +1,15 @@
 """The Postgres tables (SQLModel: each class is both a table and a Pydantic model).
 
 circulars  --<  gaps  >--  policies  --<  controls
-                 |
-                 +--<  gap_events   (history of every gap: opened, status changes, comments)
+    |            |
+    |            +--<  gap_events   (history of every gap: opened, status changes, comments)
+    |
+    +--<  policy_checks  >--  policies   (Gemini's verdict on each circular x policy version)
 
 company    one row: who "the company" is, in the user's words
+
+Work that costs time or money is done once and kept: the OCR text, the summary and the
+embedding on the circular, the embeddings on the policy, and every verdict in policy_checks.
 """
 from datetime import date, datetime, timezone
 from typing import Literal
@@ -19,7 +24,8 @@ def now() -> datetime:
 
 class Circular(SQLModel, table=True):
     """Inserted by the watcher (status 'new'). The worker then moves it along:
-    new -> parsed (OCR done) -> analyzed, or failed / skipped (older than LOOKBACK_DAYS)."""
+    new -> parsed (OCR done, text saved) -> analyzed, or failed / skipped (older than
+    LOOKBACK_DAYS). OCR runs once per PDF; everything after it reads the saved text."""
     __tablename__ = "circulars"
     __table_args__ = (UniqueConstraint("source", "source_key"),)
 
@@ -36,10 +42,14 @@ class Circular(SQLModel, table=True):
     created_at: datetime = Field(default_factory=now, sa_type=DateTime(timezone=True))
     # filled in by the worker
     text: str | None = Field(default=None, sa_type=Text, exclude=True)   # OCR output; served by /circulars/{id}/text
+    # what it says (Gemini reads it once; doesn't depend on the company)
     addressed_to: str | None = Field(default=None, sa_type=Text)   # as written in the circular
     summary: str | None = Field(default=None, sa_type=Text)
     requirements: list[str] | None = Field(default=None, sa_type=JSON)
-    # does it apply to the company? None = not checked, because nobody has described the company yet
+    # title + summary + requirements as a vector, to find the closest policies
+    embedding: list[float] | None = Field(default=None, sa_type=JSON, exclude=True)
+    embedding_model: str | None = Field(default=None, exclude=True)
+    # does it apply to the company? None = not judged yet (no description, or it just changed)
     applicable: bool | None = None
     applies_reason: str | None = Field(default=None, sa_type=Text)
     error: str | None = Field(default=None, sa_type=Text)
@@ -71,8 +81,9 @@ class Policy(PolicyIn, table=True):
     id: int | None = Field(default=None, primary_key=True)
     version: int = 1                         # +1 every time the text changes
     updated_at: datetime = Field(default_factory=now, sa_type=DateTime(timezone=True))
-    # set by the worker; re-done when the text is edited or the embedding model changes
-    embedding: list[float] | None = Field(default=None, sa_type=JSON, exclude=True)
+    # set by the worker: one vector per chunk of "title + text" (long policies are split so
+    # nothing is cut off). Cleared by the api when the title or text changes.
+    embeddings: list[list[float]] | None = Field(default=None, sa_type=JSON, exclude=True)
     embedding_model: str | None = Field(default=None, exclude=True)
 
 
@@ -89,6 +100,22 @@ class Control(ControlIn, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     policy_id: int = Field(foreign_key="policies.id", index=True)
+
+
+class PolicyCheck(SQLModel, table=True):
+    """Gemini's verdict on one circular against one version of a policy. A pair that has a
+    row here is never sent to Gemini again: not after a restart, a failure halfway through,
+    a change to the company description, or a new policy being added."""
+    __tablename__ = "policy_checks"
+    __table_args__ = (UniqueConstraint("circular_id", "policy_id", "policy_version"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    circular_id: int = Field(foreign_key="circulars.id", index=True)
+    policy_id: int = Field(foreign_key="policies.id", index=True)
+    policy_version: int
+    similarity: float                        # how close the policy was to the circular (0-1)
+    impacted: bool                           # True: out of date, and a gap was opened
+    checked_at: datetime = Field(default_factory=now, sa_type=DateTime(timezone=True))
 
 
 GapStatus = Literal["open", "in_progress", "closed", "dismissed"]

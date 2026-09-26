@@ -158,28 +158,33 @@ sequenceDiagram
 
     Note over K: every 60 seconds
     K->>DB: newest circular with status new
-    K->>S3: get the PDF
-    loop each page, up to 20
-        K->>O: page image (PNG)
-        O-->>K: page text
+    alt the same PDF was already read for another circular
+        K->>DB: copy its saved text
+    else
+        K->>S3: get the PDF
+        loop each page, up to 20
+            K->>O: page image (PNG)
+            O-->>K: page text
+        end
     end
     K->>DB: save text, status parsed
 
     K->>G: who is it addressed to, what does it change and require?
     G-->>K: addressed_to, summary, requirements
+    K->>DB: save them
     K->>DB: read the company description
     opt a description exists
         K->>G: does it apply to this company?
         G-->>K: applies_to_company, reason
     end
     alt applies to the company
-        K->>G: embed the circular
+        K->>G: embed the circular (saved with it)
         G-->>K: vector
         Note over K: pick the 3 most similar policies from the same regulator
-        loop each of those policies
+        loop each of those policies not judged before
             K->>G: is this policy out of date?
             G-->>K: missing_from_policy, severity, draft_change
-            K->>DB: open a gap (if out of date)
+            K->>DB: save the verdict, and open a gap if out of date
         end
     end
     K->>DB: status analyzed
@@ -198,14 +203,14 @@ stateDiagram-v2
     parsed --> failed: error, see the error field
     failed --> new: reprocess (no OCR text yet)
     failed --> parsed: reprocess (OCR text kept)
-    analyzed --> parsed: reprocess
+    analyzed --> parsed: reprocess, or the company description changed
     analyzed --> [*]
     skipped --> [*]
 ```
 
 - **`new`**: saved by the watcher, waiting for the worker.
-- **`parsed`**: OCR is done and the text is saved. If the analysis then fails, the next try
-  starts from here, so OCR never has to run twice.
+- **`parsed`**: OCR is done and the text is saved. Everything after this reads the saved
+  text, so OCR never runs twice for a circular, whatever happens next.
 - **`analyzed`**: finished. The circular now has its addressee, a summary, its
   requirements, `applicable` (true, false, or empty if no company description exists yet)
   with the reason, and any gaps it opened.
@@ -277,6 +282,13 @@ flowchart LR
 - **Why 200 DPI?** At 200 DPI an A4 page is cut into about 6 tiles. At 300 DPI it's 24,
   which is too much for an 8 GB GPU. `backend/ocr/README.md` explains the vLLM flags that
   make the model fit.
+- **Once per PDF.** OCR is the slow step (tens of seconds a page on a laptop GPU), so its
+  output is kept in `circulars.text` and everything else reads that. When a regulator lists
+  the same PDF under a second circular, the worker spots the identical file (same SHA-256)
+  and copies the saved text instead of reading it again.
+- **No page read twice.** If page 15 of 20 times out, the retry starts at page 15: pages
+  already read are kept in memory until the document is done. Blank pages are skipped, and
+  all pages go over one reused connection.
 
 ---
 
@@ -305,8 +317,9 @@ flowchart TD
     ok --> done
 ```
 
-A circular that's processed again (for example after **Reprocess**) skips any policy that
-already has a gap for it, so a circular and policy pair never get two tickets.
+Every verdict from the last step is saved in `policy_checks`, one row per circular and
+policy version. A pair that has a row, or already has a gap, is never sent to Gemini again,
+so a circular and policy pair never get two tickets and never cost two calls.
 
 ### The three questions
 
@@ -317,9 +330,27 @@ already has a gap for it, so a circular and policy pair never get two tickets.
 | 3 | Is this policy out of date? | Your company description, the circular's addressee, summary and requirements, the policy's text and its controls | `missing_from_policy`, `impacted`, `severity`, `affected_controls[]`, `draft_change` |
 
 The company description is **yours**. It's written on the console's **Company** page and
-stored in the `company` table, with no built-in default. Saving a changed description sends
-every analysed circular back to `parsed`, so the worker judges it again against the new
-words. The OCR text is reused, and existing gaps are never duplicated.
+stored in the `company` table, with no built-in default. Saving a changed description clears
+every circular's "does it apply?" answer and sends the analysed ones back to `parsed`. The
+worker then asks question 2 again, and only question 2: the OCR text, the summaries and the
+policy verdicts don't depend on the description, so they're kept.
+
+### Work that's done once, and kept
+
+Everything slow or paid for is saved the first time and reused after that:
+
+| Work | Saved in | Done again only when |
+|---|---|---|
+| OCR of the PDF (the slowest step) | `circulars.text` | never. A second circular with the same PDF copies it |
+| Question 1: what does it say? | `circulars.addressed_to`, `summary`, `requirements` | you press **Reprocess** |
+| Question 2: does it apply to us? | `circulars.applicable`, `applies_reason` | you change the company description, or press **Reprocess** |
+| The circular's embedding | `circulars.embedding` | its summary changes, or you change the embedding model |
+| A policy's embeddings | `policies.embeddings` | its title or text is edited, or you change the embedding model |
+| Question 3: is this policy out of date? | `policy_checks` (and a gap if it is) | the policy's text changes (a new version), or **Reprocess** re-asks the "up to date" ones |
+
+So a restart, an outage halfway through, a new policy or a changed company description
+never repeats a call that already succeeded. A quiet round, with nothing new anywhere,
+makes no OCR or Gemini call at all.
 
 ### How the closest policies are found
 
@@ -329,13 +360,17 @@ where similar meanings give similar numbers.
 
 ```mermaid
 flowchart LR
-    c["Circular:<br/>title + summary + requirements"] -->|"embed (RETRIEVAL_QUERY)"| qv(("query<br/>vector"))
-    p["Each policy:<br/>title + text"] -->|"embed (RETRIEVAL_DOCUMENT)<br/>done once, stored on the policy"| pv(("policy<br/>vectors"))
-    qv --> cos["Cosine similarity"]
+    c["Circular:<br/>title + summary + requirements"] -->|"embed (RETRIEVAL_QUERY)<br/>done once, stored on the circular"| qv(("query<br/>vector"))
+    p["Each policy:<br/>title + text, in 5,000-character chunks"] -->|"embed (RETRIEVAL_DOCUMENT)<br/>done once, stored on the policy"| pv(("one vector<br/>per chunk"))
+    qv --> cos["Cosine similarity.<br/>A policy scores its best chunk"]
     pv --> cos
     filter["Only policies tagged with<br/>the circular's regulator"] --> cos
     cos --> top["Top 3 (MATCH_TOP_K)<br/>go to question 3"]
 ```
+
+The embedding model reads about 2,000 tokens at most, so a long policy is split into
+5,000-character chunks and each chunk is embedded. A policy's score is its best chunk's, so
+a clause on page 12 of a long KYC policy still makes it a match.
 
 ### What a gap contains
 
@@ -356,9 +391,9 @@ Each gap starts its history with one event: `agent` `opened` it.
 
 ## 8. When you add or edit a policy
 
-Circulars aren't the only trigger. When a policy is added, or its text is edited, the worker
-checks that policy against the **recent** circulars too. So a library loaded today still
-finds the gaps left by last week's circulars.
+Circulars aren't the only trigger. When a policy is added, or its text, title or regulators
+are edited, the worker checks it against the **recent** circulars too. So a library loaded
+today still finds the gaps left by last week's circulars.
 
 ```mermaid
 sequenceDiagram
@@ -371,31 +406,36 @@ sequenceDiagram
 
     U->>F: New policy / Edit / Import JSON
     F->>A: POST or PUT /policies
-    A->>DB: save it (an edit also clears the embedding and bumps the version)
+    A->>DB: save it (a title or text edit also clears its embeddings,<br/>and a text edit bumps the version)
     Note over K: next round, within 60 seconds
-    K->>DB: policies with no embedding, or embedded by another model
-    K->>G: embed them
+    K->>DB: policies with no embeddings, or embedded by another model
+    K->>G: embed them (all their chunks, in as few requests as possible)
     K->>DB: analysed circulars from the last 30 days that apply to us
     loop each of those circulars
-        Note over K: is the new policy among its top 3?
+        Note over K: its top 3 policies, minus pairs already judged
         K->>G: is this policy out of date?
-        K->>DB: open a gap if it is
+        K->>DB: save the verdict now, and open a gap if it is
     end
-    K->>DB: save everything in one transaction
 ```
 
-- It all happens in **one transaction**. If Gemini fails halfway, nothing is saved, and the
-  next round starts that policy again.
+- **Each verdict is saved as soon as Gemini gives it.** If Gemini fails halfway, the next
+  round carries on from the next unjudged pair; nothing is asked twice.
+- **Nothing changed, nothing done.** The worker notes what the company, the library and the
+  recent circulars looked like when it last finished, and skips this step while they're the
+  same.
+- **Only what matters is redone.** Changing a policy's owner re-does nothing. Changing its
+  regulators checks it against that regulator's circulars. Editing its text re-embeds it
+  and, being a new version, checks it again.
 - An edit never opens a second gap for the same circular and policy.
-- Changing `GEMINI_EMBEDDING_MODEL_NAME` re-embeds every policy automatically. Vectors
-  from two different models can't be compared, so the worker tracks which model made each
-  one.
+- Changing `GEMINI_EMBEDDING_MODEL_NAME` re-embeds every policy and circular automatically.
+  Vectors from two different models can't be compared, so the worker tracks which model made
+  each one.
 
 ---
 
 ## 9. The data
 
-Six tables, all defined in `backend/common/common/models.py`:
+Seven tables, all defined in `backend/common/common/models.py`:
 
 ```mermaid
 erDiagram
@@ -403,6 +443,8 @@ erDiagram
     POLICIES ||--o{ GAPS : "can be out of date in"
     POLICIES ||--o{ CONTROLS : has
     GAPS ||--|{ GAP_EVENTS : "history of"
+    CIRCULARS ||--o{ POLICY_CHECKS : "checked in"
+    POLICIES ||--o{ POLICY_CHECKS : "checked in"
     COMPANY ||..o{ CIRCULARS : "decides which apply"
 
     CIRCULARS {
@@ -420,6 +462,7 @@ erDiagram
         bool applicable "empty = not checked"
         text applies_reason "why it does or doesn't"
         json requirements "list of obligations"
+        json embedding "768 numbers"
         text error "why it failed"
     }
     COMPANY {
@@ -435,8 +478,16 @@ erDiagram
         json regulators "e.g. RBI, SEBI"
         text text "current wording"
         int version "+1 on every text change"
-        json embedding "768 numbers"
+        json embeddings "768 numbers per chunk"
         string embedding_model
+    }
+    POLICY_CHECKS {
+        int id PK
+        int circular_id FK
+        int policy_id FK
+        int policy_version
+        float similarity
+        bool impacted "true = a gap was opened"
     }
     CONTROLS {
         int id PK
@@ -475,10 +526,13 @@ Rules the database enforces:
 
 - A circular is unique by `(source, source_key)`, so the watcher can't save it twice.
 - A gap is unique by `(circular_id, policy_id)`: one ticket per circular and policy.
+- A check is unique by `(circular_id, policy_id, policy_version)`: Gemini judges each pair
+  once per version of the policy.
 - `gap_events` rows are only ever added, never edited or deleted. That's the audit trail.
 
-Tables are created at startup by every service (`init_db`). A Postgres advisory lock
-stops two services that start together from both trying to create the same table.
+Tables are created at startup by every service (`init_db`), and a column added to a model
+later is added to the existing table (nothing is ever dropped). A Postgres advisory lock
+stops two services that start together from both changing the schema.
 
 ---
 
@@ -546,13 +600,16 @@ sequenceDiagram
 |---|---|
 | Health and counts | `GET /health` · `GET /stats` |
 | Company | `GET /company` · `PUT /company` (a change sends analysed circulars back to be judged again) |
-| Circulars | `GET /circulars` · `GET /circulars/{id}` · `GET /circulars/{id}/text` · `POST /circulars/{id}/reprocess` |
+| Circulars | `GET /circulars` · `GET /circulars/{id}` (with its gaps and the policies it was checked against) · `GET /circulars/{id}/text` · `POST /circulars/{id}/reprocess` |
 | Policies | `GET /policies` · `POST /policies` · `GET /policies/{id}` · `PUT /policies/{id}` · `POST /policies/{id}/controls` |
 | Gaps | `GET /gaps` (filter by status, owner, policy, overdue) · `GET /gaps/{id}` (with its circular, policy and history) · `PATCH /gaps/{id}` · `POST /gaps/{id}/comments` |
 
 The API never calls Gemini or OCR. It only reads and writes Postgres. Anything that needs
 the agent, like reprocessing a circular or checking a new policy, works by changing the
 data (a status, or a cleared embedding), which the worker notices on its next round.
+
+Lists never read the heavy columns (the OCR text, the embeddings) from the database, since
+the console never shows them; the OCR text has its own endpoint.
 
 The interactive API docs are at http://localhost:8000/docs.
 
@@ -567,11 +624,11 @@ blame, or the service?
 flowchart TD
     err["An error while processing a circular"] --> down{"Service down or rate-limited?<br/>(can't connect, Gemini 429)"}
     down -->|yes| wait["Stop this round.<br/>Try again in 60 s, for as long as it takes.<br/>The circular keeps its status"]
-    down -->|no| crash{"Service hiccup?<br/>(5xx, timeout, dropped connection)"}
+    down -->|no| crash{"Service hiccup?<br/>(5xx, timeout, dropped connection,<br/>a reply not in the asked-for JSON)"}
     crash -->|yes| count{"Third time for<br/>this circular?"}
     count -->|no| retry["Stop this round.<br/>Retry the circular in 60 s"]
     count -->|yes| failed
-    crash -->|"no (e.g. a 400, bad JSON)"| failed["Mark it failed,<br/>with the error saved.<br/>Move on to the next circular"]
+    crash -->|"no (e.g. a 400)"| failed["Mark it failed,<br/>with the error saved.<br/>Move on to the next circular"]
 ```
 
 | What happened | What you see | What to do |
@@ -585,7 +642,11 @@ flowchart TD
 LangChain first retries Gemini's rate limits and server errors itself (3 times). Only after
 that does the worker's own retry take over. LangChain wraps Gemini's errors in its own
 classes, so the worker reads the HTTP code from the original error underneath
-(`gemini_status` in `backend/worker/main.py`).
+(`gemini_status` in `backend/worker/failures.py`, which holds all these rules).
+
+Checking new policies against recent circulars follows the same rules. An error there that
+isn't a service problem is logged, and that circular is left alone until the worker restarts,
+so the worker keeps processing everything else instead of stopping.
 
 ---
 
@@ -615,7 +676,7 @@ Settings you're most likely to change:
 | Setting | Default | What it changes |
 |---|---|---|
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash` | the model that answers the three questions |
-| `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | the model used for policy matching (changing it re-embeds every policy) |
+| `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | the model used for policy matching (changing it re-embeds every policy and circular) |
 | `LOOKBACK_DAYS` | 30 | older circulars are skipped; new policies are checked against this window |
 | `MATCH_TOP_K` | 3 | how many policies Gemini checks per circular |
 | `OCR_MAX_PAGES` | 20 | how many pages of each PDF are read |
@@ -630,7 +691,7 @@ Settings you're most likely to change:
 ```mermaid
 flowchart TB
     subgraph common["backend/common (shared)"]
-        models["models.py<br/>the 6 tables"]
+        models["models.py<br/>the 7 tables"]
         dbpy["db.py<br/>make_engine, init_db"]
     end
     subgraph watcher["backend/watcher"]
@@ -639,7 +700,8 @@ flowchart TB
         wmain --> wstore["storage.py<br/>PDF to S3"]
     end
     subgraph worker["backend/worker"]
-        kmain["main.py<br/>the loop and the retry rules"] --> pipeline["pipeline.py<br/>parse, analyze,<br/>refresh_policies"]
+        kmain["main.py<br/>the loop"] --> pipeline["pipeline.py<br/>parse, analyze, match,<br/>embed_policies, check_recent"]
+        kmain --> failures["failures.py<br/>wait, retry or give up"]
         pipeline --> ocrpy["ocr.py<br/>PDF to text"]
         pipeline --> llm["llm.py<br/>the Gemini prompts"]
         pipeline --> kstore["storage.py<br/>PDF from S3"]
@@ -658,7 +720,7 @@ flowchart TB
 | which sites are watched, or how they're scraped | `backend/watcher/sources.py` |
 | what Gemini is asked, or the shape of its answers | `backend/worker/llm.py` (the prompts and Pydantic models sit side by side) |
 | the order of the steps, how policies are picked, the due dates | `backend/worker/pipeline.py` |
-| what's retried and what's marked failed | `backend/worker/main.py` |
+| what's retried and what's marked failed | `backend/worker/failures.py` (the rules) and `main.py` (the loop) |
 | how PDFs are turned into images, or how OCR output is cleaned | `backend/worker/ocr.py` |
 | the vLLM flags for the OCR model | `backend/ocr/Dockerfile` |
 | an endpoint | `backend/api/routes/` (`company.py`, `circulars.py`, `policies.py`, `gaps.py`) |
@@ -701,14 +763,18 @@ last 30 days of circulars.
   or you don't have a policy on that subject yet.
 
 **…run a circular through the agent again?** Press **Reprocess** on the circular, or
-`curl -X POST localhost:8000/circulars/<id>/reprocess`. The OCR text is reused, and gaps are
-never duplicated.
+`curl -X POST localhost:8000/circulars/<id>/reprocess`. Gemini reads the saved OCR text
+again (no new OCR), judges it and re-checks the policies it had found up to date. Gaps
+already opened are kept and never duplicated.
+
+**…see which policies a circular was checked against?** Its page in the console has a
+**Checked against your policies** list: each policy, its similarity, and Gemini's verdict.
 
 **…see what Gemini decided, step by step?**
 
 ```bash
 docker compose logs worker | grep pipeline
-# #98 vs POL-KYC (similarity 0.74): GAP
+# #98 vs POL-KYC v1 (similarity 0.74): GAP
 # #98 analyzed: addressed to 'All Commercial Banks', applies to us: True, gaps opened: ['POL-KYC']
 ```
 

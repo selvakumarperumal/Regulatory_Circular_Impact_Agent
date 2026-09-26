@@ -1,17 +1,15 @@
 """Worker: python main.py [--once]
 
-Every POLL_SECONDS: embed new/edited policies, mark circulars older than LOOKBACK_DAYS as
-'skipped', then run the pipeline on waiting circulars one by one, newest first.
-If OCR or Gemini is down, rate-limited or fails for a moment, it waits and tries again;
-nothing is lost."""
+Every POLL_SECONDS: embed new/edited policies and check them against the recent circulars
+that apply, mark circulars older than LOOKBACK_DAYS as 'skipped', then run the pipeline on
+waiting circulars one by one, newest first. If OCR or Gemini is down, rate-limited or fails
+for a moment, it waits and tries again; nothing already done is lost or done twice."""
 import argparse
 import logging
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-import httpx
-from google.genai import errors
 from sqlmodel import Session, col, select
 
 import llm
@@ -19,36 +17,12 @@ import pipeline
 from common.db import init_db, make_engine
 from common.models import Circular
 from config import settings
+from failures import MAX_TRIES, gemini_status, service_crashed, service_down, temporary
 
 log = logging.getLogger("worker")
 engine = make_engine(settings.DATABASE_URL)
 
-MAX_CRASHES = 3            # a circular that fails OCR/Gemini this often is marked failed
-crashes: Counter[int] = Counter()
-
-
-def gemini_status(e: BaseException | None) -> int | None:
-    """The HTTP status of a Gemini error. LangChain wraps it (GoogleRateLimitError, ...);
-    the original google.genai error, which has the code, is the cause."""
-    while e is not None:
-        if isinstance(e, errors.APIError):
-            return e.code
-        e = e.__cause__
-    return None
-
-
-def service_down(e: Exception) -> bool:
-    """Wait as long as it takes: the OCR model is still loading, or Gemini's quota is used up."""
-    return isinstance(e, httpx.ConnectError) or gemini_status(e) == 429
-
-
-def service_crashed(e: Exception) -> bool:
-    """A temporary failure of OCR or Gemini: retry the circular a few times."""
-    if isinstance(e, (httpx.RemoteProtocolError, httpx.TimeoutException)):
-        return True
-    if isinstance(e, httpx.HTTPStatusError):
-        return e.response.status_code >= 500
-    return (gemini_status(e) or 0) >= 500
+crashes: Counter[int] = Counter()     # temporary failures per circular; MAX_TRIES and it's marked failed
 
 
 def skip_old(session: Session) -> None:
@@ -69,9 +43,23 @@ def next_circular(session: Session) -> Circular | None:
     ).first()
 
 
+def update_library(session: Session) -> None:
+    """New and edited policies: embed them, then check them against the recent circulars.
+    A temporary failure ends the round (it's retried); any other is logged, and the
+    circulars still get processed."""
+    try:
+        pipeline.embed_policies(session)
+        pipeline.check_recent(session)
+    except Exception as e:
+        session.rollback()
+        if temporary(e):
+            raise
+        log.exception("couldn't update the policy library's embeddings or checks")
+
+
 def run_once() -> None:
     with Session(engine) as session:
-        pipeline.refresh_policies(session)
+        update_library(session)
         skip_old(session)
         while c := next_circular(session):
             log.info("#%d %s: %s", c.id, c.source, c.title[:90])
@@ -83,7 +71,7 @@ def run_once() -> None:
                     raise                 # stop this round; the circular stays waiting
                 if service_crashed(e):
                     crashes[c.id] += 1
-                    if crashes[c.id] < MAX_CRASHES:
+                    if crashes[c.id] < MAX_TRIES:
                         raise
                 log.exception("#%d failed", c.id)
                 c.status, c.error = "failed", f"{type(e).__name__}: {e}"
@@ -116,7 +104,7 @@ def main() -> None:
         try:
             run_once()
         except Exception as e:
-            if not (service_down(e) or service_crashed(e)):
+            if not temporary(e):
                 raise
             log.warning("OCR or Gemini unavailable (%s); retrying in %ds", e, settings.POLL_SECONDS)
         if args.once:

@@ -20,10 +20,10 @@ log = logging.getLogger("watcher")
 engine = make_engine(settings.DATABASE_URL)
 
 
-def is_known(item: Item) -> bool:
+def known_keys(source: str) -> set[str]:
+    """The source_keys already in the database for this regulator (one query per run)."""
     with Session(engine) as session:
-        stmt = select(Circular.id).where(Circular.source == item.source, Circular.source_key == item.source_key)
-        return session.exec(stmt).first() is not None
+        return set(session.exec(select(Circular.source_key).where(Circular.source == source)).all())
 
 
 def fetch_new(item: Item) -> None:
@@ -49,12 +49,14 @@ def run_source(name: str) -> None:
     except Exception as e:
         log.error("%s: listing failed: %s", name, e)
         return
+    known = known_keys(name)
     new = failed = 0
     for item in items:
-        if is_known(item):
+        if item.source_key in known:
             continue
         try:
             fetch_new(item)
+            known.add(item.source_key)    # a listing can show the same circular twice
             new += 1
             log.info("%s new: %s", name, item.title[:80])
         except Exception as e:          # skip it; retried next run since nothing was saved

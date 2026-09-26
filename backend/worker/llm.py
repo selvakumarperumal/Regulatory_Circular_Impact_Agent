@@ -2,12 +2,14 @@
 
 Replies are forced into JSON that matches a Pydantic model (`with_structured_output`), so
 the rest of the code works with typed objects, not free text."""
+from functools import cache
 from typing import Literal
 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel
 
 from config import settings
+from failures import BadReply
 
 # max_retries: LangChain retries rate limits and server errors itself before giving up;
 # after that the worker's own retry (main.py) takes over.
@@ -24,12 +26,22 @@ def check() -> None:
     embedder.embed_query("ok")
 
 
+@cache
+def structured(schema: type[BaseModel]):
+    """The chat model bound to one reply schema (built once per schema, not per call)."""
+    return chat.with_structured_output(schema)
+
+
 def ask[T: BaseModel](system: str, user: str, schema: type[T]) -> T:
-    return chat.with_structured_output(schema).invoke([("system", system), ("human", user)])
+    reply = structured(schema).invoke([("system", system), ("human", user)])
+    if reply is None:                     # the reply didn't parse as the schema
+        raise BadReply(f"Gemini returned no valid {schema.__name__}")
+    return reply
 
 
 def embed(texts: list[str], task: Literal["RETRIEVAL_QUERY", "RETRIEVAL_DOCUMENT"]) -> list[list[float]]:
-    # embed_documents sends at most 100 texts per request
+    # embed_documents packs the texts into as few requests as it can (up to 100 per request);
+    # callers keep each text under the model's input limit (pipeline.EMBED_CHARS)
     return embedder.embed_documents(texts, task_type=task, output_dimensionality=EMBED_DIMENSIONS)
 
 

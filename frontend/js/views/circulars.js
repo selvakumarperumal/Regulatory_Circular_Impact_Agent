@@ -66,7 +66,7 @@ async function loadTable() {
 
 export async function circularPage({ id }) {
   setCrumbs([["Circulars", "#/circulars"], [`Circular #${id}`]]);
-  const { circular: c, gaps } = await dimWhile($("#view"), api(`/circulars/${id}`));
+  const { circular: c, gaps, checks } = await dimWhile($("#view"), api(`/circulars/${id}`));
   const analysed = c.status === "analyzed";
 
   put($("#view"), html`
@@ -95,6 +95,19 @@ export async function circularPage({ id }) {
                 : c.applicable ? "No policy in the library was found out of date."
                 : "It doesn't apply to the company, so no policy was checked."}</p>`,
         })}
+        ${checks.length ? panel({
+          title: "Checked against your policies", count: checks.length, flush: true,
+          body: table({
+            cols: "minmax(0, 1fr) 90px 130px",
+            head: ["Policy", "Similarity", "Verdict"],
+            rows: checks.map((k) => html`<a class="trow" href="#/policies/${k.policy_id}">
+              <div class="cell"><div class="cell-title"><span class="chip">${k.code}</span> ${k.title}</div>
+                <div class="cell-sub">Version ${k.version} · checked ${fmtDate(k.checked_at)}</div></div>
+              <div class="cell num">${Math.round(k.similarity * 100)}%</div>
+              <div class="cell">${tag(k.impacted ? { label: "Out of date", c: "var(--danger)" } : { label: "Up to date", c: "var(--ok)" })}</div>
+            </a>`),
+          }),
+        }) : ""}
         ${panel({
           title: "OCR text",
           body: html`<details class="more" id="ocr-toggle"><summary>Show the text read from the PDF</summary>
@@ -123,7 +136,8 @@ export async function circularPage({ id }) {
         })}
         ${panel({
           title: "Run it again",
-          body: html`<div class="form"><p class="hint">Reprocessing reuses the OCR text and never duplicates a gap.</p>
+          body: html`<div class="form"><p class="hint">Gemini reads the saved OCR text again and re-checks it against your policies.
+            No new OCR, and gaps already opened are kept.</p>
             <button class="btn block" id="reprocess">${icon("refresh")}Reprocess</button></div>`,
         })}
       </aside>
