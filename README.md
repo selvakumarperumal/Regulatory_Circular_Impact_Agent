@@ -1,5 +1,7 @@
 # Regulatory Circular Impact Agent
 
+![Python 3.14](https://img.shields.io/badge/Python_3.14-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![SQLModel](https://img.shields.io/badge/SQLModel-7E56C2?style=flat-square) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Gemini via LangChain](https://img.shields.io/badge/Gemini_via_LangChain-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Unlimited-OCR on vLLM](https://img.shields.io/badge/Unlimited--OCR_on_vLLM-EA580C?style=flat-square) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
+
 Every day it watches RBI, SEBI and IRDAI circulars and reads each new one with
 [Unlimited-OCR](https://github.com/baidu/Unlimited-OCR). It then asks **Gemini** (through
 LangChain) whether the circular applies to the company and which internal policy it makes out
@@ -7,24 +9,35 @@ of date. For each such policy it opens a gap ticket for the owner, with a draft 
 and keeps a history of the gap until it is closed. The company's control library and the gap
 history are data a chatbot will never have.
 
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart LR
+    sites["RBI · SEBI · IRDAI<br/>websites"] -->|"every hour"| W["watcher"]
+    W -->|PDF| S3[("S3 (Floci)")]
+    W -->|"row, status new"| DB[("Postgres")]
+    S3 -->|PDF| K
+    DB <-->|"every minute: picks up work,<br/>saves results and gaps"| K["<b>worker</b>: the agent<br/>1. OCR each page<br/>2. summarise it<br/>3. does it apply to us?<br/>4. find the closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
+    K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
+    K <-->|"question → JSON answer"| G["Gemini<br/>via LangChain"]
+    DB <--> A["api<br/>FastAPI :8000"] <--> F["frontend<br/>console :8080"]
+
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    class W,A,F svc
+    class S3,DB data
+    class sites,G ext
+    class O gpu
+    class K svc
 ```
- RBI / SEBI / IRDAI sites
-          │
-      [watcher] ── PDF ──► S3 (Floci, on the host)         every hour: new circulars, status "new"
-          │
-      Postgres ◄──────────────┐
-          │                   │
-      [worker]  1. OCR each page ──────────► [ocr]  Unlimited-OCR on vLLM (GPU)
-                2. is it for us?  ┐
-                3. summarise      ├────────► Gemini (LangChain: chat + embeddings)
-                4. closest policy ┤
-                5. out of date?   ┘
-                6. open a gap for the owner, with a draft change
-          │
-       [api]   FastAPI on :8000  — circulars, policies & controls, gaps & their history
-          │
-    [frontend] test console on :8080 (nginx, forwards /api to the api)
-```
+
+> 📖 **How it all works**, step by step with diagrams: [how_it_works.md](how_it_works.md).
 
 ## Layout
 
@@ -68,10 +81,11 @@ next circular.
 Compose also takes settings from your shell, so a direnv `.envrc` that exports
 `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` works too.
 
-The first start of `ocr` downloads the 6.7 GB model. Until it's ready, the worker logs
-"OCR or Gemini unavailable" and keeps retrying. When the worker starts, it marks circulars
-published more than `LOOKBACK_DAYS` ago as `skipped`, then works through the rest, newest
-first.
+> ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the worker
+> logs "OCR or Gemini unavailable" and keeps retrying.
+
+When the worker starts, it marks circulars published more than `LOOKBACK_DAYS` ago as
+`skipped`, then works through the rest, newest first.
 
 ## Where things are explained
 
