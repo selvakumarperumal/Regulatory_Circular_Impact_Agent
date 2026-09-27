@@ -1,10 +1,7 @@
-# Build context for every service image is backend/. Keep out what belongs to the host.
 **/.venv
 **/__pycache__
 **/*.py[cod]
 **/.ruff_cache
 **/.pytest_cache
-
-# Local secrets must never end up in an image layer.
 **/.env
 !**/.env.example

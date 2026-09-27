@@ -1,17 +1,20 @@
-"""What kind of failure an exception is, so the worker knows whether to wait, retry or give up."""
+"""What kind of failure an exception is, so the worker knows whether to wait, retry
+or give up. A circular that crashes MAX_TRIES times is given up on."""
+
 import httpx
 from google.genai import errors
 
-MAX_TRIES = 3        # a circular that fails this often with a temporary-looking error is given up on
+MAX_TRIES = 3
 
 
 class BadReply(Exception):
-    """Gemini answered, but not in the requested JSON shape. Usually fine on a second try."""
+    """Gemini answered, but not in the requested JSON shape. Usually fine on a second
+    try."""
 
 
 def gemini_status(e: BaseException | None) -> int | None:
-    """The HTTP status of a Gemini error. LangChain wraps it (GoogleRateLimitError, ...);
-    the original google.genai error, which has the code, is the cause."""
+    """The HTTP status of a Gemini error. LangChain wraps it (GoogleRateLimitError,
+    ...); the original google.genai error, which has the code, is the cause."""
     while e is not None:
         if isinstance(e, errors.APIError):
             return e.code
@@ -20,7 +23,8 @@ def gemini_status(e: BaseException | None) -> int | None:
 
 
 def service_down(e: Exception) -> bool:
-    """Wait as long as it takes: the OCR model is still loading, or Gemini's quota is used up."""
+    """Wait as long as it takes: the OCR model is still loading, or Gemini's quota is
+    used up."""
     return isinstance(e, httpx.ConnectError) or gemini_status(e) == 429
 
 

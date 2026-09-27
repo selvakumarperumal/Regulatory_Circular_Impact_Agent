@@ -1,16 +1,26 @@
-"""One polite HTTP client: fixed delay between requests, small retry on network/5xx errors."""
+"""One polite HTTP client: a fixed delay before every request, and a small retry on
+network errors, 429s and 5xx. It sends a browser User-Agent because
+rbidocs.rbi.org.in serves an HTML bot page, not the PDF, to anything else."""
+
 import time
 
 import httpx
 
-client = httpx.Client(
-    # rbidocs.rbi.org.in serves an HTML bot page (not the PDF) to non-browser user agents
-    headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/130 Safari/537.36"},
-    timeout=30,
-    follow_redirects=True,
-)
 DELAY = 1.5
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130 Safari/537.36"
+)
+
+client = httpx.Client(
+    headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True
+)
+
+
+def retryable(e: httpx.HTTPError) -> bool:
+    if isinstance(e, httpx.HTTPStatusError):
+        return e.response.status_code == 429 or e.response.status_code >= 500
+    return isinstance(e, httpx.TransportError)
 
 
 def get(url: str, retries: int = 3) -> httpx.Response:
@@ -20,13 +30,8 @@ def get(url: str, retries: int = 3) -> httpx.Response:
             resp = client.get(url)
             resp.raise_for_status()
             return resp
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code != 429 and e.response.status_code < 500:
+        except httpx.HTTPError as e:
+            if attempt == retries or not retryable(e):
                 raise
-            if attempt == retries:
-                raise
-        except httpx.TransportError:
-            if attempt == retries:
-                raise
-        time.sleep(2 ** attempt)
+        time.sleep(2**attempt)
     raise RuntimeError("unreachable")

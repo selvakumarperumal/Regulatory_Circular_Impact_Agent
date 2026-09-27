@@ -1,4 +1,5 @@
-"""The database session each request gets, and a small helper for 404s."""
+"""The database session each request gets, and small helpers the routes share."""
+
 from typing import Annotated
 
 from fastapi import Depends, HTTPException
@@ -22,4 +23,12 @@ def get_or_404[T](session: Session, model: type[T], id: int) -> T:
     obj = session.get(model, id)
     if obj is None:
         raise HTTPException(404, f"{model.__name__} {id} not found")
+    return obj
+
+
+def save[T](session: Session, obj: T) -> T:
+    """Add, commit and reload, so the returned object has its id and defaults."""
+    session.add(obj)
+    session.commit()
+    session.refresh(obj)
     return obj

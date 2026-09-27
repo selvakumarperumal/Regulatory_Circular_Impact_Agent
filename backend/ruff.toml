@@ -1,0 +1,7 @@
+line-length = 88
+target-version = "py314"
+src = ["api", "common", "watcher", "worker"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501"]

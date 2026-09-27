@@ -22,5 +22,11 @@ isn't enough for the vision encoder to process a page, so the model runs out of 
 
 On a GPU with 16 GB or more you can remove all three flags.
 
+The other flags: `--trust-remote-code`, the model's `NGramPerReqLogitsProcessor`,
+`--no-enable-prefix-caching` and `--mm-processor-cache-gb 0` are the model's own
+[vLLM recipe](https://recipes.vllm.ai/baidu/Unlimited-OCR). `--max-num-seqs 1` because the
+worker sends one page at a time, and `--max-model-len 8192`, `--gpu-memory-utilization 0.8`
+and `--enforce-eager` keep everything inside 8 GB.
+
 The server needs the GPU through the NVIDIA runtime (`runtime: nvidia` in
 `docker-compose.yml`).
