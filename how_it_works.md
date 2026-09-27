@@ -117,7 +117,7 @@ flowchart LR
 |---|---|---|---|
 | `watcher` | `backend/watcher` | `python main.py`, one round every 60 minutes | none |
 | `ocr` | `backend/ocr` | vLLM serving `baidu/Unlimited-OCR` on the GPU | 8001 |
-| `worker` | `backend/worker` | `python main.py`, one round every 60 seconds | none |
+| `worker` | `backend/worker` | `python main.py`, one round every 60 seconds ([how a round works](#how-the-worker-works-one-round-every-60-seconds)) | none |
 | `api` | `backend/api` | `uvicorn main:app` | 8000 (docs at `/docs`) |
 | `frontend` | `frontend` | nginx serving static files | 8080 |
 | `postgres` | none (official image) | the database | 5432 |
@@ -391,12 +391,57 @@ Each gap starts its history with one event: `agent` `opened` it.
 
 ## 8. When you add or edit a policy
 
-Circulars aren't the only trigger. When a policy is added, or its text, title or regulators
-are edited, the worker checks it against the **recent** circulars too. So a library loaded
-today still finds the gaps left by last week's circulars.
+Circulars aren't the only trigger. When you add a policy, the worker checks it against the
+circulars of the **last 30 days** that apply to the company, so a library loaded today still
+finds the gaps left by last week's circulars. From then on, every new circular is checked
+against it too. You never restart anything: the worker notices the new policy on its next
+round, within a minute.
+
+In short, for a new policy:
+
+1. The api saves it as version 1, with no embeddings yet.
+2. Within 60 seconds the worker embeds it (turns its text into vectors, see
+   [section 7](#how-the-closest-policies-are-found)).
+3. The worker lists the recent circulars that apply to the company and have obligations.
+4. For each one it ranks every policy by similarity. Where the new policy is among the 3
+   closest, Gemini is asked whether the policy is now out of date.
+5. Each answer is saved. An out-of-date policy gets a gap ticket for its owner, with a draft
+   of the new wording.
+
+### How the worker works: one round every 60 seconds
+
+The worker is a loop. Each round does the same four things, then waits 60 seconds
+(`POLL_SECONDS`) and starts again. The wait starts when a round finishes, so a round that
+reads a long circular simply takes longer.
+
+```mermaid
+flowchart TD
+    boot(["Worker starts"]) --> init["Create any missing tables and columns.<br/>Check the Gemini key and model names"]
+    init --> r1
+    subgraph round["One round"]
+        r1["Step 1: embed policies that are<br/>new or edited"] --> r2{"Step 2: anything changed<br/>since the last catch-up?"}
+        r2 -->|yes| r3["Catch up: check recent circulars<br/>against their closest policies"]
+        r2 -->|no| r4
+        r3 --> r4["Step 3: mark new circulars older<br/>than 30 days as skipped"]
+        r4 --> r5{"Step 4: is a circular waiting?<br/>(status new or parsed)"}
+        r5 -->|yes| r6["Process it, newest first: OCR if needed,<br/>read, judge, check its closest policies"]
+        r6 --> r5
+    end
+    r5 -->|no| wait["Wait 60 seconds"]
+    wait --> r1
+```
+
+Steps 1 and 2 are where a new policy is handled. "Anything changed" means the company
+description, any policy, or the set of recent circulars that apply to the company. In the
+catch-up, only pairs of circular and policy that were never judged are sent to Gemini. A
+round with nothing new costs a few database reads and no OCR or Gemini call, so running
+every minute is free.
+
+### Step by step: what happens to a new policy
 
 ```mermaid
 sequenceDiagram
+    autonumber
     actor U as You
     participant F as console
     participant A as api
@@ -404,32 +449,195 @@ sequenceDiagram
     participant K as worker
     participant G as Gemini
 
-    U->>F: New policy / Edit / Import JSON
-    F->>A: POST or PUT /policies
-    A->>DB: save it (a title or text edit also clears its embeddings,<br/>and a text edit bumps the version)
-    Note over K: next round, within 60 seconds
-    K->>DB: policies with no embeddings, or embedded by another model
-    K->>G: embed them (all their chunks, in as few requests as possible)
-    K->>DB: analysed circulars from the last 30 days that apply to us
-    loop each of those circulars
-        Note over K: its top 3 policies, minus pairs already judged
-        K->>G: is this policy out of date?
-        K->>DB: save the verdict now, and open a gap if it is
+    U->>F: New policy or Import JSON
+    F->>A: POST /policies
+    A->>DB: save as version 1, no embeddings
+    A-->>F: 201 Created
+    Note over K: next round, within 60 s
+    K->>DB: policies with no embeddings?
+    DB-->>K: the new policy
+    K->>G: embed it, in 5,000-character chunks
+    G-->>K: one vector per chunk
+    K->>DB: save the vectors
+    Note over K: library changed: catch up
+    K->>DB: recent circulars that apply
+    DB-->>K: circulars and their vectors
+    Note over K: rank the policies for each<br/>circular (no Gemini call)
+    loop each circular: new policy in its top 3, pair never judged
+        K->>G: is the policy out of date?
+        G-->>K: what's missing, severity, draft
+        K->>DB: save the verdict (policy_checks)
+        opt out of date
+            K->>DB: open a gap for the owner
+        end
     end
+    U->>F: gap under Gaps, verdict on the circular
 ```
+
+### Which circulars a new policy is checked against
+
+Not every circular. Each filter below exists either because the question can't be asked yet
+or because the answer is already known:
+
+A circular is checked against the new policy only if it passes every one of these, left to
+right. The first row decides whether the circular is worth checking at all; the second,
+whether this policy is one of the right ones to ask about.
+
+```mermaid
+flowchart TD
+    all(["Every circular in the database"]) --> row1
+    subgraph row1["Is the circular worth checking?"]
+        direction LR
+        a["Analysed"] --> b["Applies to<br/>the company"] --> c["Published in<br/>the last 30 days"] --> d["Creates<br/>obligations"]
+    end
+    row1 --> row2
+    subgraph row2["Is this policy one to ask about?"]
+        direction LR
+        e["Lists the circular's<br/>regulator"] --> f["Among the circular's<br/>3 closest policies"] --> g["Never judged at this<br/>version, and no gap yet"]
+    end
+    row2 --> ask(["Sent to Gemini"])
+```
+
+| If it fails… | It means | Setting |
+|---|---|---|
+| Analysed | the circular is still waiting, failed, or was skipped as too old | |
+| Applies to the company | Gemini judged it's for other kinds of entity, or the company isn't described yet | |
+| Published in the last 30 days | it's older than the catch-up window | `LOOKBACK_DAYS` |
+| Creates obligations | it's informational (a repeal, a notice), so there's nothing a policy could miss | |
+| Lists the circular's regulator | the policy isn't tagged with RBI, SEBI or IRDAI as needed | |
+| Among the 3 closest | other policies fit this circular better | `MATCH_TOP_K` |
+| Never judged | Gemini already answered for this version of the policy, or a gap is already open | |
+
+The "3 closest" test is relative. Every policy that lists the circular's regulator competes
+for the 3 places, by how close its best chunk is to the circular (see
+[How the closest policies are found](#how-the-closest-policies-are-found)). With 3 or fewer
+policies for that regulator, all of them are checked. With 50, only the 3 most relevant are,
+which keeps Gemini's work (and your bill) small without missing the policies that matter.
+
+### How Gemini decides whether there's a gap
+
+For each pair that gets through, Gemini is asked question 3 from
+[section 7](#the-three-questions):
+
+```mermaid
+flowchart TD
+    subgraph input["What Gemini is given"]
+        direction LR
+        co["Your company<br/>description"]
+        ci["The circular: addressee,<br/>summary, obligations"]
+        po["The policy: its text at this<br/>version, and its controls"]
+        co ~~~ ci ~~~ po
+    end
+    input --> q{"Does the circular require<br/>something this policy<br/>doesn't already say?"}
+    q -->|no| ok["Up to date<br/>saved in policy_checks<br/>no gap"]
+    q -->|yes| bad["Out of date<br/>saved in policy_checks"]
+    bad --> gap["A gap for the policy owner:<br/>what's missing, severity, draft wording,<br/>affected controls, due date"]
+```
+
+Strictly, "out of date" means the circular creates or changes an obligation within this
+policy's scope that the policy text doesn't already meet.
+
+- **Up to date** is a real answer, not a failure. It means the policy already says what the
+  circular requires, or the circular is about something the policy doesn't cover. It's still
+  saved, so the same pair is never asked about again.
+- **Out of date** opens one gap with `severity` high, medium or low, due in 7, 30 or 60 days.
+  See [What a gap contains](#what-a-gap-contains).
+- Controls Gemini names that don't exist on the policy are dropped from the gap.
+
+### An example: a new policy with no gap
+
+Say you add **POL-DRP** (listing RBI, SEBI and IRDAI) to a library that already has one
+policy, for a company described as a non-deposit-taking NBFC, and the worker has analysed 25
+circulars from the last 30 days:
+
+| Circulars | How many | What happens to them |
+|---|---|---|
+| Don't apply to an NBFC | 23 | not checked |
+| Applies, but only repeals old guidelines (no obligations) | 1 | nothing to check |
+| Applies, with 4 obligations (an RBI circular) | 1 | checked |
+
+The worker then:
+
+1. **Embeds** POL-DRP (3,057 characters, so 1 chunk) about 30 seconds after you save it.
+2. **Ranks** the 2 policies for the one eligible circular: POL-DRP scores 0.58, POL-DLP 0.55.
+   With only 2 policies, both are in the top 3.
+3. **Asks Gemini** about POL-DRP. POL-DLP was already judged for this circular, so it isn't
+   asked again. Gemini finds that POL-DRP already covers what the circular requires.
+4. **Saves** the verdict: up to date, no gap.
+
+It's all visible in the worker's log:
+
+```text
+INFO pipeline embedded 1 policies (1 chunks) with gemini-embedding-001
+INFO pipeline #98 vs POL-DRP v1 (similarity 0.58): up to date
+INFO pipeline caught up: 1 new checks against 1 recent circulars, gaps opened: none
+```
+
+And in the console: the circular's page lists both policies under **Checked against your
+policies**, each marked **Up to date**. Nothing shows on the Gaps page because no gap was
+needed. The next RBI, SEBI or IRDAI circular that applies will be checked against POL-DRP
+as soon as it's analysed.
+
+### After that: every new circular includes the policy
+
+The catch-up above only looks back. Going forward, the new policy is simply part of the
+library: each new circular that applies ranks all the policies (the new one included) and
+the 3 closest are judged, as in [section 7](#7-step-3-the-worker-decides-what-the-circular-means-for-us).
+
+```mermaid
+flowchart LR
+    nc["A new circular<br/>that applies to us"] --> rank["Rank every policy<br/>for its regulator"]
+    lib[("The policy library,<br/>new policy included")] --> rank
+    rank --> top["Its 3 closest"] --> judge["Gemini judges each one"] --> out["Verdicts saved,<br/>gaps opened"]
+```
+
+### When you edit a policy: what gets redone
+
+Only what the change can affect:
+
+| You change | Re-embedded? | Checked again? | Why |
+|---|---|---|---|
+| the owner | no | no | nothing Gemini sees has changed. New gaps go to the new owner |
+| a control (added) | no | no | used from the next check on |
+| the regulators | no | yes, against circulars from the newly listed regulators | those circulars couldn't pick it before |
+| the title | yes | only pairs never judged | the ranking may change; the text Gemini judges is the same version |
+| the text | yes | yes: it's a new version, so every recent pair is judged again, except pairs that already have a gap | a new version may fix, or cause, a gap |
+
+A text edit also bumps the version and adds a `policy_updated` event to each of the policy's
+open gaps ("POL-KYC updated to v2"), so the owner can close them against the new wording.
+
+### Why doesn't my new policy have a gap?
+
+```mermaid
+flowchart TD
+    s(["Added a policy, but no gap?"]) --> q1{"Is the company described?<br/>(the Company page)"}
+    q1 -->|no| a1["Describe it. Until then no circular<br/>is judged as applying to you"]
+    q1 -->|yes| q2{"Does any circular from the last<br/>30 days apply to you and<br/>have obligations?"}
+    q2 -->|no| a2["Nothing to check yet.<br/>New circulars will be checked"]
+    q2 -->|yes| q3{"Open that circular. Is the policy<br/>under Checked against your policies?"}
+    q3 -->|"yes, Up to date"| a3["Gemini found the policy already<br/>meets the circular: no gap is needed"]
+    q3 -->|no| q4{"Does the policy list that<br/>circular's regulator?"}
+    q4 -->|no| a4["Edit the policy and<br/>add the regulator"]
+    q4 -->|yes| a5["Other policies were closer, so it<br/>wasn't in the top 3. Raise MATCH_TOP_K<br/>to check more policies per circular"]
+```
+
+To see what the worker did, and when:
+
+```bash
+docker compose logs worker | grep -E "embedded|caught up| vs "
+```
+
+### Reliability
 
 - **Each verdict is saved as soon as Gemini gives it.** If Gemini fails halfway, the next
   round carries on from the next unjudged pair; nothing is asked twice.
 - **Nothing changed, nothing done.** The worker notes what the company, the library and the
-  recent circulars looked like when it last finished, and skips this step while they're the
-  same.
-- **Only what matters is redone.** Changing a policy's owner re-does nothing. Changing its
-  regulators checks it against that regulator's circulars. Editing its text re-embeds it
-  and, being a new version, checks it again.
-- An edit never opens a second gap for the same circular and policy.
-- Changing `GEMINI_EMBEDDING_MODEL_NAME` re-embeds every policy and circular automatically.
-  Vectors from two different models can't be compared, so the worker tracks which model made
-  each one.
+  recent circulars looked like when it last finished, and skips the catch-up while they're
+  the same.
+- **One ticket per pair.** An edit never opens a second gap for the same circular and policy.
+- **Changing `GEMINI_EMBEDDING_MODEL_NAME`** re-embeds every policy and circular
+  automatically. Vectors from two different models can't be compared, so the worker tracks
+  which model made each one.
 
 ---
 
@@ -766,6 +974,10 @@ last 30 days of circulars.
 `curl -X POST localhost:8000/circulars/<id>/reprocess`. Gemini reads the saved OCR text
 again (no new OCR), judges it and re-checks the policies it had found up to date. Gaps
 already opened are kept and never duplicated.
+
+**…find out why a new policy has no gap?** Follow the chart in
+[Why doesn't my new policy have a gap?](#why-doesnt-my-new-policy-have-a-gap). Most often
+Gemini checked it and found it already up to date, which the circular's page shows.
 
 **…see which policies a circular was checked against?** Its page in the console has a
 **Checked against your policies** list: each policy, its similarity, and Gemini's verdict.
