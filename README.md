@@ -10,16 +10,19 @@ and keeps a history of the gap until it is closed. The company's control library
 history are data a chatbot will never have.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    sites["RBI · SEBI · IRDAI<br/>websites"] -->|"every hour"| W["watcher"]
-    W -->|PDF| S3[("S3 (Floci)")]
-    W -->|"row, status new"| DB[("Postgres")]
-    S3 -->|PDF| K
-    DB <-->|"every minute: picks up work,<br/>saves results and gaps"| K["<b>worker</b>: the agent<br/>1. OCR each page<br/>2. summarise it<br/>3. does it apply to us?<br/>4. find the closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
-    K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
-    K <-->|"question → JSON answer"| G["Gemini<br/>via LangChain"]
-    DB <--> A["api<br/>FastAPI :8000"] <--> F["frontend<br/>console :8080"]
+    subgraph canvas[" "]
+        direction LR
+        sites["RBI · SEBI · IRDAI<br/>websites"] -->|"every hour"| W["watcher"]
+        W -->|PDF| S3[("S3 (Floci)")]
+        W -->|"row, status new"| DB[("Postgres")]
+        S3 -->|PDF| K
+        DB <-->|"every minute: picks up work,<br/>saves results and gaps"| K["<b>worker</b>: the agent<br/>1. OCR each page<br/>2. summarise it<br/>3. does it apply to us?<br/>4. find the closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
+        K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
+        K <-->|"question → JSON answer"| G["Gemini<br/>via LangChain"]
+        DB <--> A["api<br/>FastAPI :8000"] <--> F["frontend<br/>console :8080"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -35,6 +38,7 @@ flowchart LR
     class sites,G ext
     class O gpu
     class K svc
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 > 📖 **How it all works**, step by step with diagrams: [how_it_works.md](how_it_works.md).

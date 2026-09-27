@@ -67,18 +67,21 @@ kept in the gap's history.
 ## 2. The big picture
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    sites["RBI · SEBI · IRDAI<br/>websites"] -->|new circulars| W["watcher"]
-    W -->|PDF| S3[("S3 (Floci)<br/>the PDFs")]
-    W -->|"row, status 'new'"| DB[("Postgres")]
-    S3 -->|PDF| K["worker<br/>(the agent)"]
-    DB <-->|"picks up work,<br/>saves results and gaps"| K
-    K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on the GPU"]
-    K <-->|"question → JSON answer"| G["Gemini<br/>(via LangChain)"]
-    DB <-->|reads and writes| A["api<br/>FastAPI"]
-    A <-->|"/api/*"| F["frontend<br/>console"]
-    F <--> U(("You"))
+    subgraph canvas[" "]
+        direction LR
+        sites["RBI · SEBI · IRDAI<br/>websites"] -->|new circulars| W["watcher"]
+        W -->|PDF| S3[("S3 (Floci)<br/>the PDFs")]
+        W -->|"row, status 'new'"| DB[("Postgres")]
+        S3 -->|PDF| K["worker<br/>(the agent)"]
+        DB <-->|"picks up work,<br/>saves results and gaps"| K
+        K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on the GPU"]
+        K <-->|"question → JSON answer"| G["Gemini<br/>(via LangChain)"]
+        DB <-->|reads and writes| A["api<br/>FastAPI"]
+        A <-->|"/api/*"| F["frontend<br/>console"]
+        F <--> U(("You"))
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -94,6 +97,7 @@ flowchart LR
     class sites,G ext
     class O gpu
     class U start
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 There are two kinds of service:
@@ -115,23 +119,23 @@ of them can be restarted at any time.
 ## 3. What runs where
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    B["Browser"] -->|":8080"| FE
-
-    subgraph compose["docker compose (project: rci)"]
-        FE["frontend<br/>nginx :8080"] -->|"/api/*"| API["api<br/>uvicorn :8000"]
-        API --> PG[("postgres<br/>:5432")]
-        WA["watcher"] --> PG
-        WK["worker"] --> PG
-        WK -->|"http://ocr:8000/v1"| OC["ocr<br/>vLLM (host :8001)"]
+    subgraph canvas[" "]
+        direction LR
+        B["Browser"] -->|":8080"| FE
+        subgraph compose["docker compose (rci)"]
+            FE["frontend<br/>nginx :8080"] -->|"/api/*"| API["api<br/>uvicorn :8000"]
+            API --> PG[("postgres<br/>:5432")]
+            WA["watcher"] --> PG
+            WK["worker"] --> PG
+            WK -->|"http://ocr:8000/v1"| OC["ocr<br/>vLLM (host :8001)"]
+        end
+        WA -->|PDFs| FL[("Floci S3 :4566<br/>(outside Docker)")]
+        WK -->|PDFs| FL
+        WK -->|HTTPS| GEM["Gemini API<br/>(internet)"]
+        OC --- GPU[["NVIDIA GPU"]]
     end
-
-    WA -->|PDFs| FL[("Floci S3 :4566<br/>(outside Docker)")]
-    WK -->|PDFs| FL
-    WK -->|HTTPS| GEM["Gemini API<br/>(internet)"]
-    OC --- GPU[["NVIDIA GPU"]]
-
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -150,6 +154,7 @@ flowchart LR
     classDef external stroke-dasharray: 5 4
     class FL,GEM,GPU external
     style compose fill:#0c1a24,stroke:#2dd4bf
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 | Service | Folder | Runs | Port on your machine |
@@ -177,17 +182,19 @@ This is the whole journey of one circular, from the regulator's website to a tic
 someone's desk.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     autonumber
-    participant Site as Regulator site
-    participant W as watcher
-    participant S3 as S3 (Floci)
-    participant DB as Postgres
-    participant K as worker
-    participant O as ocr (GPU)
-    participant G as Gemini
-    participant P as Policy owner
+    box rgb(11, 16, 32)
+        participant Site as Regulator site
+        participant W as watcher
+        participant S3 as S3 (Floci)
+        participant DB as Postgres
+        participant K as worker
+        participant O as ocr (GPU)
+        participant G as Gemini
+        participant P as Policy owner
+    end
 
     rect rgb(13, 20, 36)
         W->>DB: already known? (source + source_key)
@@ -234,30 +241,40 @@ sequenceDiagram
 A circular's **status** tells you where it is in that journey:
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "transitionColor": "#8b9bb4", "transitionLabelColor": "#e2e8f0", "stateLabelColor": "#e6edf7", "labelBackgroundColor": "#0f172a", "specialStateColor": "#a7ef6f", "innerEndBackground": "#a7ef6f", "stateBkg": "#16213a", "stateBorder": "#475a7a"}}}%%
-stateDiagram-v2
-    [*] --> new: watcher saves it
-    new --> skipped: published more than 30 days ago
-    new --> parsed: OCR done
-    parsed --> analyzed: Gemini done
-    new --> failed: error, see the error field
-    parsed --> failed: error, see the error field
-    failed --> new: reprocess (no OCR text yet)
-    failed --> parsed: reprocess (OCR text kept)
-    analyzed --> parsed: reprocess, or the company description changed
-    analyzed --> [*]
-    skipped --> [*]
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TB
+    subgraph canvas[" "]
+        direction TB
+        s0((" ")) -->|"watcher saves it"| c_new(["new"])
+        c_new -->|"published more than<br/>30 days ago"| c_skipped(["skipped"])
+        c_new -->|"OCR done"| c_parsed(["parsed"])
+        c_parsed -->|"Gemini done"| c_analyzed(["analyzed"])
+        c_new -->|"error, see the<br/>error field"| c_failed(["failed"])
+        c_parsed -->|"error, see the<br/>error field"| c_failed
+        c_failed -->|"reprocess<br/>(no OCR text yet)"| c_new
+        c_failed -->|"reprocess<br/>(OCR text kept)"| c_parsed
+        c_analyzed -->|"reprocess, or the company<br/>description changed"| c_parsed
+        c_analyzed --> e0(((" ")))
+        c_skipped --> e0
+    end
 
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queued fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    classDef working fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
-    classDef done fill:#0b2a1c,stroke:#34d399,color:#d1fae5
-    classDef broken fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
-    classDef quiet fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class new queued
-    class parsed working
-    class analyzed done
-    class failed broken
-    class skipped quiet
+    class s0,e0 start
+    class c_new queued
+    class c_parsed data
+    class c_analyzed ok
+    class c_failed bad
+    class c_skipped muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - **`new`**: saved by the watcher, waiting for the worker.
@@ -276,19 +293,22 @@ stateDiagram-v2
 ## 5. Step 1: the watcher finds new circulars
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    start(["Every 60 minutes"]) --> each["For RBI, SEBI and IRDAI"]
-    each --> list["Fetch the list of circulars"]
-    list --> known{"Already in the database?<br/>(source + source_key)"}
-    known -->|yes| next["Next one"]
-    known -->|no| pdf["Find and download the PDF<br/>(English version, not Hindi)"]
-    pdf --> isPdf{"Really a PDF?<br/>(starts with %PDF)"}
-    isPdf -->|no| skip["Log it and skip it.<br/>Tried again next round"]
-    isPdf -->|yes| store["Store it in S3 as<br/>source/sha256.pdf"]
-    store --> row["Insert a circulars row<br/>with status new"]
-    row --> next
-    skip --> next
+    subgraph canvas[" "]
+        direction TB
+        start(["Every 60 minutes"]) --> each["For RBI, SEBI and IRDAI"]
+        each --> list["Fetch the list of circulars"]
+        list --> known{"Already in the database?<br/>(source + source_key)"}
+        known -->|yes| next["Next one"]
+        known -->|no| pdf["Find and download the PDF<br/>(English version, not Hindi)"]
+        pdf --> isPdf{"Really a PDF?<br/>(starts with %PDF)"}
+        isPdf -->|no| skip["Log it and skip it.<br/>Tried again next round"]
+        isPdf -->|yes| store["Store it in S3 as<br/>source/sha256.pdf"]
+        store --> row["Insert a circulars row<br/>with status new"]
+        row --> next
+        skip --> next
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -304,6 +324,7 @@ flowchart TD
     class skip bad
     class store,row data
     class next muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 Where each regulator's circulars come from:
@@ -331,14 +352,17 @@ The worker reads each PDF with **Baidu Unlimited-OCR**, a vision model that sees
 an image. It handles scanned pages, tables and Hindi, not just a PDF's text layer.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    pdf["PDF from S3"] --> pages["First 20 pages<br/>(OCR_MAX_PAGES)"]
-    pages --> png["Each page rendered<br/>to a PNG at 200 DPI"]
-    png --> request["One request per page to<br/>the ocr service"]
-    request --> raw["Page text, each block tagged<br/>with its type and position"]
-    raw --> clean["Strip the markers.<br/>Drop footers, images, '[No text]'"]
-    clean --> saved["circulars.text<br/>status parsed"]
+    subgraph canvas[" "]
+        direction LR
+        pdf["PDF from S3"] --> pages["First 20 pages<br/>(OCR_MAX_PAGES)"]
+        pages --> png["Each page rendered<br/>to a PNG at 200 DPI"]
+        png --> request["One request per page to<br/>the ocr service"]
+        request --> raw["Page text, each block tagged<br/>with its type and position"]
+        raw --> clean["Strip the markers.<br/>Drop footers, images, '[No text]'"]
+        clean --> saved["circulars.text<br/>status parsed"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -352,6 +376,7 @@ flowchart LR
     class pdf data
     class request,raw gpu
     class saved ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - The model tags each block of text with its type and position on the page, like
@@ -381,23 +406,26 @@ answer comes back as **JSON matching a Pydantic model** (LangChain's
 `with_structured_output`), never as free text the code would have to parse.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    text["Circular text"] --> q1["Gemini: who is it addressed to,<br/>what does it change,<br/>what does it require?"]
-    q1 --> described{"Has the company<br/>been described?"}
-    described -->|no| doneUnknown["analyzed<br/>applicable = not checked, no gaps"]
-    described -->|yes| q2["Gemini: does it apply to<br/>this company? And why?"]
-    q2 --> applies{"Applies?"}
-    applies -->|no| doneNo["analyzed<br/>applicable = false, no gaps"]
-    applies -->|yes| anyReq{"Any obligations?"}
-    anyReq -->|"no (informational)"| doneInfo["analyzed<br/>no gaps"]
-    anyReq -->|yes| match["Pick the 3 closest policies<br/>(same regulator, by embedding similarity)"]
-    match --> q3["For each of the 3 — Gemini:<br/>is this policy out of date?<br/>What's missing? Draft the new wording"]
-    q3 --> impacted{"Out of date?"}
-    impacted -->|yes| gap["Open a gap for the policy owner,<br/>due date by severity"]
-    impacted -->|no| ok["No gap for this policy"]
-    gap --> done["analyzed"]
-    ok --> done
+    subgraph canvas[" "]
+        direction TB
+        text["Circular text"] --> q1["Gemini: who is it addressed to,<br/>what does it change,<br/>what does it require?"]
+        q1 --> described{"Has the company<br/>been described?"}
+        described -->|no| doneUnknown["analyzed<br/>applicable = not checked, no gaps"]
+        described -->|yes| q2["Gemini: does it apply to<br/>this company? And why?"]
+        q2 --> applies{"Applies?"}
+        applies -->|no| doneNo["analyzed<br/>applicable = false, no gaps"]
+        applies -->|yes| anyReq{"Any obligations?"}
+        anyReq -->|"no (informational)"| doneInfo["analyzed<br/>no gaps"]
+        anyReq -->|yes| match["Pick the 3 closest policies<br/>(same regulator, by embedding similarity)"]
+        match --> q3["For each of the 3 — Gemini:<br/>is this policy out of date?<br/>What's missing? Draft the new wording"]
+        q3 --> impacted{"Out of date?"}
+        impacted -->|yes| gap["Open a gap for the policy owner,<br/>due date by severity"]
+        impacted -->|no| ok["No gap for this policy"]
+        gap --> done["analyzed"]
+        ok --> done
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -415,6 +443,7 @@ flowchart TD
     class match svc
     class gap bad
     class ok,done ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 Every verdict from the last step is saved in `policy_checks`, one row per circular and
@@ -459,14 +488,17 @@ the list first with **embeddings**. An embedding turns a text into a list of 768
 where similar meanings give similar numbers.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    c["Circular:<br/>title + summary + requirements"] -->|"embed (RETRIEVAL_QUERY)<br/>done once, stored on the circular"| qv(("query<br/>vector"))
-    p["Each policy:<br/>title + text, in 5,000-character chunks"] -->|"embed (RETRIEVAL_DOCUMENT)<br/>done once, stored on the policy"| pv(("one vector<br/>per chunk"))
-    qv --> cos["Cosine similarity.<br/>A policy scores its best chunk"]
-    pv --> cos
-    filter["Only policies tagged with<br/>the circular's regulator"] --> cos
-    cos --> top["Top 3 (MATCH_TOP_K)<br/>go to question 3"]
+    subgraph canvas[" "]
+        direction LR
+        c["Circular:<br/>title + summary + requirements"] -->|"embed (RETRIEVAL_QUERY)<br/>done once, stored on the circular"| qv(("query<br/>vector"))
+        p["Each policy:<br/>title + text, in 5,000-character chunks"] -->|"embed (RETRIEVAL_DOCUMENT)<br/>done once, stored on the policy"| pv(("one vector<br/>per chunk"))
+        qv --> cos["Cosine similarity.<br/>A policy scores its best chunk"]
+        pv --> cos
+        filter["Only policies tagged with<br/>the circular's regulator"] --> cos
+        cos --> top["Top 3 (MATCH_TOP_K)<br/>go to question 3"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -481,6 +513,7 @@ flowchart LR
     class qv,pv,cos svc
     class filter ask
     class top ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 The embedding model reads about 2,000 tokens at most, so a long policy is split into
@@ -532,21 +565,24 @@ The worker is a loop. Each round does the same four things, then waits 60 second
 reads a long circular simply takes longer.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    boot(["Worker starts"]) --> init["Create any missing tables and columns.<br/>Check the Gemini key and model names"]
-    init --> r1
-    subgraph round["One round"]
-        r1["Step 1: embed policies that are<br/>new or edited"] --> r2{"Step 2: anything changed<br/>since the last catch-up?"}
-        r2 -->|yes| r3["Catch up: check recent circulars<br/>against their closest policies"]
-        r2 -->|no| r4
-        r3 --> r4["Step 3: mark new circulars older<br/>than 30 days as skipped"]
-        r4 --> r5{"Step 4: is a circular waiting?<br/>(status new or parsed)"}
-        r5 -->|yes| r6["Process it, newest first: OCR if needed,<br/>read, judge, check its closest policies"]
-        r6 --> r5
+    subgraph canvas[" "]
+        direction TB
+        boot(["Worker starts"]) --> init["Create any missing tables and columns.<br/>Check the Gemini key and model names"]
+        init --> r1
+        subgraph round["One round"]
+            r1["Step 1: embed policies that are<br/>new or edited"] --> r2{"Step 2: anything changed<br/>since the last catch-up?"}
+            r2 -->|yes| r3["Catch up: check recent circulars<br/>against their closest policies"]
+            r2 -->|no| r4
+            r3 --> r4["Step 3: mark new circulars older<br/>than 30 days as skipped"]
+            r4 --> r5{"Step 4: is a circular waiting?<br/>(status new or parsed)"}
+            r5 -->|yes| r6["Process it, newest first: OCR if needed,<br/>read, judge, check its closest policies"]
+            r6 --> r5
+        end
+        r5 -->|no| wait["Wait 60 seconds"]
+        wait --> r1
     end
-    r5 -->|no| wait["Wait 60 seconds"]
-    wait --> r1
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -562,6 +598,7 @@ flowchart TD
     class r2,r5 ask
     class wait muted
     style round fill:#0c1a24,stroke:#2dd4bf
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 Steps 1 and 2 are where a new policy is handled. "Anything changed" means the company
@@ -573,15 +610,17 @@ every minute is free.
 ### Step by step: what happens to a new policy
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     autonumber
-    participant U as You
-    participant F as console
-    participant A as api
-    participant DB as Postgres
-    participant K as worker
-    participant G as Gemini
+    box rgb(11, 16, 32)
+        participant U as You
+        participant F as console
+        participant A as api
+        participant DB as Postgres
+        participant K as worker
+        participant G as Gemini
+    end
 
     rect rgb(13, 20, 36)
         U->>F: New policy or Import JSON
@@ -620,19 +659,22 @@ right. The first row decides whether the circular is worth checking at all; the 
 whether this policy is one of the right ones to ask about.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    all(["Every circular in the database"]) --> row1
-    subgraph row1["Is the circular worth checking?"]
-        direction LR
-        a["Analysed"] --> b["Applies to<br/>the company"] --> c["Published in<br/>the last 30 days"] --> d["Creates<br/>obligations"]
+    subgraph canvas[" "]
+        direction TB
+        all(["Every circular in the database"]) --> row1
+        subgraph row1["Is the circular worth checking?"]
+            direction LR
+            a["Analysed"] --> b["Applies to<br/>the company"] --> c["Published in<br/>the last 30 days"] --> d["Creates<br/>obligations"]
+        end
+        row1 --> row2
+        subgraph row2["Is this policy one to ask about?"]
+            direction LR
+            e["Lists the circular's<br/>regulator"] --> f["Among the circular's<br/>3 closest policies"] --> g["Never judged at this<br/>version, and no gap yet"]
+        end
+        row2 --> ask(["Sent to Gemini"])
     end
-    row1 --> row2
-    subgraph row2["Is this policy one to ask about?"]
-        direction LR
-        e["Lists the circular's<br/>regulator"] --> f["Among the circular's<br/>3 closest policies"] --> g["Never judged at this<br/>version, and no gap yet"]
-    end
-    row2 --> ask(["Sent to Gemini"])
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -647,6 +689,7 @@ flowchart TD
     class ask ext
     style row1 fill:#0c1a24,stroke:#2dd4bf
     style row2 fill:#170f26,stroke:#c084fc
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 | If it fails… | It means | Setting |
@@ -671,19 +714,22 @@ For each pair that gets through, Gemini is asked question 3 from
 [section 7](#the-three-questions):
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    subgraph input["What Gemini is given"]
-        direction LR
-        co["Your company<br/>description"]
-        ci["The circular: addressee,<br/>summary, obligations"]
-        po["The policy: its text at this<br/>version, and its controls"]
-        co ~~~ ci ~~~ po
+    subgraph canvas[" "]
+        direction TB
+        subgraph input["What Gemini is given"]
+            direction LR
+            co["Your company<br/>description"]
+            ci["The circular: addressee,<br/>summary, obligations"]
+            po["The policy: its text at this<br/>version, and its controls"]
+            co ~~~ ci ~~~ po
+        end
+        input --> q{"Does the circular require<br/>something this policy<br/>doesn't already say?"}
+        q -->|no| ok["Up to date<br/>saved in policy_checks<br/>no gap"]
+        q -->|yes| bad["Out of date<br/>saved in policy_checks"]
+        bad --> gap["A gap for the policy owner:<br/>what's missing, severity, draft wording,<br/>affected controls, due date"]
     end
-    input --> q{"Does the circular require<br/>something this policy<br/>doesn't already say?"}
-    q -->|no| ok["Up to date<br/>saved in policy_checks<br/>no gap"]
-    q -->|yes| bad["Out of date<br/>saved in policy_checks"]
-    bad --> gap["A gap for the policy owner:<br/>what's missing, severity, draft wording,<br/>affected controls, due date"]
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -698,6 +744,7 @@ flowchart TD
     class ok ok
     class bad,gap bad
     style input fill:#170f26,stroke:#c084fc
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 Strictly, "out of date" means the circular creates or changes an obligation within this
@@ -751,11 +798,14 @@ library: each new circular that applies ranks all the policies (the new one incl
 the 3 closest are judged, as in [section 7](#7-step-3-the-worker-decides-what-the-circular-means-for-us).
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    nc["A new circular<br/>that applies to us"] --> rank["Rank every policy<br/>for its regulator"]
-    lib[("The policy library,<br/>new policy included")] --> rank
-    rank --> top["Its 3 closest"] --> judge["Gemini judges each one"] --> out["Verdicts saved,<br/>gaps opened"]
+    subgraph canvas[" "]
+        direction LR
+        nc["A new circular<br/>that applies to us"] --> rank["Rank every policy<br/>for its regulator"]
+        lib[("The policy library,<br/>new policy included")] --> rank
+        rank --> top["Its 3 closest"] --> judge["Gemini judges each one"] --> out["Verdicts saved,<br/>gaps opened"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -770,6 +820,7 @@ flowchart LR
     class rank,top svc
     class judge ext
     class out ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 ### When you edit a policy: what gets redone
@@ -790,17 +841,20 @@ open gaps ("POL-KYC updated to v2"), so the owner can close them against the new
 ### Why doesn't my new policy have a gap?
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    s(["Added a policy, but no gap?"]) --> q1{"Is the company described?<br/>(the Company page)"}
-    q1 -->|no| a1["Describe it. Until then no circular<br/>is judged as applying to you"]
-    q1 -->|yes| q2{"Does any circular from the last<br/>30 days apply to you and<br/>have obligations?"}
-    q2 -->|no| a2["Nothing to check yet.<br/>New circulars will be checked"]
-    q2 -->|yes| q3{"Open that circular. Is the policy<br/>under Checked against your policies?"}
-    q3 -->|"yes, Up to date"| a3["Gemini found the policy already<br/>meets the circular: no gap is needed"]
-    q3 -->|no| q4{"Does the policy list that<br/>circular's regulator?"}
-    q4 -->|no| a4["Edit the policy and<br/>add the regulator"]
-    q4 -->|yes| a5["Other policies were closer, so it<br/>wasn't in the top 3. Raise MATCH_TOP_K<br/>to check more policies per circular"]
+    subgraph canvas[" "]
+        direction TB
+        s(["Added a policy, but no gap?"]) --> q1{"Is the company described?<br/>(the Company page)"}
+        q1 -->|no| a1["Describe it. Until then no circular<br/>is judged as applying to you"]
+        q1 -->|yes| q2{"Does any circular from the last<br/>30 days apply to you and<br/>have obligations?"}
+        q2 -->|no| a2["Nothing to check yet.<br/>New circulars will be checked"]
+        q2 -->|yes| q3{"Open that circular. Is the policy<br/>under Checked against your policies?"}
+        q3 -->|"yes, Up to date"| a3["Gemini found the policy already<br/>meets the circular: no gap is needed"]
+        q3 -->|no| q4{"Does the policy list that<br/>circular's regulator?"}
+        q4 -->|no| a4["Edit the policy and<br/>add the regulator"]
+        q4 -->|yes| a5["Other policies were closer, so it<br/>wasn't in the top 3. Raise MATCH_TOP_K<br/>to check more policies per circular"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -815,6 +869,7 @@ flowchart TD
     class q1,q2,q3,q4 ask
     class a3 ok
     class a1,a2,a4,a5 muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 To see what the worker did, and when:
@@ -842,89 +897,41 @@ docker compose logs worker | grep -E "embedded|caught up| vs "
 Seven tables, all defined in `backend/common/common/models.py`:
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#5eead4", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "attributeBackgroundColorOdd": "#111a2c", "attributeBackgroundColorEven": "#162136"}}}%%
-erDiagram
-    CIRCULARS ||--o{ GAPS : "can open"
-    POLICIES ||--o{ GAPS : "can be out of date in"
-    POLICIES ||--o{ CONTROLS : has
-    GAPS ||--|{ GAP_EVENTS : "history of"
-    CIRCULARS ||--o{ POLICY_CHECKS : "checked in"
-    POLICIES ||--o{ POLICY_CHECKS : "checked in"
-    COMPANY ||..o{ CIRCULARS : "decides which apply"
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart LR
+    subgraph canvas[" "]
+        direction LR
+        CO["<b>company</b><br/>one row: your description<br/>profile · updated_at"]
+        CI["<b>circulars</b><br/>source · source_key · title · pdf_url · s3_key<br/>published_at · status: new, parsed, analyzed, failed, skipped<br/>text: the OCR output · addressed_to · summary<br/>requirements · embedding<br/>applicable: empty until judged · applies_reason · error"]
+        PO["<b>policies</b><br/>code, e.g. POL-KYC · title · owner<br/>regulators, e.g. RBI, SEBI · text<br/>version: +1 on every text change<br/>embeddings: one per 5,000-character chunk"]
+        CT["<b>controls</b><br/>code, e.g. CTL-KYC-01 · policy_id<br/>description · owner · frequency"]
+        PC["<b>policy_checks</b><br/>circular_id · policy_id · policy_version<br/>similarity · impacted: true = a gap was opened"]
+        GA["<b>gaps</b><br/>circular_id · policy_id · policy_version<br/>title · impact: what is missing · draft_change<br/>affected_controls · severity: low, medium, high<br/>owner · status · due_date · closed_at"]
+        GE["<b>gap_events</b><br/>gap_id · at · actor: agent, system or a person<br/>action · note"]
+        CO -.->|"decides which apply"| CI
+        CI -->|"1 to many: can open"| GA
+        PO -->|"1 to many: out of date in"| GA
+        PO -->|"1 to many: has"| CT
+        GA -->|"1 to many: history"| GE
+        CI -->|"1 to many: checked in"| PC
+        PO -->|"1 to many: checked in"| PC
+    end
 
-    CIRCULARS {
-        int id PK
-        string source "RBI, SEBI or IRDAI"
-        string source_key "stable ID at the source"
-        string title
-        string pdf_url
-        string s3_key "where the PDF is"
-        datetime published_at
-        string status "new, parsed, analyzed, failed, skipped"
-        text text "OCR output"
-        text addressed_to "as written in it"
-        text summary
-        bool applicable "empty = not checked"
-        text applies_reason "why it does or doesn't"
-        json requirements "list of obligations"
-        json embedding "768 numbers"
-        text error "why it failed"
-    }
-    COMPANY {
-        int id PK "always 1: one row"
-        text profile "your description"
-        datetime updated_at
-    }
-    POLICIES {
-        int id PK
-        string code UK "e.g. POL-KYC"
-        string title
-        string owner "gets the gap tickets"
-        json regulators "e.g. RBI, SEBI"
-        text text "current wording"
-        int version "+1 on every text change"
-        json embeddings "768 numbers per chunk"
-        string embedding_model
-    }
-    POLICY_CHECKS {
-        int id PK
-        int circular_id FK
-        int policy_id FK
-        int policy_version
-        float similarity
-        bool impacted "true = a gap was opened"
-    }
-    CONTROLS {
-        int id PK
-        string code UK "e.g. CTL-KYC-01"
-        int policy_id FK
-        string description
-        string owner
-        string frequency
-    }
-    GAPS {
-        int id PK
-        int circular_id FK
-        int policy_id FK
-        int policy_version
-        string title
-        text impact "what is missing"
-        text draft_change "proposed wording"
-        json affected_controls
-        string severity "low, medium, high"
-        string owner
-        string status "open, in_progress, closed, dismissed"
-        date due_date
-        datetime closed_at
-    }
-    GAP_EVENTS {
-        int id PK
-        int gap_id FK
-        datetime at
-        string actor "agent, system or a person"
-        string action "opened, status, owner, due_date, comment, policy_updated"
-        text note
-    }
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    class CO start
+    class CI,PO,CT data
+    class PC ok
+    class GA bad
+    class GE muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 Rules the database enforces:
@@ -944,26 +951,37 @@ stops two services that start together from both changing the schema.
 ## 10. Tracking a gap until it's closed
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "transitionColor": "#8b9bb4", "transitionLabelColor": "#e2e8f0", "stateLabelColor": "#e6edf7", "labelBackgroundColor": "#0f172a", "specialStateColor": "#a7ef6f", "innerEndBackground": "#a7ef6f", "stateBkg": "#16213a", "stateBorder": "#475a7a"}}}%%
-stateDiagram-v2
-    [*] --> open: agent opens it
-    open --> in_progress: someone starts on it
-    in_progress --> open
-    open --> closed: fixed (note required)
-    in_progress --> closed: fixed (note required)
-    open --> dismissed: not needed (note required)
-    in_progress --> dismissed: not needed (note required)
-    closed --> open: reopened
-    dismissed --> open: reopened
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TB
+    subgraph canvas[" "]
+        direction TB
+        s0((" ")) -->|"agent opens it"| g_open(["open"])
+        g_open -->|"someone starts on it"| g_progress(["in progress"])
+        g_progress --> g_open
+        g_open -->|"fixed<br/>(note required)"| g_closed(["closed"])
+        g_progress -->|"fixed<br/>(note required)"| g_closed
+        g_open -->|"not needed<br/>(note required)"| g_dismissed(["dismissed"])
+        g_progress -->|"not needed<br/>(note required)"| g_dismissed
+        g_closed -->|"reopened"| g_open
+        g_dismissed -->|"reopened"| g_open
+    end
 
-    classDef open fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
-    classDef progress fill:#2a2410,stroke:#fbbf24,color:#fef3c7
-    classDef done fill:#0b2a1c,stroke:#34d399,color:#d1fae5
-    classDef quiet fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class open open
-    class in_progress progress
-    class closed done
-    class dismissed quiet
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queued fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class s0 start
+    class g_open data
+    class g_progress ask
+    class g_closed ok
+    class g_dismissed muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - **Every change is an event.** Changing the status, owner or due date, or adding a comment,
@@ -980,13 +998,31 @@ stateDiagram-v2
 An example history, as the console shows it, for gap #1 (update POL-KYC for an RBI circular):
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "cScale0": "#16213a", "cScale1": "#0e2a2c", "cScale2": "#2a1640", "cScale3": "#2a2410", "cScale4": "#0b2a1c", "cScale5": "#2e0f17", "cScaleLabel0": "#e6edf7", "cScaleLabel1": "#e6edf7", "cScaleLabel2": "#e6edf7", "cScaleLabel3": "#e6edf7", "cScaleLabel4": "#e6edf7", "cScaleLabel5": "#e6edf7", "cScaleInv0": "#8b9bb4", "cScaleInv1": "#8b9bb4", "cScaleInv2": "#8b9bb4", "cScaleInv3": "#8b9bb4", "cScaleInv4": "#8b9bb4", "cScaleInv5": "#8b9bb4"}}}%%
-timeline
-    Day 0 : agent opened the gap : "Reporting to FIU-IND is missing"
-    Day 1 : priya changed the status : open → in progress, "drafting clause 2A"
-    Day 3 : cco commented : "board meets on the 10th"
-    Day 10 : system updated the policy : POL-KYC updated to v2
-    Day 10 : priya changed the status : in progress → closed, "v2 approved by the board"
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart LR
+    subgraph canvas[" "]
+        direction LR
+        d0["<b>Day 0</b><br/>agent opened the gap<br/><i>Reporting to FIU-IND is missing</i>"] --> d1["<b>Day 1</b><br/>priya: open → in progress<br/><i>drafting clause 2A</i>"]
+        d1 --> d3["<b>Day 3</b><br/>cco commented<br/><i>board meets on the 10th</i>"]
+        d3 --> d10["<b>Day 10</b><br/>system: POL-KYC<br/>updated to v2"]
+        d10 --> d10b["<b>Day 10</b><br/>priya: in progress → closed<br/><i>v2 approved by the board</i>"]
+    end
+
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    class d0 bad
+    class d1 ask
+    class d3 muted
+    class d10 data
+    class d10b ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 ---
@@ -997,12 +1033,14 @@ The console is plain HTML and JavaScript. It talks to the API through nginx, so 
 only ever sees one address.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
-    participant B as Browser
-    participant N as nginx (frontend :8080)
-    participant A as api (FastAPI)
-    participant DB as Postgres
+    box rgb(11, 16, 32)
+        participant B as Browser
+        participant N as nginx (frontend :8080)
+        participant A as api (FastAPI)
+        participant DB as Postgres
+    end
 
     rect rgb(13, 20, 36)
         B->>N: GET /api/gaps?status=open
@@ -1039,15 +1077,18 @@ The interactive API docs are at http://localhost:8000/docs.
 > circular to blame, or the service?
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
-    err["An error while processing a circular"] --> down{"Service down or rate-limited?<br/>(can't connect, Gemini 429)"}
-    down -->|yes| wait["Stop this round.<br/>Try again in 60 s, for as long as it takes.<br/>The circular keeps its status"]
-    down -->|no| crash{"Service hiccup?<br/>(5xx, timeout, dropped connection,<br/>a reply not in the asked-for JSON)"}
-    crash -->|yes| count{"Third time for<br/>this circular?"}
-    count -->|no| retry["Stop this round.<br/>Retry the circular in 60 s"]
-    count -->|yes| failed
-    crash -->|"no (e.g. a 400)"| failed["Mark it failed,<br/>with the error saved.<br/>Move on to the next circular"]
+    subgraph canvas[" "]
+        direction TB
+        err["An error while processing a circular"] --> down{"Service down or rate-limited?<br/>(can't connect, Gemini 429)"}
+        down -->|yes| wait["Stop this round.<br/>Try again in 60 s, for as long as it takes.<br/>The circular keeps its status"]
+        down -->|no| crash{"Service hiccup?<br/>(5xx, timeout, dropped connection,<br/>a reply not in the asked-for JSON)"}
+        crash -->|yes| count{"Third time for<br/>this circular?"}
+        count -->|no| retry["Stop this round.<br/>Retry the circular in 60 s"]
+        count -->|yes| failed
+        crash -->|"no (e.g. a 400)"| failed["Mark it failed,<br/>with the error saved.<br/>Move on to the next circular"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1061,6 +1102,7 @@ flowchart TD
     class err,failed bad
     class down,crash,count ask
     class wait,retry muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 | What happened | What you see | What to do |
@@ -1085,14 +1127,17 @@ so the worker keeps processing everything else instead of stopping.
 ## 13. Where settings come from
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
-    env[".env beside<br/>docker-compose.yml"] --> compose["docker compose"]
-    shell["your shell<br/>(e.g. a direnv .envrc)"] --> compose
-    compose -->|"container<br/>environment"| cfg["each service's config.py<br/>(pydantic-settings)"]
-    local[".env beside a service's main.py<br/>(when run with uv run)"] --> cfg
-    defaults["defaults written<br/>in config.py"] --> cfg
-    cfg --> code["the rest of the code<br/>(never reads os.environ)"]
+    subgraph canvas[" "]
+        direction LR
+        env[".env beside<br/>docker-compose.yml"] --> compose["docker compose"]
+        shell["your shell<br/>(e.g. a direnv .envrc)"] --> compose
+        compose -->|"container<br/>environment"| cfg["each service's config.py<br/>(pydantic-settings)"]
+        local[".env beside a service's main.py<br/>(when run with uv run)"] --> cfg
+        defaults["defaults written<br/>in config.py"] --> cfg
+        cfg --> code["the rest of the code<br/>(never reads os.environ)"]
+    end
 
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1105,6 +1150,7 @@ flowchart LR
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     class compose,cfg svc
     class code ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - 🔑 Only **`GEMINI_API_KEY`** is required.
@@ -1134,34 +1180,37 @@ Settings you're most likely to change:
 ## 14. The code, file by file
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TB
-    subgraph common["backend/common (shared)"]
-        models["models.py<br/>the 7 tables"]
-        dbpy["db.py<br/>make_engine, init_db"]
+    subgraph canvas[" "]
+        direction TB
+        subgraph common["backend/common (shared)"]
+            models["models.py<br/>the 7 tables"]
+            dbpy["db.py<br/>make_engine, init_db"]
+        end
+        subgraph watcher["backend/watcher"]
+            wmain["main.py<br/>the hourly loop"] --> sources["sources.py<br/>RBI, SEBI, IRDAI"]
+            wmain --> fetch["fetch.py<br/>polite HTTP"]
+            wmain --> wstore["storage.py<br/>PDF to S3"]
+        end
+        subgraph worker["backend/worker"]
+            kmain["main.py<br/>the loop"] --> pipeline["pipeline.py<br/>parse, analyze, match,<br/>embed_policies, check_recent"]
+            kmain --> failures["failures.py<br/>wait, retry or give up"]
+            pipeline --> ocrpy["ocr.py<br/>PDF to text"]
+            pipeline --> llm["llm.py<br/>the Gemini prompts"]
+            pipeline --> kstore["storage.py<br/>PDF from S3"]
+        end
+        subgraph api["backend/api"]
+            amain["main.py<br/>app, /health, /stats"] --> routes["routes/<br/>circulars, policies, gaps"]
+            amain --> database["database.py<br/>session per request"]
+        end
+        wmain -.-> models
+        kmain -.-> models
+        routes -.-> models
     end
-    subgraph watcher["backend/watcher"]
-        wmain["main.py<br/>the hourly loop"] --> sources["sources.py<br/>RBI, SEBI, IRDAI"]
-        wmain --> fetch["fetch.py<br/>polite HTTP"]
-        wmain --> wstore["storage.py<br/>PDF to S3"]
-    end
-    subgraph worker["backend/worker"]
-        kmain["main.py<br/>the loop"] --> pipeline["pipeline.py<br/>parse, analyze, match,<br/>embed_policies, check_recent"]
-        kmain --> failures["failures.py<br/>wait, retry or give up"]
-        pipeline --> ocrpy["ocr.py<br/>PDF to text"]
-        pipeline --> llm["llm.py<br/>the Gemini prompts"]
-        pipeline --> kstore["storage.py<br/>PDF from S3"]
-    end
-    subgraph api["backend/api"]
-        amain["main.py<br/>app, /health, /stats"] --> routes["routes/<br/>circulars, policies, gaps"]
-        amain --> database["database.py<br/>session per request"]
-    end
-    wmain -.-> models
-    kmain -.-> models
-    routes -.-> models
+
     class models,dbpy data
     class wmain,kmain,amain svc
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -1175,6 +1224,7 @@ flowchart TB
     style watcher fill:#0c1a24,stroke:#2dd4bf
     style worker fill:#0c1a24,stroke:#2dd4bf
     style api fill:#0c1a24,stroke:#2dd4bf
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 | Want to change… | Look in |
