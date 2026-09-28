@@ -1,13 +1,7 @@
-"""Circulars: found by the watcher, read by the worker, judged per company.
-
-Every company sees every circular, with its own status: a circular the worker has
-read shows as "analyzed" once it has been judged for this company, "parsed" while it
-waits, "failed" if judging failed, and "skipped" if it was published before the
-look-back window and never judged for this company. `applicable` and
-`applies_reason` are the company's own.
-
-The OCR text (up to 100 kB) and the embedding are never sent to the console, so
-they're never read from the database here either; the OCR text has its own endpoint."""
+"""Circulars, shared by every company, each shown with the company's own status: a
+read circular is "parsed" while the company's assessment is pending, "analyzed" once
+it's done, "failed" if it failed, and "skipped" if it's older than LOOKBACK_DAYS and
+never judged for the company. The OCR text has its own endpoint."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -20,38 +14,28 @@ from sqlalchemy.orm import defer
 from sqlmodel import col, select
 
 from auth import CurrentUser
-from common.models import Assessment, Circular, Gap, Policy, PolicyCheck, now
+from common.models import (
+    Assessment,
+    Circular,
+    CircularBase,
+    Gap,
+    Policy,
+    PolicyCheck,
+    now,
+)
 from config import settings
-from database import SessionDep, enqueue, get_or_404, save
+from database import SessionDep, enqueue, get_or_404
 
 router = APIRouter(prefix="/circulars", tags=["circulars"])
 
-HEAVY = (defer(Circular.text), defer(Circular.embedding))
 
-
-class CircularView(BaseModel):
-    """A circular as the signed-in company sees it."""
-
+class CircularView(CircularBase):
     id: int
-    source: str
-    source_key: str
-    title: str
-    detail_url: str
-    pdf_url: str
-    published_at: datetime | None
-    status: str
-    created_at: datetime
-    addressed_to: str | None
-    summary: str | None
-    requirements: list[str] | None
-    applicable: bool | None
-    applies_reason: str | None
-    error: str | None
+    applicable: bool | None = None
+    applies_reason: str | None = None
 
 
 class Checked(BaseModel):
-    """One policy the circular was checked against, and Gemini's verdict."""
-
     policy_id: int
     code: str
     title: str
@@ -67,50 +51,51 @@ class CircularDetail(BaseModel):
     checks: list[Checked]
 
 
-def shown_status():
-    """The circular's status as this company sees it (see the module docstring)."""
-    cutoff = datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
-    too_old = or_(col(Circular.published_at).is_(None), Circular.published_at < cutoff)
-    return case(
-        (Circular.status != "read", Circular.status),
-        (Assessment.status == "done", literal("analyzed")),
-        (Assessment.status == "failed", literal("failed")),
-        (and_(col(Assessment.id).is_(None), too_old), literal("skipped")),
-        else_=literal("parsed"),
-    )
-
-
 def assessed_by(company_id: int):
     return and_(
         Assessment.circular_id == Circular.id, Assessment.company_id == company_id
     )
 
 
-def company_view(company_id: int, shown):
-    return (
-        select(
-            Circular,
-            Assessment.applicable,
-            Assessment.applies_reason,
-            Assessment.error,
-            shown,
-        )
-        .options(*HEAVY)
+def shown_status():
+    cutoff = datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
+    old = or_(col(Circular.published_at).is_(None), Circular.published_at < cutoff)
+    return case(
+        (Circular.status != "read", Circular.status),
+        (Assessment.status == "done", literal("analyzed")),
+        (Assessment.status == "failed", literal("failed")),
+        (and_(col(Assessment.id).is_(None), old), literal("skipped")),
+        else_=literal("parsed"),
+    )
+
+
+def views(
+    session: SessionDep, company_id: int, *where, status: str | None = None, limit=1
+) -> list[CircularView]:
+    """The circulars as this company sees them, newest first."""
+    shown = shown_status()
+    query = (
+        select(Circular, Assessment, shown)
+        .options(defer(Circular.text), defer(Circular.embedding))
         .outerjoin(Assessment, assessed_by(company_id))
+        .where(*where)
+        .order_by(col(Circular.published_at).desc().nulls_last())
+        .limit(limit)
     )
-
-
-def as_view(row) -> CircularView:
-    c, applicable, reason, error, shown = row
-    return CircularView.model_validate(
-        c.model_dump()
-        | {
-            "status": shown,
-            "applicable": applicable,
-            "applies_reason": reason,
-            "error": error or c.error,
-        }
-    )
+    if status:
+        query = query.where(shown == status)
+    return [
+        CircularView.model_validate(
+            c.model_dump()
+            | {
+                "status": status,
+                "applicable": a and a.applicable,
+                "applies_reason": a and a.applies_reason,
+                "error": (a and a.error) or c.error,
+            }
+        )
+        for c, a, status in session.exec(query)
+    ]
 
 
 @router.get("")
@@ -121,35 +106,22 @@ def list_circulars(
     status: str | None = None,
     limit: int = Query(50, le=500),
 ) -> list[CircularView]:
-    """Newest first. status: new / parsed / analyzed / failed / skipped."""
-    shown = shown_status()
-    q = (
-        company_view(user.company_id, shown)
-        .order_by(col(Circular.published_at).desc().nulls_last())
-        .limit(limit)
-    )
-    if source:
-        q = q.where(Circular.source == source.upper())
-    if status:
-        q = q.where(shown == status)
-    return [as_view(row) for row in session.exec(q).all()]
+    """status: new / parsed / analyzed / failed / skipped."""
+    where = [Circular.source == source.upper()] if source else []
+    return views(session, user.company_id, *where, status=status, limit=limit)
 
 
 @router.get("/{circular_id}")
 def get_circular(
     circular_id: int, user: CurrentUser, session: SessionDep
 ) -> CircularDetail:
-    row = session.exec(
-        company_view(user.company_id, shown_status()).where(Circular.id == circular_id)
-    ).first()
-    if row is None:
+    found = views(session, user.company_id, Circular.id == circular_id)
+    if not found:
         raise HTTPException(404, f"Circular {circular_id} not found")
-    gaps = session.exec(
-        select(Gap).where(
-            Gap.circular_id == circular_id, Gap.company_id == user.company_id
-        )
-    ).all()
-    rows = session.exec(
+    gaps = select(Gap).where(
+        Gap.circular_id == circular_id, Gap.company_id == user.company_id
+    )
+    checks = session.exec(
         select(PolicyCheck, Policy.code, Policy.title)
         .join(Policy)
         .where(
@@ -157,25 +129,19 @@ def get_circular(
             Policy.company_id == user.company_id,
         )
         .order_by(col(PolicyCheck.similarity).desc())
-    ).all()
-    checks = [
-        Checked(
-            policy_id=k.policy_id,
-            code=code,
-            title=title,
-            version=k.policy_version,
-            similarity=k.similarity,
-            impacted=k.impacted,
-            checked_at=k.checked_at,
-        )
-        for k, code, title in rows
-    ]
-    return CircularDetail(circular=as_view(row), gaps=gaps, checks=checks)
+    )
+    return CircularDetail(
+        circular=found[0],
+        gaps=session.exec(gaps).all(),
+        checks=[
+            Checked(**k.model_dump(), code=code, title=title, version=k.policy_version)
+            for k, code, title in checks
+        ],
+    )
 
 
 @router.get("/{circular_id}/text", response_class=PlainTextResponse)
 def get_circular_text(circular_id: int, user: CurrentUser, session: SessionDep) -> str:
-    """The OCR output of the PDF."""
     return get_or_404(session, Circular, circular_id).text or ""
 
 
@@ -183,30 +149,19 @@ def get_circular_text(circular_id: int, user: CurrentUser, session: SessionDep) 
 def reprocess_circular(
     circular_id: int, user: CurrentUser, session: SessionDep
 ) -> None:
-    """Run the circular through again for this company.
-
-    A circular the worker hasn't read (it failed, or is still waiting) is queued to be
-    read; its saved OCR text is reused. A circular already read is judged again for
-    this company only, and checked against its policies afresh: only its "up to date"
-    verdicts are forgotten. An out-of-date one has a gap, and a pair with a gap is
-    never re-checked (its owner is already on it), so no gap is duplicated. Other
-    companies' answers are never touched."""
+    """Not read yet (failed, or waiting): queue it to be read again, reusing any OCR
+    text. Read: judge it again for this company only, forgetting only its "up to
+    date" verdicts; gaps are kept and never duplicated."""
     c = get_or_404(session, Circular, circular_id)
     if c.status != "read":
         c.status, c.error = ("parsed" if c.text else "new"), None
-        save(session, c)
+        session.commit()
         enqueue("circular.read", circular_id=c.id)
         return
-    fresh = {
-        "status": "pending",
-        "applicable": None,
-        "applies_reason": None,
-        "error": None,
-        "updated_at": now(),
-    }
+    fresh = {"status": "pending", "applicable": None, "applies_reason": None}
     session.execute(
         insert(Assessment)
-        .values(company_id=user.company_id, circular_id=c.id, **fresh)
+        .values(company_id=user.company_id, circular_id=c.id, updated_at=now(), **fresh)
         .on_conflict_do_update(index_elements=["company_id", "circular_id"], set_=fresh)
     )
     ours = select(Policy.id).where(Policy.company_id == user.company_id)

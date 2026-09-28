@@ -1,13 +1,6 @@
-"""PDF -> text with Baidu Unlimited-OCR (https://github.com/baidu/Unlimited-OCR).
-
-The model runs in the `ocr` service (vLLM, OpenAI-compatible API). Each page is rendered
-to a PNG and sent as one chat request, following the model's vLLM recipe: the prompt
-must start with <image>, no max_tokens is sent (vLLM allows whatever context is left),
-and the model's no-repeat n-gram logits processor stops it looping on tables.
-
-Pages are rendered at 200 DPI: an A4 page becomes about 6 crops of 640 px, where 300
-DPI gives 24, too many for an 8 GB GPU. All pages go over one reused connection. The
-worker saves the result on the circular, so a PDF is only ever OCR'd once."""
+"""PDF -> text with Baidu Unlimited-OCR, served by vLLM in the ocr service. Each page
+is rendered at 200 DPI (an A4 page is ~6 crops; 300 DPI is too many for an 8 GB GPU)
+and sent as one chat request, following the model's vLLM recipe."""
 
 import base64
 import hashlib
@@ -27,9 +20,8 @@ done_pages: dict[str, str] = {}
 
 
 def pdf_to_text(pdf: bytes) -> str:
-    """The text of the first OCR_MAX_PAGES pages, skipping blank ones. Pages already
-    read are kept by image hash until the document is done, so if page 15 of 20 times
-    out, the retry starts at page 15."""
+    """The text of the first OCR_MAX_PAGES non-blank pages. Pages already read are
+    kept until the document is done, so a retry after a timeout resumes there."""
     doc = pymupdf.open(stream=pdf, filetype="pdf")
     keys, texts = [], []
     for page in doc.pages(0, min(settings.OCR_MAX_PAGES, doc.page_count)):
@@ -47,7 +39,7 @@ def pdf_to_text(pdf: bytes) -> str:
 
 
 def blank(page: pymupdf.Page) -> bool:
-    """Nothing to read: no text layer, no images and no drawings (a separator page)."""
+    """No text, images or drawings: a separator page."""
     return (
         not page.get_text().strip()
         and not page.get_images()
@@ -80,11 +72,8 @@ def ocr_page(png: bytes) -> str:
 
 
 def remove_det(raw: str) -> str:
-    """Each block comes as '<|det|>type [bbox]<|/det|>text', maybe followed by more
-    lines. Strip the markers, drop image and footer blocks (footers are boilerplate
-    like "RBI never sends mails ...") and empty ones, and put a blank line between
-    blocks. A dropped block is kept as None so its continuation lines are dropped
-    too. Adapted from the model's README."""
+    """Blocks come as '<|det|>type [bbox]<|/det|>text' plus continuation lines. Keep
+    the text, drop image, footer and empty blocks (with their continuation lines)."""
     blocks: list[list[str] | None] = []
     for line in raw.splitlines():
         line = line.rstrip()

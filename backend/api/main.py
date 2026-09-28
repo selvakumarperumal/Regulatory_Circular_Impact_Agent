@@ -1,9 +1,7 @@
 """API: uvicorn main:app --reload        docs at http://localhost:8000/docs
 
-Accounts (sign-up, login, the team), the company's description, circulars (written by
-the watcher and worker, read here), the policy and control library, and the gap
-tickets with their history. Every route except sign-up, login and /health needs a
-login token, and only ever shows the signed-in user's company."""
+Every route except sign-up, login and /health needs a login token, and only ever
+shows the signed-in user's company."""
 
 from contextlib import asynccontextmanager
 from datetime import date
@@ -35,12 +33,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(auth.router)
-app.include_router(auth.team)
-app.include_router(company.router)
-app.include_router(circulars.router)
-app.include_router(policies.router)
-app.include_router(gaps.router)
+for module in (auth, company, circulars, policies, gaps):
+    app.include_router(module.router)
 
 
 @app.get("/health")
@@ -51,31 +45,25 @@ def health(session: SessionDep) -> dict:
 
 @app.get("/stats")
 def stats(user: CurrentUser, session: SessionDep) -> dict:
-    """The company's counts of circulars and gaps by status, and how many of its open
-    gaps are past due."""
+    """The company's circulars and gaps by status, and its overdue gaps."""
     shown = shown_status()
-    circulars = (
-        select(shown, func.count())
-        .select_from(Circular)
-        .outerjoin(Assessment, assessed_by(user.company_id))
-        .group_by(shown)
-    )
-    gaps = (
-        select(Gap.status, func.count())
-        .where(Gap.company_id == user.company_id)
-        .group_by(Gap.status)
-    )
-    overdue = (
-        select(func.count())
-        .select_from(Gap)
-        .where(
-            Gap.company_id == user.company_id,
-            col(Gap.status).in_(OPEN_STATUSES),
-            Gap.due_date < date.today(),
-        )
-    )
+    ours = Gap.company_id == user.company_id
+    overdue = (col(Gap.status).in_(OPEN_STATUSES), Gap.due_date < date.today())
     return {
-        "circulars": dict(session.exec(circulars).all()),
-        "gaps": dict(session.exec(gaps).all()),
-        "overdue_gaps": session.exec(overdue).one(),
+        "circulars": dict(
+            session.exec(
+                select(shown, func.count())
+                .select_from(Circular)
+                .outerjoin(Assessment, assessed_by(user.company_id))
+                .group_by(shown)
+            ).all()
+        ),
+        "gaps": dict(
+            session.exec(
+                select(Gap.status, func.count()).where(ours).group_by(Gap.status)
+            ).all()
+        ),
+        "overdue_gaps": session.exec(
+            select(func.count()).select_from(Gap).where(ours, *overdue)
+        ).one(),
     }

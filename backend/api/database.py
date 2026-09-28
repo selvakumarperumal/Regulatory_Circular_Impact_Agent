@@ -1,9 +1,9 @@
-"""The database session each request gets, the task queue, and small helpers the
-routes share."""
+"""Each request's database session, the task queue, and helpers the routes share."""
 
 from typing import Annotated
 
 from fastapi import Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from common import queue
@@ -22,26 +22,22 @@ def get_session():
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-def get_or_404[T](session: Session, model: type[T], id: int) -> T:
+def get_or_404[T](session: Session, model: type[T], id: int, company_id=None) -> T:
+    """The row, or 404. Given a company, another company's row is a 404 too."""
     obj = session.get(model, id)
-    if obj is None:
+    if obj is None or (company_id is not None and obj.company_id != company_id):
         raise HTTPException(404, f"{model.__name__} {id} not found")
     return obj
 
 
-def owned_or_404[T](session: Session, model: type[T], id: int, company_id: int) -> T:
-    """Like get_or_404, for rows that belong to a company: another company's row is
-    reported as not found, never as forbidden, so ids reveal nothing."""
-    obj = session.get(model, id)
-    if obj is None or obj.company_id != company_id:
-        raise HTTPException(404, f"{model.__name__} {id} not found")
-    return obj
-
-
-def save[T](session: Session, obj: T) -> T:
-    """Add, commit and reload, so the returned object has its id and defaults."""
+def save[T](session: Session, obj: T, taken: str = "it already exists") -> T:
+    """Add, commit and reload. A clash with a unique constraint is a 409 `taken`."""
     session.add(obj)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, taken) from None
     session.refresh(obj)
     return obj
 

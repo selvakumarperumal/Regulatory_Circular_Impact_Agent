@@ -1,10 +1,8 @@
 """Watcher: python main.py [--only RBI]
 
-Finds circulars not seen before, stores the PDF in S3, adds a row with status 'new',
-and queues a circular.read task for the workers. With INTERVAL_MINUTES > 0 it keeps
-running (as in Docker); 0 runs once. A circular that fails to download is skipped and
-tried again next run, since nothing about it was saved. If Redis is down, the row is
-still saved and the worker's reconciler queues it later."""
+Saves each circular not seen before (the PDF in S3, a row with status new) and queues
+a circular.read task for the workers. A circular that fails to download is tried
+again next run, since nothing about it was saved."""
 
 import argparse
 import hashlib
@@ -26,19 +24,9 @@ engine = make_engine(settings.DATABASE_URL)
 tasks = queue.connect(settings.REDIS_URL)
 
 
-def known_keys(source: str) -> set[str]:
-    """The source_keys already in the database for this regulator, in one query."""
-    with Session(engine) as session:
-        return set(
-            session.exec(
-                select(Circular.source_key).where(Circular.source == source)
-            ).all()
-        )
-
-
 def fetch_new(item: Item) -> None:
-    """Store the PDF in S3, then add the row. Government sites sometimes answer 200
-    with an HTML error page, so the file must really be a PDF."""
+    """Store the PDF in S3, then add the row. Sites sometimes answer 200 with an HTML
+    error page, so the file must really be a PDF."""
     pdf_url = resolve_pdf_url(item)
     data = fetch.get(pdf_url).content
     if not data.startswith(b"%PDF"):
@@ -63,15 +51,16 @@ def fetch_new(item: Item) -> None:
 
 
 def run_source(name: str) -> None:
-    """Fetch every circular in the source's listing that isn't in the database yet. A
-    listing can show the same circular twice, so each one is marked known as soon as
-    it's saved."""
+    """Fetch every circular in the listing that isn't in the database yet."""
     try:
         items = SOURCES[name]()
     except Exception as e:
         log.error("%s: listing failed: %s", name, e)
         return
-    known = known_keys(name)
+    with Session(engine) as session:
+        known = set(
+            session.exec(select(Circular.source_key).where(Circular.source == name))
+        )
     new = failed = 0
     for item in items:
         if item.source_key in known:

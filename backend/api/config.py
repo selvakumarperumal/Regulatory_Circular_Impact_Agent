@@ -1,14 +1,6 @@
-"""API settings, read from the environment or a .env file beside main.py. Nothing else
-in the api reads os.environ.
-
-A variable set to "" keeps its default, since docker compose passes unset ones that
-way. CORS_ORIGINS lists the browser origins allowed to call the API, comma-separated
-("*" = any). REDIS_URL is the Redis holding the workers' task stream.
-
-JWT_SECRET signs login tokens; left empty, a random one is made on first start and
-kept in the database, so sign-ins survive restarts. A token is valid for TOKEN_HOURS.
-LOOKBACK_DAYS must match the worker's: a new company is judged against this many
-days of circulars."""
+"""API settings, from the environment or .env beside main.py; empty values keep the
+default. JWT_SECRET signs login tokens (empty: a key made on first start, kept in
+Postgres); a login lasts TOKEN_HOURS. LOOKBACK_DAYS must match the worker's."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

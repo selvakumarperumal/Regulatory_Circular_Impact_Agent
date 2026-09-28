@@ -1,6 +1,5 @@
-"""The signed-in user's company: its name and its description. The worker uses the
-description to decide which circulars apply to the company; until someone writes it,
-circulars are read but not judged for this company."""
+"""The signed-in user's company: its name, and the description the worker judges
+circulars against."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -18,14 +17,12 @@ class CompanyIn(SQLModel):
     name: str | None = Field(default=None, min_length=2)
     profile: str = Field(
         min_length=20,
-        description="A few sentences: what kind of entity the company is, "
-        "its licences and businesses, and who regulates it",
+        description="What kind of entity it is, its licences and businesses, "
+        "and who regulates it",
     )
 
 
 class CompanySaved(BaseModel):
-    """The saved company, and how many circulars were queued to be judged again."""
-
     company: Company
     requeued: int
 
@@ -39,32 +36,26 @@ def get_company(user: CurrentUser, session: SessionDep) -> Company:
 def set_company(
     body: CompanyIn, user: CurrentUser, session: SessionDep
 ) -> CompanySaved:
-    """Save the name and description. A new description clears the company's "does it
-    apply to us?" answers and queues its circulars to be judged again. Only that
-    question goes back to Gemini: the OCR text, the summaries and every policy check
-    already made are kept, and gaps are never duplicated."""
+    """A new description sets the company's "does it apply?" answers back to pending
+    and queues them. Only that question is asked again: the OCR text, the summaries
+    and the policy verdicts are kept."""
     company = session.get(Company, user.company_id)
-    if body.name:
-        company.name = body.name.strip()
+    company.name = (body.name or company.name).strip()
     profile = body.profile.strip()
-    if company.profile == profile:
-        return CompanySaved(company=save(session, company), requeued=0)
-    company.profile, company.updated_at = profile, now()
-    read = select(Circular.id).where(Circular.status == "read")
-    requeued = session.execute(
-        update(Assessment)
-        .where(
-            Assessment.company_id == company.id,
-            col(Assessment.circular_id).in_(read),
-        )
-        .values(
-            status="pending",
-            applicable=None,
-            applies_reason=None,
-            error=None,
-            updated_at=now(),
-        )
-    ).rowcount
-    saved = save(session, company)
-    enqueue("company.refresh", company_id=company.id)
-    return CompanySaved(company=saved, requeued=requeued)
+    changed = profile != company.profile
+    requeued = 0
+    if changed:
+        company.profile, company.updated_at = profile, now()
+        read = select(Circular.id).where(Circular.status == "read")
+        requeued = session.execute(
+            update(Assessment)
+            .where(
+                Assessment.company_id == company.id,
+                col(Assessment.circular_id).in_(read),
+            )
+            .values(status="pending", applicable=None, applies_reason=None, error=None)
+        ).rowcount
+    save(session, company)
+    if changed:
+        enqueue("company.refresh", company_id=company.id)
+    return CompanySaved(company=company, requeued=requeued)

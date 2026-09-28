@@ -1,49 +1,46 @@
-"""The task queue: one Redis stream. The watcher, the api and the worker add tasks to it
-(XADD); the workers read it as one consumer group (XREADGROUP), so each task goes to
-exactly one worker, however many run.
+"""The task queue: one Redis stream. The watcher, the api and the workers add tasks
+(XADD); workers read them as the consumer group "workers" (XREADGROUP), so each task
+goes to one worker. A task only carries ids: Postgres holds the data.
 
-Postgres stays the source of truth. A task only says what to look at, and every task
-checks the database before doing anything, so a task delivered twice is harmless, and
-one lost with Redis is found again by the worker's reconciler.
+A task is queued at most once at a time: enqueue sets a key per task (SET NX) and the
+worker deletes it when the task is done, so the same work is never queued twice.
 
-| type             | fields                   | added by                 | the worker…
-| circular.read    | circular_id              | watcher, api (Reprocess) | OCRs and summarises it, once for every company
-| circular.assess  | company_id, circular_id  | worker, api (Reprocess)  | decides if it applies to the company, checks its policies
-| policy.check     | company_id, policy_id    | api (policy saved)       | embeds the policy, checks it against recent circulars
-| company.refresh  | company_id               | api (sign-up, new description) | (re)judges the company's recent circulars
+circular.read    circular_id              read the PDF once, for every company
+circular.assess  company_id, circular_id  does it apply to the company? check its policies
+policy.check     company_id, policy_id    embed a saved policy, check it against circulars
+company.refresh  company_id               queue the company's recent circulars to judge
 """
 
 import logging
+from contextlib import suppress
 
 import redis
 
-log = logging.getLogger("queue")
+STREAM, GROUP, DEAD, RECONCILED = "rci:tasks", "workers", "rci:dead", "rci:reconciled"
 
-STREAM = "rci:tasks"
-GROUP = "workers"
-DEAD = "rci:dead"
-RECONCILED = "rci:reconciled"
-MAXLEN = 100_000
+log = logging.getLogger("queue")
 
 
 def connect(url: str) -> redis.Redis:
-    """socket_timeout must outlast the workers' blocking read (5 s), or an empty
-    queue would look like a dead Redis."""
-    return redis.Redis.from_url(
-        url,
-        decode_responses=True,
-        socket_timeout=30,
-        socket_connect_timeout=5,
-        health_check_interval=30,
-    )
+    """socket_timeout outlasts the workers' 5-second blocking read."""
+    return redis.Redis.from_url(url, decode_responses=True, socket_timeout=30)
 
 
-def enqueue(client: redis.Redis, kind: str, **ids: int) -> str | None:
-    """Add a task. Redis being down never fails the caller: the change is already in
-    Postgres, and the worker's reconciler queues it again later."""
-    fields = {"type": kind, **{name: str(value) for name, value in ids.items()}}
+def key(task: dict) -> str:
+    """The dedupe key of a task, e.g. rci:queued:circular_id=98:type=circular.read.
+    It expires after a day, in case a worker dies before deleting it."""
+    return "rci:queued:" + ":".join(f"{k}={v}" for k, v in sorted(task.items()))
+
+
+def enqueue(client: redis.Redis, kind: str, **ids: int) -> None:
+    """Add a task, unless the same task is already queued or running. Called after
+    the change it's about is committed; if Redis is down it only logs, and the
+    workers' reconciler finds the work in Postgres later."""
+    task = {"type": kind, **ids}
     try:
-        return client.xadd(STREAM, fields, maxlen=MAXLEN, approximate=True)
+        if client.set(key(task), 1, nx=True, ex=86_400):
+            client.xadd(STREAM, task, maxlen=100_000, approximate=True)
     except redis.RedisError as e:
-        log.warning("couldn't queue %s %s: %s", kind, ids, e)
-        return None
+        log.warning("couldn't queue %s: %s", task, e)
+        with suppress(redis.RedisError):
+            client.delete(key(task))

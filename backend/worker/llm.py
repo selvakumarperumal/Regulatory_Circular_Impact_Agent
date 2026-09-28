@@ -1,12 +1,9 @@
-"""Everything that talks to Gemini, through LangChain (langchain-google-genai).
+"""Gemini, through LangChain. Each question's reply is forced into JSON matching a
+Pydantic model (with_structured_output). LangChain retries rate limits and server
+errors itself before the worker's own retries.
 
-Replies are forced into JSON that matches a Pydantic model (`with_structured_output`),
-so the rest of the code works with typed objects, not free text. LangChain retries rate
-limits and server errors itself (max_retries) before the worker's own retries take over.
-
-The three questions, in the order the pipeline asks them:
-1. summarize            what does the circular say? (every circular, once)
-2. check_applicability  does it apply to the company? (once the company is described)
+1. summarize            what does the circular say? (once per circular)
+2. check_applicability  does it apply to the company? (once per company)
 3. assess               is this policy now out of date?"""
 
 from functools import cache
@@ -15,11 +12,9 @@ from typing import Literal
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel
 
+from common.models import Circular, Control, Policy
 from config import settings
 from failures import BadReply
-
-EMBED_DIMENSIONS = 768
-APPLICABILITY_CHARS = 4000
 
 chat = ChatGoogleGenerativeAI(
     model=settings.GEMINI_MODEL_NAME,
@@ -32,15 +27,13 @@ embedder = GoogleGenerativeAIEmbeddings(
 
 
 def check() -> None:
-    """Called at startup: a wrong key or model name fails here, not on every
-    circular."""
+    """At startup, so a wrong key or model name fails once, clearly."""
     chat.invoke("Reply with OK.")
     embedder.embed_query("ok")
 
 
 @cache
 def structured(schema: type[BaseModel]):
-    """The chat model bound to one reply schema, built once per schema."""
     return chat.with_structured_output(schema)
 
 
@@ -54,11 +47,7 @@ def ask[T: BaseModel](system: str, user: str, schema: type[T]) -> T:
 def embed(
     texts: list[str], task: Literal["RETRIEVAL_QUERY", "RETRIEVAL_DOCUMENT"]
 ) -> list[list[float]]:
-    """Packs the texts into as few requests as it can. Callers keep each text under
-    the model's input limit (pipeline.EMBED_CHARS)."""
-    return embedder.embed_documents(
-        texts, task_type=task, output_dimensionality=EMBED_DIMENSIONS
-    )
+    return embedder.embed_documents(texts, task_type=task, output_dimensionality=768)
 
 
 class CircularSummary(BaseModel):
@@ -79,12 +68,10 @@ You are a compliance analyst. Read the regulatory circular and reply in JSON:
   informational only."""
 
 
-def summarize(source: str, title: str, text: str) -> CircularSummary:
-    return ask(
-        SUMMARY_PROMPT,
-        f"Regulator: {source}\nTitle: {title}\n\n{text[:settings.LLM_MAX_CHARS]}",
-        CircularSummary,
-    )
+def summarize(c: Circular) -> CircularSummary:
+    text = (c.text or "")[: settings.LLM_MAX_CHARS]
+    user = f"Regulator: {c.source}\nTitle: {c.title}\n\n{text}"
+    return ask(SUMMARY_PROMPT, user, CircularSummary)
 
 
 class Applicability(BaseModel):
@@ -103,18 +90,17 @@ regulatory circular applies to it. Reply in JSON:
   company's businesses."""
 
 
-def check_applicability(
-    company: str, source: str, title: str, addressed_to: str, text: str
-) -> Applicability:
-    return ask(
-        APPLICABILITY_PROMPT,
-        f"THE COMPANY: {company}\n\nTHE CIRCULAR\nRegulator: {source}\nTitle: {title}\n"
-        f"Addressed to: {addressed_to or 'not named'}\n\n{text[:APPLICABILITY_CHARS]}",
-        Applicability,
+def check_applicability(company: str, c: Circular) -> Applicability:
+    """Only the start of the text is sent: that's where a circular says who it's for."""
+    user = (
+        f"THE COMPANY: {company}\n\nTHE CIRCULAR\nRegulator: {c.source}\n"
+        f"Title: {c.title}\nAddressed to: {c.addressed_to or 'not named'}\n\n"
+        f"{(c.text or '')[:4000]}"
     )
+    return ask(APPLICABILITY_PROMPT, user, Applicability)
 
 
-class Assessment(BaseModel):
+class Verdict(BaseModel):
     missing_from_policy: str
     impacted: bool
     severity: Literal["low", "medium", "high"]
@@ -139,7 +125,15 @@ text does not already meet. Reply in JSON:
   wording. Empty if not impacted."""
 
 
-def assess(company: str, circular: str, policy: str) -> Assessment:
-    return ask(
-        ASSESS_PROMPT, f"THE COMPANY: {company}\n\n{circular}\n\n{policy}", Assessment
+def assess(company: str, c: Circular, p: Policy, controls: list[Control]) -> Verdict:
+    published = c.published_at.date() if c.published_at else "unknown date"
+    requirements = "\n".join(f"- {r}" for r in c.requirements or [])
+    listed = "\n".join(f"- {k.code}: {k.description} ({k.frequency})" for k in controls)
+    user = (
+        f"THE COMPANY: {company}\n\n"
+        f"CIRCULAR ({c.source}, {published}): {c.title}\n"
+        f"Addressed to: {c.addressed_to}\nSummary: {c.summary}\n"
+        f"Requirements:\n{requirements}\n\n"
+        f"POLICY {p.code} v{p.version}: {p.title}\n{p.text}\n\nCONTROLS:\n{listed}"
     )
+    return ask(ASSESS_PROMPT, user, Verdict)

@@ -1,7 +1,5 @@
-"""Accounts: signing up a company, signing in, and the company's team.
-
-Signing up creates the company and its first user. Anyone in the company can add
-teammates; everyone in a company sees the same data."""
+"""Accounts: sign up (a company and its first user), log in, and the company's team.
+Everyone in a company sees the same data."""
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -11,28 +9,22 @@ from auth import CurrentUser, hash_password, issue_token, password_ok
 from common.models import Company, User
 from database import SessionDep, enqueue, save
 
-router = APIRouter(prefix="/auth", tags=["accounts"])
-team = APIRouter(prefix="/users", tags=["accounts"])
-
-EMAIL = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+router = APIRouter(tags=["accounts"])
 
 
-class SignUp(SQLModel):
-    company: str = Field(min_length=2, description="The company's name")
-    name: str = Field(min_length=1, description="Your name")
-    email: str = Field(regex=EMAIL)
+class NewUser(SQLModel):
+    name: str = Field(min_length=1)
+    email: str = Field(regex=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=8)
+
+
+class SignUp(NewUser):
+    company: str = Field(min_length=2)
 
 
 class Login(SQLModel):
     email: str
     password: str
-
-
-class NewUser(SQLModel):
-    name: str = Field(min_length=1)
-    email: str = Field(regex=EMAIL)
-    password: str = Field(min_length=8)
 
 
 class NewPassword(SQLModel):
@@ -43,56 +35,49 @@ class NewPassword(SQLModel):
 class Account(BaseModel):
     user: User
     company: Company
+    token: str | None = None
 
 
-class SignedIn(Account):
-    token: str
-
-
-def normal(email: str) -> str:
-    return email.strip().lower()
-
-
-def refuse_taken(session: Session, email: str) -> None:
-    if session.exec(select(User).where(User.email == email)).first():
-        raise HTTPException(409, f"an account with {email} already exists")
-
-
-@router.post("/signup", status_code=201)
-def sign_up(body: SignUp, session: SessionDep) -> SignedIn:
-    """A new company and its first user. Its recent circulars are queued for
-    assessment, and judged once the company is described."""
-    email = normal(body.email)
-    refuse_taken(session, email)
-    company = save(session, Company(name=body.company.strip()))
-    user = save(
-        session,
-        User(
-            company_id=company.id,
-            email=email,
-            name=body.name.strip(),
-            password_hash=hash_password(body.password),
-        ),
+def add_user(session: Session, company_id: int, body: NewUser) -> User:
+    email = body.email.strip().lower()
+    user = User(
+        company_id=company_id,
+        email=email,
+        name=body.name.strip(),
+        password_hash=hash_password(body.password),
     )
+    return save(session, user, f"an account with {email} already exists")
+
+
+@router.post("/auth/signup", status_code=201)
+def sign_up(body: SignUp, session: SessionDep) -> Account:
+    """The company and its user are saved together; its recent circulars are then
+    queued, to be judged once it's described."""
+    company = Company(name=body.company.strip())
+    session.add(company)
+    session.flush()
+    user = add_user(session, company.id, body)
+    session.refresh(company)
     enqueue("company.refresh", company_id=company.id)
-    return SignedIn(user=user, company=company, token=issue_token(user))
+    return Account(user=user, company=company, token=issue_token(user))
 
 
-@router.post("/login")
-def log_in(body: Login, session: SessionDep) -> SignedIn:
-    user = session.exec(select(User).where(User.email == normal(body.email))).first()
+@router.post("/auth/login")
+def log_in(body: Login, session: SessionDep) -> Account:
+    email = body.email.strip().lower()
+    user = session.exec(select(User).where(User.email == email)).first()
     if user is None or not password_ok(body.password, user.password_hash):
         raise HTTPException(401, "wrong email or password")
     company = session.get(Company, user.company_id)
-    return SignedIn(user=user, company=company, token=issue_token(user))
+    return Account(user=user, company=company, token=issue_token(user))
 
 
-@router.get("/me")
+@router.get("/auth/me")
 def me(user: CurrentUser, session: SessionDep) -> Account:
     return Account(user=user, company=session.get(Company, user.company_id))
 
 
-@router.put("/password", status_code=204)
+@router.put("/auth/password", status_code=204)
 def change_password(body: NewPassword, user: CurrentUser, session: SessionDep) -> None:
     if not password_ok(body.current, user.password_hash):
         raise HTTPException(403, "the current password is wrong")
@@ -100,24 +85,12 @@ def change_password(body: NewPassword, user: CurrentUser, session: SessionDep) -
     save(session, user)
 
 
-@team.get("")
+@router.get("/users")
 def list_users(user: CurrentUser, session: SessionDep) -> list[User]:
-    return session.exec(
-        select(User).where(User.company_id == user.company_id).order_by(User.name)
-    ).all()
+    team = select(User).where(User.company_id == user.company_id).order_by(User.name)
+    return session.exec(team).all()
 
 
-@team.post("", status_code=201)
-def add_user(body: NewUser, user: CurrentUser, session: SessionDep) -> User:
-    """A teammate in the same company, with a first password to hand them."""
-    email = normal(body.email)
-    refuse_taken(session, email)
-    return save(
-        session,
-        User(
-            company_id=user.company_id,
-            email=email,
-            name=body.name.strip(),
-            password_hash=hash_password(body.password),
-        ),
-    )
+@router.post("/users", status_code=201)
+def add_teammate(body: NewUser, user: CurrentUser, session: SessionDep) -> User:
+    return add_user(session, user.company_id, body)

@@ -1,22 +1,12 @@
-"""Worker settings, read from the environment or a .env file beside main.py. Nothing
-else in the worker reads os.environ.
+"""Worker settings, from the environment or .env beside main.py; empty values keep the
+default. GEMINI_API_KEY is required (https://ai.google.dev/gemini-api). Empty S3
+endpoint and keys mean real AWS.
 
-A variable set to "" keeps its default, since docker compose passes unset ones that way.
-Empty S3 endpoint and keys mean real AWS with the usual credential chain; for Floci
-(local S3) set S3_ENDPOINT_URL=http://localhost:4566 and both keys to "test".
+LOOKBACK_DAYS: newer circulars are read, and new policies and companies are checked
+against them. A task held CLAIM_IDLE_SECONDS by a silent worker is taken over; while a
+service is down tasks wait RETRY_SECONDS; every RECONCILE_MINUTES one worker re-queues
+work whose task went missing."""
 
-GEMINI_API_KEY is the only required setting. OCR_MAX_PAGES caps the pages read per
-PDF (long master circulars state their changes up front), LLM_MAX_CHARS the circular
-text sent for the summary, MATCH_TOP_K the closest policies Gemini checks per
-circular, and LOOKBACK_DAYS how old a new circular can be before it's skipped (and how
-far back a new policy or a new company is checked).
-
-The queue: REDIS_URL is the Redis holding the task stream. A task a worker has held for
-CLAIM_IDLE_SECONDS without finishing (its worker died) is taken over by another.
-RETRY_SECONDS is the wait before retrying while OCR or Gemini is down, and every
-RECONCILE_MINUTES one worker looks in Postgres for work whose task went missing."""
-
-from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,27 +27,16 @@ class Settings(BaseSettings):
     OCR_URL: str = "http://localhost:8001/v1"
     OCR_MAX_PAGES: int = 20
 
-    GEMINI_API_KEY: str = Field(default="", validate_default=True)
+    GEMINI_API_KEY: str
     GEMINI_MODEL_NAME: str = "gemini-3.5-flash"
     GEMINI_EMBEDDING_MODEL_NAME: str = "gemini-embedding-001"
     LLM_MAX_CHARS: int = 100_000
 
     MATCH_TOP_K: int = 3
     LOOKBACK_DAYS: int = 30
-
     CLAIM_IDLE_SECONDS: int = 1800
     RETRY_SECONDS: int = 60
     RECONCILE_MINUTES: int = 15
-
-    @field_validator("GEMINI_API_KEY")
-    @classmethod
-    def key_is_set(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError(
-                "GEMINI_API_KEY is empty. Create a key at "
-                "https://ai.google.dev/gemini-api and put it in the .env file"
-            )
-        return value.strip()
 
 
 settings = Settings()

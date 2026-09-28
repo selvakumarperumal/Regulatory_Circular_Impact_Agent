@@ -1,5 +1,5 @@
-"""Gap tickets: opened by the worker, worked on and closed by people. Every change is
-written to the gap's history (gap_events), under the signed-in user's email."""
+"""Gap tickets: opened by the worker, worked on by people. Every change is added to
+the gap's history (gap_events) under the signed-in user's email."""
 
 from datetime import date
 
@@ -9,7 +9,7 @@ from sqlmodel import SQLModel, col, select
 
 from auth import CurrentUser
 from common.models import OPEN_STATUSES, Circular, Gap, GapEvent, GapStatus, Policy, now
-from database import SessionDep, owned_or_404, save
+from database import SessionDep, get_or_404, save
 
 router = APIRouter(prefix="/gaps", tags=["gaps"])
 
@@ -43,14 +43,10 @@ def list_gaps(
     policy_id: int | None = None,
     overdue: bool = False,
 ) -> list[Gap]:
-    """The company's gaps, earliest due first."""
+    """Earliest due first."""
+    filters = {"status": status, "owner": owner, "policy_id": policy_id}
     q = select(Gap).where(Gap.company_id == user.company_id).order_by(Gap.due_date)
-    if status:
-        q = q.where(Gap.status == status)
-    if owner:
-        q = q.where(Gap.owner == owner)
-    if policy_id:
-        q = q.where(Gap.policy_id == policy_id)
+    q = q.where(*[getattr(Gap, k) == v for k, v in filters.items() if v])
     if overdue:
         q = q.where(col(Gap.status).in_(OPEN_STATUSES), Gap.due_date < date.today())
     return session.exec(q).all()
@@ -58,15 +54,13 @@ def list_gaps(
 
 @router.get("/{gap_id}")
 def get_gap(gap_id: int, user: CurrentUser, session: SessionDep) -> GapDetail:
-    gap = owned_or_404(session, Gap, gap_id, user.company_id)
-    events = session.exec(
-        select(GapEvent).where(GapEvent.gap_id == gap.id).order_by(GapEvent.at)
-    ).all()
+    gap = get_or_404(session, Gap, gap_id, user.company_id)
+    history = select(GapEvent).where(GapEvent.gap_id == gap_id).order_by(GapEvent.at)
     return GapDetail(
         gap=gap,
         circular=session.get(Circular, gap.circular_id),
         policy=session.get(Policy, gap.policy_id),
-        events=events,
+        events=session.exec(history).all(),
     )
 
 
@@ -74,23 +68,17 @@ def get_gap(gap_id: int, user: CurrentUser, session: SessionDep) -> GapDetail:
 def update_gap(
     gap_id: int, body: GapUpdate, user: CurrentUser, session: SessionDep
 ) -> GapDetail:
-    """Change status / owner / due date. Each change is written to the gap's history."""
-    gap = owned_or_404(session, Gap, gap_id, user.company_id)
+    gap = get_or_404(session, Gap, gap_id, user.company_id)
     if body.status in ("closed", "dismissed") and not body.note:
         raise HTTPException(422, "a note is required to close or dismiss a gap")
     for field, new in body.model_dump(exclude_unset=True, exclude={"note"}).items():
         old = getattr(gap, field)
-        if new is None or new == old:
-            continue
-        setattr(gap, field, new)
-        session.add(
-            GapEvent(
-                gap_id=gap.id,
-                actor=user.email,
-                action=field,
-                note=f"{old} -> {new}" + (f": {body.note}" if body.note else ""),
+        if new is not None and new != old:
+            setattr(gap, field, new)
+            note = f"{old} -> {new}" + (f": {body.note}" if body.note else "")
+            session.add(
+                GapEvent(gap_id=gap_id, actor=user.email, action=field, note=note)
             )
-        )
     gap.closed_at = None if gap.status in OPEN_STATUSES else (gap.closed_at or now())
     gap.updated_at = now()
     session.commit()
@@ -101,9 +89,9 @@ def update_gap(
 def add_comment(
     gap_id: int, body: Comment, user: CurrentUser, session: SessionDep
 ) -> GapEvent:
-    gap = owned_or_404(session, Gap, gap_id, user.company_id)
+    gap = get_or_404(session, Gap, gap_id, user.company_id)
     gap.updated_at = now()
-    return save(
-        session,
-        GapEvent(gap_id=gap.id, actor=user.email, action="comment", note=body.note),
+    comment = GapEvent(
+        gap_id=gap_id, actor=user.email, action="comment", note=body.note
     )
+    return save(session, comment)
