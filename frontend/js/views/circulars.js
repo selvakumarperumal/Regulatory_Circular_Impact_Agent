@@ -86,7 +86,7 @@ export async function circularPage({ id }) {
             body: c.requirements?.length ? html`<ol class="obligations">${c.requirements.map((r) => html`<li><span>${r}</span></li>`)}</ol>`
                                          : html`<p class="hint">Nothing: the circular is informational.</p>`,
           })}`
-        : panel({ body: html`<p class="hint">Not analysed yet. The worker picks circulars up newest first, within a minute or two.</p>` })}
+        : panel({ body: html`<p class="hint">Not analysed yet. It's queued: a worker is on it, or picks it up as soon as one is free.</p>` })}
         ${panel({
           title: "Gaps opened", count: gaps.length, flush: Boolean(gaps.length),
           body: gaps.length ? gapTable(gaps)
@@ -145,7 +145,7 @@ export async function circularPage({ id }) {
 
   $("#reprocess").addEventListener("click", (e) => busy(e.currentTarget, async () => {
     await api(`/circulars/${c.id}/reprocess`, { method: "POST" });
-    toast("Queued: the worker picks it up within a minute");
+    toast("Queued: a worker picks it up right away");
     await circularPage({ id });
     refreshBadges();
   }));

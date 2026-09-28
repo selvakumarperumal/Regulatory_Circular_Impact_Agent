@@ -250,7 +250,7 @@ function bindPolicyForm(p) {
       if (!body.regulators.length) throw new Error("Pick at least one regulator.");
       if (!p) {
         const created = await api("/policies", { method: "POST", body });
-        toast(`${created.code} added. The worker checks it against recent circulars within a minute.`);
+        toast(`${created.code} added. A worker is checking it against recent circulars now.`);
         location.hash = `#/policies/${created.id}`;
       } else {
         const saved = await api(`/policies/${p.id}`, { method: "PUT", body });

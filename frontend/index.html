@@ -57,10 +57,13 @@
     </nav>
 
     <div class="sidebar-foot">
-      <label class="you" for="actor">
-        <span>Signed in as</span>
-        <input id="actor" type="text" placeholder="your.name@bank.com" autocomplete="email" />
-      </label>
+      <div class="you">
+        <span class="avatar" id="you-avatar" aria-hidden="true"></span>
+        <span class="you-text"><b id="you-name"></b><small id="you-company"></small></span>
+        <button class="icon-btn" id="sign-out" title="Sign out" aria-label="Sign out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" /><path d="M10 17l-5-5 5-5" /><path d="M5 12h11" /></svg>
+        </button>
+      </div>
       <div class="api-status" id="api-status"><i></i><span>Checking the API…</span></div>
     </div>
   </aside>

@@ -18,7 +18,7 @@ export const GAP_STATUS = {
 };
 export const CIRCULAR_STATUS = {
   new: { label: "New", c: "var(--st-quiet)" },
-  parsed: { label: "OCR done", c: "var(--st-open)" },
+  parsed: { label: "In progress", c: "var(--st-open)" },
   analyzed: { label: "Analysed", c: "var(--st-closed)" },
   failed: { label: "Failed", c: "var(--danger)" },
   skipped: { label: "Skipped", c: "var(--st-quiet)" },

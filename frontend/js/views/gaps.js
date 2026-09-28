@@ -6,7 +6,6 @@ import { icon } from "../ui/icons.js";
 import { busy, dimWhile, toast } from "../ui/feedback.js";
 import { GAP_STATUS, SEVERITY, pageHead, panel, person, plist, segmented, table, tag } from "../ui/components.js";
 import { filters } from "../app/state.js";
-import { actor } from "../app/session.js";
 import { setCrumbs } from "../app/router.js";
 import { refreshBadges } from "../app/status.js";
 
@@ -160,11 +159,11 @@ function renderGap({ gap, circular, policy, events }) {
     e.preventDefault();
     const form = new FormData(e.target);
     busy(e.submitter, async () => {
-      const body = { actor: actor(), note: form.get("note").trim() };
+      const body = { note: form.get("note").trim() };
       for (const field of ["status", "owner", "due_date"]) {
         if (form.get(field) !== gap[field]) body[field] = form.get(field);          // send only what changed
       }
-      if (Object.keys(body).length === 2) throw new Error("Nothing changed. To add a note on its own, use Comment.");
+      if (Object.keys(body).length === 1) throw new Error("Nothing changed. To add a note on its own, use Comment.");
       renderGap(await api(`/gaps/${gap.id}`, { method: "PATCH", body }));
       toast("Changes saved");
       refreshBadges();
@@ -175,7 +174,7 @@ function renderGap({ gap, circular, policy, events }) {
     e.preventDefault();
     const note = new FormData(e.target).get("note").trim();
     busy(e.submitter, async () => {
-      await api(`/gaps/${gap.id}/comments`, { method: "POST", body: { actor: actor(), note } });
+      await api(`/gaps/${gap.id}/comments`, { method: "POST", body: { note } });
       toast("Comment added");
       renderGap(await api(`/gaps/${gap.id}`));
     });

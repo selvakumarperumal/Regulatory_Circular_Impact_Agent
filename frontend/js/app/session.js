@@ -1,27 +1,65 @@
-/** Who is using the console. Every gap change and comment is recorded under this name. */
+/** Who is signed in: the login token, the user and their company. Kept in localStorage,
+ * so a reload stays signed in; the API client sends the token with every call, and when
+ * the API says it has ended, the console signs out and shows the login page. */
+import { useAuth } from "../lib/api.js";
+import { initials } from "../lib/format.js";
 import { $ } from "../lib/html.js";
 
+const KEY = "rci.session";
+let current = null;
+try { current = JSON.parse(localStorage.getItem(KEY)); } catch { /* storage blocked */ }
+
+function store() {
+  try {
+    if (current) localStorage.setItem(KEY, JSON.stringify(current));
+    else localStorage.removeItem(KEY);
+  } catch { /* storage blocked: the session lasts until the tab closes */ }
+}
+
+export const signedIn = () => Boolean(current?.token);
+export const currentUser = () => current?.user ?? null;
+export const currentCompany = () => current?.company ?? null;
+
+/** After login or sign-up: keep what the API returned ({ token, user, company }). */
+export function signIn({ token, user, company }) {
+  current = { token, user, company };
+  store();
+  showUser();
+}
+
+/** The company or user changed (a rename): keep the sidebar in step. */
+export function updateSession({ user, company }) {
+  if (!current) return;
+  if (user) current.user = user;
+  if (company) current.company = company;
+  store();
+  showUser();
+}
+
+export function signOut() {
+  current = null;
+  store();
+  showUser();
+  location.hash = "#/login";
+}
+
+function showUser() {
+  document.body.classList.toggle("signed-out", !signedIn());
+  const user = currentUser();
+  $("#you-name").textContent = user?.name ?? "";
+  $(".you").title = user?.email ?? "";
+  $("#you-company").textContent = currentCompany()?.name ?? "";
+  $("#you-avatar").textContent = user ? initials(user.name) : "";
+}
+
 export function initSession() {
-  const input = $("#actor");
-  try { input.value = localStorage.getItem("rci.actor") || ""; } catch { /* storage blocked */ }
-  input.addEventListener("change", () => {
-    try { localStorage.setItem("rci.actor", input.value.trim()); } catch { /* storage blocked */ }
-  });
+  useAuth(() => current?.token, signOut);
+  $("#sign-out").addEventListener("click", signOut);
+  showUser();
 }
 
-/** The current name; throws (and focuses the box) if it's empty. */
-export function actor() {
-  const input = $("#actor");
-  const name = input.value.trim();
-  if (!name) {
-    input.focus();
-    throw new Error("Enter your name or email under “Signed in as” first.");
-  }
-  return name;
-}
-
-/** A first name for greetings: "priya.shah@bank.com" -> "Priya". Empty if nobody signed in. */
+/** A first name for greetings: "Priya Shah" -> "Priya". */
 export function firstName() {
-  const raw = ($("#actor").value || "").trim().split("@")[0].split(/[._\-\s]+/)[0] || "";
-  return raw ? raw[0].toUpperCase() + raw.slice(1) : "";
+  const first = (currentUser()?.name || "").trim().split(/\s+/)[0] || "";
+  return first ? first[0].toUpperCase() + first.slice(1) : "";
 }

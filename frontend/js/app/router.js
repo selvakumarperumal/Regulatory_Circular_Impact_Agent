@@ -1,15 +1,18 @@
 /** Hash router. Pages register a pattern ("gaps/:id") and an async render function that
  * receives the params. The router highlights the sidebar, sets the breadcrumbs, and puts
- * the scroll position back when you return to a list. */
+ * the scroll position back when you return to a list. Pages are for signed-in users,
+ * except those registered with { open: true } (login, sign-up), which are only for
+ * signed-out ones: the router sends everyone else to the right place. */
 import { $, $$, html, put } from "../lib/html.js";
 import { hideTooltip } from "../ui/feedback.js";
+import { signedIn } from "./session.js";
 
 const routes = [];
 const scrollMemory = {};
 const afterRender = [];
 
-export function route(pattern, render) {
-  routes.push({ parts: pattern.split("/"), render });
+export function route(pattern, render, { open = false } = {}) {
+  routes.push({ parts: pattern.split("/"), render, open });
 }
 
 export const onRender = (fn) => afterRender.push(fn);
@@ -28,14 +31,18 @@ function match(hash) {
     if (r.parts.length !== parts.length) continue;
     const params = {};
     if (r.parts.every((p, i) => p.startsWith(":") ? ((params[p.slice(1)] = parts[i]), true) : p === parts[i])) {
-      return { render: r.render, params, section: parts[0] };
+      return { render: r.render, params, section: parts[0], open: r.open };
     }
   }
-  return { render: routes[0].render, params: {}, section: "overview" };
+  return { render: routes[0].render, params: {}, section: "overview", open: false };
 }
 
 export async function render() {
-  const { render: page, params, section } = match(location.hash);
+  const { render: page, params, section, open } = match(location.hash);
+  if (open === signedIn()) {
+    location.replace(open ? "#/overview" : "#/login");   // fires hashchange, which renders
+    return;
+  }
   $$(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === section));
   hideTooltip();
   const view = $("#view");

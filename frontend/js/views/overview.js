@@ -17,9 +17,10 @@ export async function overviewPage() {
   const view = $("#view");
   if (!$(".hero", view)) put(view, html`<div class="empty">Loading…</div>`);
 
-  const [stats, gaps, circulars, policies, company] = await dimWhile(view, Promise.all([
+  const [stats, gaps, circulars, policies, account] = await dimWhile(view, Promise.all([
     api("/stats"), api("/gaps"), api("/circulars?limit=500"), api("/policies"), api("/company"),
   ]));
+  const company = account.profile ? account : null;       // null until it's described
   const d = derive(gaps, circulars, company);
 
   put(view, html`
