@@ -80,9 +80,9 @@ def main() -> None:
     reset.add_argument("email")
     reset.add_argument("--generate", action="store_true")
     reset.set_defaults(run=set_password)
-    commands.add_parser("companies", help="list companies and their users").set_defaults(
-        run=companies
-    )
+    commands.add_parser(
+        "companies", help="list companies and their users"
+    ).set_defaults(run=companies)
     args = parser.parse_args()
     init_db(engine)
     with Session(engine) as session:

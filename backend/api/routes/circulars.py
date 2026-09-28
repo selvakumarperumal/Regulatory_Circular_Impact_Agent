@@ -180,7 +180,9 @@ def get_circular_text(circular_id: int, user: CurrentUser, session: SessionDep) 
 
 
 @router.post("/{circular_id}/reprocess", status_code=202)
-def reprocess_circular(circular_id: int, user: CurrentUser, session: SessionDep) -> None:
+def reprocess_circular(
+    circular_id: int, user: CurrentUser, session: SessionDep
+) -> None:
     """Run the circular through again for this company.
 
     A circular the worker hasn't read (it failed, or is still waiting) is queued to be

@@ -36,7 +36,9 @@ def get_company(user: CurrentUser, session: SessionDep) -> Company:
 
 
 @router.put("")
-def set_company(body: CompanyIn, user: CurrentUser, session: SessionDep) -> CompanySaved:
+def set_company(
+    body: CompanyIn, user: CurrentUser, session: SessionDep
+) -> CompanySaved:
     """Save the name and description. A new description clears the company's "does it
     apply to us?" answers and queues its circulars to be judged again. Only that
     question goes back to Gemini: the OCR text, the summaries and every policy check
@@ -56,7 +58,11 @@ def set_company(body: CompanyIn, user: CurrentUser, session: SessionDep) -> Comp
             col(Assessment.circular_id).in_(read),
         )
         .values(
-            status="pending", applicable=None, applies_reason=None, error=None, updated_at=now()
+            status="pending",
+            applicable=None,
+            applies_reason=None,
+            error=None,
+            updated_at=now(),
         )
     ).rowcount
     saved = save(session, company)

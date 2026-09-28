@@ -98,7 +98,12 @@ def per_company_codes(conn: Connection) -> None:
     Now two companies may both have a POL-KYC: a policy code is unique within its
     company, and a control code within its policy."""
     for table, old, new, columns in (
-        ("policies", "policies_code_key", "uq_policies_company_code", "company_id, code"),
+        (
+            "policies",
+            "policies_code_key",
+            "uq_policies_company_code",
+            "company_id, code",
+        ),
         ("controls", "controls_code_key", "uq_controls_policy_code", "policy_id, code"),
     ):
         conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT IF EXISTS {old}'))

@@ -58,9 +58,6 @@ def cutoff() -> datetime:
     return datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
 
 
-# circular.read
-
-
 def read_circular(session: Session, circular_id: int) -> list[int]:
     """Steps 1 and 2, once for every company. Returns the companies whose assessment
     of the circular is still pending, to queue a circular.assess task each."""
@@ -138,9 +135,6 @@ def add_assessment(session: Session, company_id: int, circular_id: int) -> None:
     )
 
 
-# circular.assess
-
-
 def assess(session: Session, company_id: int, circular_id: int) -> list[str]:
     """Steps 3 and 4 for one company. Returns the codes of the policies that got a
     gap."""
@@ -163,7 +157,9 @@ def assess(session: Session, company_id: int, circular_id: int) -> list[str]:
     opened = []
     if a.applicable and c.requirements:
         policies = [
-            p for p in embedded_policies(session, company_id) if c.source in p.regulators
+            p
+            for p in embedded_policies(session, company_id)
+            if c.source in p.regulators
         ]
         if policies:
             opened = match(
@@ -319,9 +315,6 @@ def checked_pairs(session: Session, circular_id: int) -> Pairs:
     }
 
 
-# policy.check
-
-
 def check_new_policy(session: Session, company_id: int, policy_id: int) -> list[str]:
     """Embed a new or edited policy, then check the company's recent circulars that
     apply against their closest policies, the new one included. Only pairs never
@@ -333,7 +326,9 @@ def check_new_policy(session: Session, company_id: int, policy_id: int) -> list[
     embed_policies(session, [policy])
     profile = company.profile.strip()
     recent = [
-        c for c in recent_applicable(session, company_id) if c.source in policy.regulators
+        c
+        for c in recent_applicable(session, company_id)
+        if c.source in policy.regulators
     ]
     if not profile or not recent:
         return []
@@ -341,7 +336,9 @@ def check_new_policy(session: Session, company_id: int, policy_id: int) -> list[
     opened = []
     for c in recent:
         policies = [
-            p for p in embedded_policies(session, company_id) if c.source in p.regulators
+            p
+            for p in embedded_policies(session, company_id)
+            if c.source in p.regulators
         ]
         with locks.held(session.get_bind(), locks.ASSESS, f"{company_id}/{c.id}", True):
             opened += match(
@@ -375,9 +372,6 @@ def recent_applicable(session: Session, company_id: int) -> list[Circular]:
     return [c for c in session.exec(query).all() if c.requirements]
 
 
-# company.refresh
-
-
 def refresh_company(session: Session, company_id: int) -> list[int]:
     """Give the company an assessment of every circular read in the last
     LOOKBACK_DAYS, and return the circulars it still has to judge. The api has
@@ -403,9 +397,6 @@ def refresh_company(session: Session, company_id: int) -> list[int]:
             )
         ).all()
     )
-
-
-# embeddings
 
 
 def chunks(text: str) -> list[str]:
@@ -458,9 +449,6 @@ def embed_circulars(session: Session, circulars: list[Circular]) -> None:
     ):
         c.embedding, c.embedding_model = v, MODEL
     session.commit()
-
-
-# the reconciler
 
 
 def missing_work(session: Session) -> list[tuple[str, dict[str, int]]]:
