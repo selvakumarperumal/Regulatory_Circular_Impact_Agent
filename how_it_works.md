@@ -1,6 +1,6 @@
 # How the backend works
 
-![Python 3.14](https://img.shields.io/badge/Python_3.14-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![SQLModel](https://img.shields.io/badge/SQLModel-7E56C2?style=flat-square) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Gemini via LangChain](https://img.shields.io/badge/Gemini_via_LangChain-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Unlimited-OCR on vLLM](https://img.shields.io/badge/Unlimited--OCR_on_vLLM-EA580C?style=flat-square) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Python 3.14](https://img.shields.io/badge/Python_3.14-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![SQLModel](https://img.shields.io/badge/SQLModel-7E56C2?style=flat-square) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Gemini via LangChain](https://img.shields.io/badge/Gemini_via_LangChain-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Unlimited-OCR on vLLM](https://img.shields.io/badge/Unlimited--OCR_on_vLLM-EA580C?style=flat-square) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![Redis 7](https://img.shields.io/badge/Redis_7-DC382D?style=flat-square&logo=redis&logoColor=white)
 
 This guide explains the Regulatory Circular Impact Agent from the outside in. It starts with
 one picture of the whole system, follows a single circular through it, and then covers each
@@ -9,7 +9,7 @@ renders on GitHub and in VS Code's Markdown preview.
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 
-![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square)
+![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
 
 **Contents**
 
@@ -47,14 +47,17 @@ The agent does four things by itself:
 4. **Opens a gap ticket** for each such policy, addressed to the policy's owner, with a
    drafted change to the policy's wording.
 
-It needs two things that only you can give it, both entered in the console:
+Several companies can use one installation. Each one **signs up** in the console (the
+company and its first user, who can then add teammates), and gives the agent two things that
+only it can give:
 
 - **a description of your company** (what kind of entity it is, its licences and businesses),
   so it can tell which circulars apply to you;
 - **your policies and their controls**, so it has something to compare each circular with.
 
-It ships with neither. Until you add them it still reads and summarises every circular,
-but it doesn't say which ones apply to you, and it opens no gaps.
+It ships with neither. Until you add them it still reads and summarises every circular
+(once, for every company), but it doesn't say which ones apply to you, and it opens no gaps.
+Each company only ever sees its own description, policies, verdicts and gaps.
 
 People then work the gaps (in progress, closed or dismissed) in the console. Every change is
 kept in the gap's history.
@@ -69,21 +72,23 @@ kept in the gap's history.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
+        direction TB
         sites["RBI · SEBI · IRDAI<br/>websites"] -->|new circulars| W["watcher"]
-        W -->|PDF| S3[("S3 (Floci)<br/>the PDFs")]
-        W -->|"row, status 'new'"| DB[("Postgres")]
-        S3 -->|PDF| K["worker<br/>(the agent)"]
-        DB <-->|"picks up work,<br/>saves results and gaps"| K
+        U(("You and<br/>your team")) <--> F["frontend<br/>console"]
+        F <-->|"/api/*, with a<br/>login token"| A["api<br/>FastAPI"]
+        W -->|"PDF"| S3[("S3 (Floci)<br/>the PDFs")]
+        W -->|"row, status 'new'"| DB[("Postgres<br/>every result")]
+        A <-->|"reads and writes"| DB
+        W -->|"task: circular.read"| Q[["Redis<br/>task stream"]]
+        A -->|"tasks: policy.check, …"| Q
+        Q -->|"each task to one worker"| K["worker × N<br/>(the agent)"]
+        K <-->|"reads the work,<br/>saves results and gaps"| DB
+        S3 -->|PDF| K
         K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on the GPU"]
-        K <-->|"question → JSON answer"| G["Gemini<br/>(via LangChain)"]
-        DB <-->|reads and writes| A["api<br/>FastAPI"]
-        A <-->|"/api/*"| F["frontend<br/>console"]
-        F <--> U(("You"))
+        K <-->|"question → JSON"| G["Gemini<br/>(via LangChain)"]
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -93,8 +98,10 @@ flowchart LR
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class W,K,A,F svc
     class S3,DB data
+    class Q queue
     class sites,G ext
     class O gpu
     class U start
@@ -111,9 +118,12 @@ There are two kinds of service:
   everything and let you manage policies and gaps.
 
 The services never call each other directly, except the worker calling `ocr` and Gemini.
-They hand work over through **Postgres**: the watcher writes a row with status `new`, and
-the worker picks up any row with that status. That keeps each service simple, and means any
-of them can be restarted at any time.
+They hand work over as **tasks** on a **Redis stream**: the watcher saves a new circular in
+Postgres and queues `circular.read`; the api saves your change and queues `policy.check`,
+`company.refresh` or `circular.assess`. A worker picks each task up the moment it's queued.
+**Postgres stays the source of truth**: a task only says what to look at, so a task that's
+lost is found again, and one delivered twice does nothing twice. Any service can be
+restarted at any time.
 
 ---
 
@@ -128,8 +138,11 @@ flowchart LR
         subgraph compose["docker compose (rci)"]
             FE["frontend<br/>nginx :8080"] -->|"/api/*"| API["api<br/>uvicorn :8000"]
             API --> PG[("postgres<br/>:5432")]
+            API --> RD[["redis<br/>:6379"]]
             WA["watcher"] --> PG
-            WK["worker"] --> PG
+            WA --> RD
+            RD --> WK["worker × WORKERS"]
+            WK --> PG
             WK -->|"http://ocr:8000/v1"| OC["ocr<br/>vLLM (host :8001)"]
         end
         WA -->|PDFs| FL[("Floci S3 :4566<br/>(outside Docker)")]
@@ -137,7 +150,6 @@ flowchart LR
         WK -->|HTTPS| GEM["Gemini API<br/>(internet)"]
         OC --- GPU[["NVIDIA GPU"]]
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -147,8 +159,10 @@ flowchart LR
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class FE,API,WA,WK svc
     class PG,FL data
+    class RD queue
     class GEM ext
     class OC,GPU gpu
     class B start
@@ -160,12 +174,13 @@ flowchart LR
 
 | Service | Folder | Runs | Port on your machine |
 |---|---|---|---|
-| `watcher` | `backend/watcher` | `python main.py`, one round every 60 minutes | none |
+| `watcher` | `backend/watcher` | `python main.py`, one round every 60 minutes; queues a task per new circular. Always one replica | none |
 | `ocr` | `backend/ocr` | vLLM serving `baidu/Unlimited-OCR` on the GPU | 8001 |
-| `worker` | `backend/worker` | `python main.py`, one round every 60 seconds ([how it works](#4-the-worker-in-plain-words)) | none |
+| `worker` | `backend/worker` | `python main.py`: waits for tasks on the stream and does them ([how it works](#4-the-worker-in-plain-words)). `WORKERS` replicas | none |
 | `api` | `backend/api` | `uvicorn main:app` | 8000 (docs at `/docs`) |
 | `frontend` | `frontend` | nginx serving static files | 8080 |
-| `postgres` | none (official image) | the database | 5432 |
+| `postgres` | none (official image) | the database: every result | 5432 |
+| `redis` | none (official image) | the task stream (`rci:tasks`), kept on disk (`--appendonly yes`) | 6379 |
 
 Two things live outside Docker:
 
@@ -179,86 +194,41 @@ worker and api. Each of those has its own `pyproject.toml` and virtualenv.
 
 ## 4. The worker in plain words
 
-The worker is the agent: one Python program ([`backend/worker/main.py`](backend/worker/main.py))
-that runs all the time. Picture a clerk with an in-tray. Every minute the clerk looks in the
-tray. If there's something in it, the clerk works through it; if it's empty, the clerk waits
-another minute. **Looking in the tray costs nothing**: OCR and Gemini are only used when
-there is real work.
+The worker is the agent: a Python program ([`backend/worker/main.py`](backend/worker/main.py))
+that runs all the time, as many copies as you like. Picture a ticket machine: every piece of
+work arrives as a ticket (a **task**) in one queue, and each clerk takes the next ticket as
+soon as they're free. When the queue is empty, the clerks simply wait: **no OCR, no Gemini,
+not even a database query**.
 
 > 📖 **Two stories, step by step.** [how_the_worker_works.md](how_the_worker_works.md) follows
-> a new circular and a new policy through the worker, and shows exactly what changes in the
-> database at each step. For developers, [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md)
-> has every SQL statement, commit and lock.
+> a new circular and a new policy through the worker, and shows exactly what goes through the
+> queue and what changes in the database at each step. For developers,
+> [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md) has every Redis command, SQL
+> statement, commit and lock.
 
-### What lands in the tray
+### What lands in the queue
 
-| What | Who put it there | What the worker does | OCR and Gemini used |
+| Task | Who queues it | What the worker does | OCR and Gemini used |
 |---|---|---|---|
-| A **new circular** | the watcher, when a regulator publishes one | reads it, decides whether it applies to you, checks your policies, opens gaps | OCR once, 2 Gemini questions, 1 embedding, up to 3 policy checks |
-| A **circular sent back** | you pressed **Reprocess**, or changed the company description | redoes only what that change affects; never OCR again | only the questions whose answer may have changed |
-| A **new or edited policy** | you saved it in the console | turns it into an embedding, then checks it against the recent circulars that apply | 1 embedding, plus 1 check per circular where it's among the 3 closest policies |
-| **Nothing** | | waits a minute | none |
+| `circular.read` | the watcher, for each new circular; the api, when you **Reprocess** a failed one | reads the PDF, summarises it, embeds it: **once, for every company** | OCR once, 1 question, 1 embedding |
+| `circular.assess` | the worker, one per company after reading a circular; the api, when you **Reprocess** | decides whether it applies to that company, checks that company's closest policies, opens gaps | 1 question, plus up to 3 policy checks |
+| `policy.check` | the api, when you add or edit a policy | embeds it, checks it against your recent circulars that apply | 1 embedding, plus 1 check per circular where it's among the 3 closest |
+| `company.refresh` | the api, at sign-up and when you change your description | queues a `circular.assess` for each of your recent circulars | none itself |
 
-### One round, every 60 seconds
-
-Each time the worker wakes up it does one **round**, then waits 60 seconds (`POLL_SECONDS`).
-The wait starts when the round ends, so a round that reads a long circular just takes longer.
-
-```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart TD
-    subgraph canvas[" "]
-        direction TB
-        boot(["Worker starts"]) --> init["Create any missing tables and columns.<br/>Check the Gemini key and model names"]
-        init --> r1
-        subgraph round["One round"]
-            r1["1. Tidy up: mark new circulars older<br/>than 30 days as skipped"] --> r2["2. Embed policies that are<br/>new or edited"]
-            r2 --> r3{"Anything changed since<br/>the last catch-up?"}
-            r3 -->|yes| r4["3. Catch up: check recent circulars<br/>against their closest policies"]
-            r3 -->|no| r5
-            r4 --> r5{"4. Is a circular waiting?<br/>(status new or parsed)"}
-            r5 -->|yes| r6["Process it, newest first:<br/>OCR if needed, read, judge,<br/>check its closest policies"]
-            r6 --> r5
-        end
-        r5 -->|no| wait["Wait 60 seconds"]
-        wait --> r1
-    end
-
-    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
-    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
-    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
-    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
-    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
-    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
-    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
-    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
-    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class boot start
-    class r1,r2,r4,r6 svc
-    class r3,r5 ask
-    class wait muted
-    style round fill:#0c1a24,stroke:#2dd4bf
-    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
-```
-
-Steps 1 to 3 look after the policy library; step 4 works through the waiting circulars.
-With several workers, steps 1 to 3 run in one worker at a time (see
-[Running several workers](#running-several-workers)).
-
-### One circular, from start to finish
+### Where tasks come from
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
     subgraph canvas[" "]
         direction LR
-        s1["<b>1. Read the PDF</b><br/>OCR on the GPU<br/><i>saves the text</i>"] --> s2["<b>2. Summarise it</b><br/>Gemini: who it's for,<br/>what changes, what it requires<br/><i>saves the summary</i>"]
-        s2 --> s3{"<b>3. Does it<br/>apply to us?</b><br/>Gemini, using your<br/>company description"}
-        s3 -->|no| notus["Done: not for us.<br/>No policy is checked"]
-        s3 -->|yes| s4["<b>4. Check your policies</b><br/>score them (maths, no Gemini),<br/>then Gemini checks the 3 closest"]
-        s4 --> s5["Out of date?<br/>Open a gap for the owner,<br/>with a draft of the change"]
+        W["watcher"] -->|"circular.read"| Q[["Redis stream<br/><b>rci:tasks</b>"]]
+        A["api (your changes)"] -->|"policy.check<br/>company.refresh<br/>circular.assess<br/>circular.read"| Q
+        Q -->|"XREADGROUP:<br/>the next task"| K1["worker 1"]
+        Q -->|"XREADGROUP:<br/>the next task"| K2["worker 2"]
+        K1 -->|"XACK when done"| Q
+        K2 -->|"circular.assess<br/>per company"| Q
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -268,25 +238,69 @@ flowchart LR
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class s1 gpu
-    class s2,s4 ext
-    class s3 ask
-    class notus muted
-    class s5 bad
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class W,A,K1,K2 svc
+    class Q queue
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-Each step saves its answer before the next one starts, and the circular's status moves from
-`new` to `parsed` (after step 1) and then `analyzed` (after step 4). If something breaks
-halfway, the next round carries on from the last saved step. Sections 5 to 8 go through each
-step in detail.
+The queue is a **Redis stream**, read by the workers as one **consumer group**: each task
+goes to exactly one worker. A task is only acknowledged when it's finished, so a worker that
+dies mid-task doesn't lose it: it's picked up again. And every 15 minutes one worker checks
+Postgres for unfinished work whose task went missing, and queues it again.
+
+### One circular, from start to finish
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        new(["A new circular"]) --> read
+        subgraph read["circular.read, once"]
+            direction LR
+            s1["<b>1. Read the PDF</b><br/>OCR on the GPU"] --> s2["<b>2. Summarise it</b><br/>Gemini: who it's for,<br/>what it requires"]
+            s2 --> s3["<b>3. Embed it</b><br/>for policy matching"]
+        end
+        read --> fan{"one <b>circular.assess</b><br/>per company"}
+        fan --> q["<b>4. Does it apply to<br/>this company?</b><br/>Gemini, using its description"]
+        q -->|no| notus["Done: not for them"]
+        q -->|yes| s4["<b>5. Check its policies</b><br/>score them (maths, no Gemini),<br/>Gemini checks the 3 closest"]
+        s4 --> s5["Out of date?<br/>A gap for the owner,<br/>with a draft of the change"]
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class new start
+    class s1 gpu
+    class s2,s3,s4 ext
+    class fan queue
+    class q ask
+    class notus muted
+    class s5 bad
+    style read fill:#0f172a,stroke:#334155,color:#94a3b8
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+Reading a circular (steps 1 to 3) doesn't depend on any company, so it's done **once**, however
+many companies use the app. Steps 4 and 5 are done **for each company**, with its own
+description and its own policies, at the same time when several workers run. Each step saves
+its answer before the next one starts, so if something breaks halfway, the retry carries on
+from the last saved step. Sections 5 to 8 go through each step in detail.
 
 ### How it picks which policies to check
 
 Asking Gemini about every policy for every circular would be slow and costly. So the worker
-first gives each policy a quick **similarity score** against the circular, using arithmetic on
-saved embeddings with no Gemini call. Only the **3 highest scores** go to Gemini
-(`MATCH_TOP_K`). Only policies tagged with the circular's regulator are scored.
+first gives each of the company's policies a quick **similarity score** against the circular,
+using arithmetic on saved embeddings with no Gemini call. Only the **3 highest scores** go to
+Gemini (`MATCH_TOP_K`). Only policies tagged with the circular's regulator are scored.
 
 For example, an RBI circular about reporting suspicious accounts:
 
@@ -304,286 +318,72 @@ circular's page, under **Checked against your policies**.
 ### It never does the same work twice
 
 Like a clerk who writes everything down, the worker saves every answer it pays for: the OCR
-text, the summary, whether the circular applies, the embeddings, and every policy verdict. A
-restart, a crash or a quiet minute never repeats a call that already succeeded. The full list
-is in [Work that's done once, and kept](#work-thats-done-once-and-kept).
+text, the summary, the embeddings, whether the circular applies to each company, and every
+policy verdict. A restart, a crash, or the same task arriving twice never repeats a call that
+already succeeded. The full list is in [Work that's done once, and kept](#work-thats-done-once-and-kept).
 
 ### When something breaks
 
-- **OCR or Gemini is down, or Gemini's quota is used up:** the worker waits and tries again
-  every minute, for as long as it takes. Nothing is lost.
-- **A hiccup** (a timeout, a server error, an answer in the wrong shape): the circular is
-  retried up to 3 times.
-- **Anything else:** the circular is marked `failed` and the error is saved on it. Open it in
-  the console to read why, then press **Reprocess**.
+- **OCR or Gemini is down, or Gemini's quota is used up:** the task waits a minute and is
+  tried again, for as long as it takes. Nothing is lost.
+- **A hiccup** (a timeout, a server error, an answer in the wrong shape): the task is retried
+  up to 3 times.
+- **Anything else:** the circular (or your company's assessment of it) is marked `failed` and
+  the error is saved on it. Open it in the console to read why, then press **Reprocess**.
+- **Redis is down:** your changes are still saved; the workers wait for Redis, and the
+  reconciler queues whatever was missed.
 
 Details: [When things go wrong](#13-when-things-go-wrong).
 
 ### Running several workers
 
-Picture several clerks sharing one in-tray. Each puts a sticky note on the folder they take,
-only one can use the scanner (the GPU) at a time, and if a clerk walks out, their notes
-disappear. One worker is plenty for a handful of circulars a day. To get through a backlog faster, run
-more: set `WORKERS=3` in `.env`, or `docker compose up -d --scale worker=3`. The workers
-share the work through Postgres advisory locks, so nothing is ever done twice:
+One worker is plenty for a handful of circulars a day. To get through a backlog faster, run
+more: set `WORKERS=3` in `.env`, or `docker compose up -d --scale worker=3`. They share the
+work with no setup:
 
-| Lock | Held while | Meanwhile, the other workers |
-|---|---|---|
-| one per circular | a worker processes that circular | skip it and take the next one |
-| the GPU | a worker reads a PDF with OCR | take circulars that are already read and run their Gemini steps; if there are none, wait for the GPU |
-| the policy library | a worker embeds policies and runs the catch-up | skip that step this round |
+- **Each task goes to one worker.** The consumer group hands them out.
+- **The same work queued twice is still done once.** A task can be queued twice (by the
+  watcher and by the reconciler, say), so each worker also takes a Postgres **advisory lock**
+  on the work itself; a second worker that finds it locked leaves it alone.
+- **One PDF on the GPU at a time.** OCR takes the `ocr` lock and waits its turn, so extra
+  workers mainly speed up the Gemini steps and the companies' assessments.
+- **A worker that dies** leaves its task unacknowledged, and its locks are released by
+  Postgres. The task is picked up again: at once if its container restarts, otherwise by
+  another worker after 30 minutes.
 
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant A as worker 1
-        participant DB as Postgres
-        participant GPU as ocr (GPU)
-        participant G as Gemini
-        participant B as worker 2
-    end
-
-    rect rgb(13, 20, 36)
-        A->>DB: claim circular 1, take the GPU lock
-        B->>DB: claim circular 2
-        Note over B: the GPU is busy and no circular<br/>is already read: wait for the GPU
-        A->>GPU: read circular 1, page by page
-        A->>DB: save the text, release the GPU
-        B->>GPU: read circular 2
-        A->>G: summarise, judge, check its policies
-        Note over A,B: circular 1's Gemini steps run while circular 2 is on the GPU
-        B->>DB: save the text, release the GPU
-        B->>G: summarise, judge, check its policies
-    end
-```
-
-The GPU reads one page at a time, so OCR never runs in parallel. The speed-up comes from
-running one circular's Gemini steps while another is on the GPU, and from Gemini calls
-running side by side. In a test with 6 circulars, 3 workers finished in half the time of one.
-
-> 🔒 **Crash-safe.** Each lock lives on its own database connection. If a worker dies, its
-> connection closes, Postgres releases its locks, and another worker picks the circular up
-> on its next round.
-
-### How the locks work
-
-People often call this pattern **"SKIP LOCKED"**: when several workers share one queue, each
-takes an item, and the others **skip** whatever is **locked** instead of waiting for it.
-Postgres has a SQL clause with that name. This app gets the same behaviour a slightly
-different way, with **advisory locks**. Both are explained below, with the reason for the
-choice.
-
-**What an advisory lock is.** A lock that Postgres keeps in memory for a number you choose
-(a 64-bit key). It isn't tied to any table or row: the number just means something to the
-program. Two calls matter:
-
-- `pg_try_advisory_lock(key)` answers at once: **true** means "it's yours now", **false**
-  means "someone else has it". It never waits. This is the skip-if-locked part.
-- `pg_advisory_unlock(key)` gives it back.
-
-The worker uses four of them, each with a name. The key is a hash of the app, the Postgres
-schema and the name (`lock_key` in `backend/common/common/db.py`), so every worker derives
-the same key for the same name, and nothing else ever does:
-
-| Lock | Name | Taken by | If it's already taken |
-|---|---|---|---|
-| a circular | `circular/<id>` | the worker processing that circular | skip it and try the next one |
-| the GPU | `ocr` | the worker running OCR | take a circular that's already read; if there are none, wait for the GPU |
-| the policy library | `library` | the worker embedding policies and running the catch-up | skip that step this round |
-| the schema | `schema` | any service creating tables at startup | wait: every service must see the tables before it carries on |
-
-**Several companies.** The app serves **one company per deployment**: one description, one
-policy library. To run it for several companies, give each its own database, or its own
-schema in a shared database. Their locks never meet: Postgres keeps advisory locks per
-database, and the schema is part of every key, so company A's worker never blocks company
-B's, not even on a circular with the same id.
-
-This is what happens when two workers reach for the same circular:
-
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant W1 as worker 1
-        participant PG as Postgres
-        participant W2 as worker 2
-    end
-
-    rect rgb(13, 20, 36)
-        W1->>PG: pg_try_advisory_lock(key of "circular/98")
-        PG-->>W1: true: circular 98 is yours
-        W2->>PG: pg_try_advisory_lock(key of "circular/98")
-        PG-->>W2: false: another worker holds it
-        Note over W2: don't wait: skip it
-        W2->>PG: pg_try_advisory_lock(key of "circular/97")
-        PG-->>W2: true: circular 97 is yours
-        Note over W1,W2: both work at the same time, on different circulars
-        W1->>PG: pg_advisory_unlock(key of "circular/98")
-        W2->>PG: pg_advisory_unlock(key of "circular/97")
-    end
-```
-
-**Claiming a circular, step by step.** Each worker runs this loop
-(`process_next` in `backend/worker/main.py`):
-
-```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart TD
-    subgraph canvas[" "]
-        direction TB
-        list["List the waiting circulars, newest first<br/>(status new or parsed)"] --> tryc{"Try the next one's lock<br/>(circular/id)"}
-        list -->|"none left to try"| idle["End the round"]
-        tryc -->|"another worker holds it"| skip1["Skip it:<br/>try the next one"]
-        tryc -->|"got it"| fresh{"Still waiting?<br/>(read its status again)"}
-        fresh -->|"no: another worker<br/>just finished it"| skip2["Release it:<br/>try the next one"]
-        fresh -->|"yes"| isnew{"Does it need OCR?<br/>(status new)"}
-        isnew -->|"yes"| gpu{"Try the GPU lock<br/>(ocr)"}
-        gpu -->|"another worker<br/>is using the GPU"| skip3["Release it:<br/>try the next one"]
-        gpu -->|"got it"| ocr["OCR the PDF,<br/>then release the GPU"]
-        isnew -->|"no: already read"| gem["Run its Gemini steps:<br/>summarise, judge,<br/>check its policies"]
-        ocr --> gem
-        gem --> done["Release its lock,<br/>then start again from the list"]
-    end
-
-    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
-    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
-    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
-    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
-    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
-    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
-    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
-    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
-    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class list data
-    class tryc,fresh,isnew,gpu ask
-    class idle,skip1,skip2,skip3 muted
-    class gem ext
-    class ocr gpu
-    class done ok
-    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
-```
-
-Two details make it safe:
-
-- **The status is read again after the lock is taken.** Between listing the circulars and
-  locking one, another worker may have finished it. Re-reading means a finished circular is
-  never started again.
-- **Nobody sits idle while there's work.** The first pass through the list takes only what
-  can start at once. If everything left needs the GPU and the GPU is busy, a second pass
-  claims the first free new circular and **waits** for the GPU, rather than skipping it.
-
-### Why not FOR UPDATE SKIP LOCKED
-
-The SQL version of the pattern locks a **row** while picking it:
-
-```sql
-SELECT id FROM circulars
-WHERE status IN ('new', 'parsed')
-ORDER BY published_at DESC
-LIMIT 1
-FOR UPDATE SKIP LOCKED;     -- lock the row found; step over rows other workers have locked
-```
-
-It's a good fit when one job is done inside **one transaction**, because a row lock lasts
-exactly until that transaction ends with a COMMIT or ROLLBACK. The worker doesn't work that
-way on purpose. It **commits after every step** (the OCR text, the summary, whether the
-circular applies, each policy verdict), so that a crash or an outage halfway loses nothing.
-The first of those commits would also release the row lock, and the circular would be
-up for grabs again while it's still being processed:
-
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant W1 as worker 1
-        participant PG as Postgres
-        participant W2 as worker 2
-    end
-
-    rect rgb(13, 20, 36)
-        W1->>PG: BEGIN, then SELECT … FOR UPDATE SKIP LOCKED
-        PG-->>W1: circular 98 (its row is now locked)
-        W2->>PG: BEGIN, then SELECT … FOR UPDATE SKIP LOCKED
-        PG-->>W2: skips 98, gives circular 97
-        W1->>PG: save 98's OCR text, COMMIT
-        Note over PG: the COMMIT ends worker 1's transaction,<br/>so the row lock on 98 is gone
-        W2->>PG: done with 97: SELECT … FOR UPDATE SKIP LOCKED
-        PG-->>W2: circular 98 (status parsed, and nothing locks it)
-        Note over W1,W2: both now run Gemini on circular 98: double the calls,<br/>and the second one to save a verdict fails
-    end
-```
-
-Keeping one transaction open for the whole circular would avoid that, but it would hold a
-database transaction open through minutes of OCR and Gemini calls, and a failure halfway
-would throw away every step already done.
-
-**Why the advisory lock survives the commits.** It belongs to a **connection**, not to a
-transaction. The worker takes it on a connection of its own (`locks.held` in
-`backend/worker/locks.py`) and does the work on another. So the work can commit as often as
-it likes, and the lock stays held until the worker says `pg_advisory_unlock`:
-
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant L as lock connection
-        participant PG as Postgres
-        participant S as work session
-    end
-
-    rect rgb(13, 20, 36)
-        L->>PG: pg_try_advisory_lock(key of "circular/98"): held
-        S->>PG: save the OCR text, COMMIT
-        S->>PG: save the summary, COMMIT
-        S->>PG: save whether it applies, COMMIT
-        S->>PG: save each policy verdict, COMMIT
-        Note over L,S: the commits end the work session's transactions,<br/>not the lock: it stays held on its own connection
-        L->>PG: pg_advisory_unlock(key of "circular/98")
-    end
-```
-
-**When a worker dies.** Its connections close, and Postgres releases every lock those
-connections held, at once and by itself. Nothing is left stuck: the circular is still
-`new` or `parsed`, so on the next round another worker claims it and carries on from the
-last step that was saved.
-
-**Seeing the locks.** While workers are busy, this counts the locks each Postgres
-connection (`pid`) holds. Each key shows up split in two halves, as `classid` and `objid`:
-
-```bash
-docker compose exec postgres psql -U rci -d rci -c \
-  "select pid, count(*) from pg_locks where locktype = 'advisory' group by pid"
-```
+How the queue and the locks work, with diagrams: [The task queue](how_the_worker_works.md#5-the-task-queue-redis-streams)
+and [Locks](how_the_worker_works.md#7-locks-when-the-same-task-arrives-twice).
 
 ### Reading its log
 
-`docker compose logs -f worker` shows what the worker is doing. Each line means:
+`docker compose logs -f worker` shows what the workers are doing. Each line means:
 
 | Log line | What happened |
 |---|---|
-| `using gemini-… and gemini-embedding-001` | the worker started, and Gemini accepted the key and model names |
-| `#98 RBI: Designation of …` | it claimed circular 98 and started on it |
+| `worker 4b2f…-1: using gemini-… and gemini-embedding-001, waiting for tasks` | the worker started, and Gemini accepted the key and model names |
 | `#98 same PDF as #97: reusing its OCR text` | the PDF was already read for another circular, so no OCR |
 | `#98 parsed: 12408 chars` | OCR is done and the text is saved |
+| `#98 read: addressed to '…'` | the summary is saved; each company's assessment is queued |
 | `#98 vs POL-KYC v1 (similarity 0.74): GAP` | Gemini checked one policy: out of date, and a gap was opened (or `up to date`) |
-| `#98 analyzed: addressed to '…', applies to us: True, gaps opened: ['POL-KYC']` | the circular is finished |
+| `#98 for company 1: applies: True, gaps opened: ['POL-KYC']` | the circular is done for company 1 |
 | `embedded 1 policies (1 chunks) with gemini-embedding-001` | a new or edited policy was turned into an embedding |
-| `caught up: 2 new checks against 5 recent circulars, gaps opened: none` | new policies were checked against recent circulars |
-| `skipped 99 circulars published before 2026-08-28` | circulars older than 30 days were set aside |
-| `OCR or Gemini unavailable (…); retrying in 60s` | a service is down or rate-limited; it will try again |
-| `#98 failed` | the circular was marked failed; the error is on its page |
+| `POL-AML checked against 4 recent circulars of company 1, gaps opened: none` | a new policy was checked against the company's recent circulars |
+| `#98 skipped: published before 2026-08-28` | an old circular was set aside |
+| `OCR or Gemini unavailable (…); retrying circular.read in 60s` | a service is down or rate-limited; the task waits and tries again |
+| `took over task … from a worker that stopped` | a dead worker's task was picked up |
+| `reconciler: queued 3 tasks for unfinished work` | tasks that had gone missing were queued again |
+| `… failed for good` | the circular or assessment was marked failed; the error is on its page |
 
-A round with nothing to do prints nothing.
+A worker with nothing to do prints nothing.
 
 ### Common questions
 
-**Does it call Gemini every 60 seconds?** No. It only calls Gemini for real work: a new
-circular, a new or edited policy, a changed company description, or **Reprocess**. Otherwise a
-round is a few quick database reads.
+**Does it call Gemini every minute?** No. There's no timer at all: a worker only wakes up for
+a task, and only calls Gemini for real work: a new circular, a new or edited policy, a new
+company description, or **Reprocess**.
 
-**Do I need to restart it after adding a policy or changing the company?** No. It notices on
-its next round, within a minute.
+**Do I need to restart it after adding a policy or changing the company?** No. Saving queues a
+task, and a worker starts on it straight away.
 
 **Why wasn't my policy checked against a circular?** See
 [Why doesn't my new policy have a gap?](#why-doesnt-my-new-policy-have-a-gap).
@@ -605,52 +405,36 @@ sequenceDiagram
     box rgb(11, 16, 32)
         participant Site as Regulator site
         participant W as watcher
-        participant S3 as S3 (Floci)
+        participant Q as Redis
         participant DB as Postgres
         participant K as worker
-        participant O as ocr (GPU)
-        participant G as Gemini
+        participant X as OCR + Gemini
         participant P as Policy owner
     end
 
     rect rgb(13, 20, 36)
         W->>DB: already known? (source + source_key)
-        W->>Site: download the PDF
-        W->>S3: store rbi/sha256.pdf
+        W->>Site: download the PDF, store it in S3
         W->>DB: insert row, status new
-
-        Note over K: every 60 seconds
-        K->>DB: newest circular with status new
-        alt the same PDF was already read for another circular
-            K->>DB: copy its saved text
-        else
-            K->>S3: get the PDF
-            loop each page, up to 20
-                K->>O: page image (PNG)
-                O-->>K: page text
+        W->>Q: circular.read 98
+        Q-->>K: circular.read 98, at once
+        K->>X: OCR each page (unless the same PDF was read before)
+        K->>DB: save text (parsed)
+        K->>X: who is it for, what does it require?
+        K->>DB: save summary and embedding (read)
+        K->>DB: a pending assessment for each company
+        K->>Q: circular.assess, one per company
+        Q-->>K: circular.assess (your company, 98)
+        opt your company is described
+            K->>X: does it apply to your company?
+        end
+        opt it applies, with obligations
+            loop each of your 3 closest policies not judged before
+                K->>X: is this policy out of date?
+                K->>DB: save the verdict, and a gap if out of date
             end
         end
-        K->>DB: save text, status parsed
-
-        K->>G: who is it addressed to, what does it change and require?
-        G-->>K: addressed_to, summary, requirements
-        K->>DB: save them
-        K->>DB: read the company description
-        opt a description exists
-            K->>G: does it apply to this company?
-            G-->>K: applies_to_company, reason
-        end
-        alt applies to the company
-            K->>G: embed the circular (saved with it)
-            G-->>K: vector
-            Note over K: pick the 3 most similar policies from the same regulator
-            loop each of those policies not judged before
-                K->>G: is this policy out of date?
-                G-->>K: missing_from_policy, severity, draft_change
-                K->>DB: save the verdict, and open a gap if out of date
-            end
-        end
-        K->>DB: status analyzed
+        K->>DB: your assessment done
         P->>DB: sees the gap in the console, works it, closes it
     end
 ```
@@ -665,16 +449,15 @@ flowchart TB
         s0((" ")) -->|"watcher saves it"| c_new(["new"])
         c_new -->|"published more than<br/>30 days ago"| c_skipped(["skipped"])
         c_new -->|"OCR done"| c_parsed(["parsed"])
-        c_parsed -->|"Gemini done"| c_analyzed(["analyzed"])
+        c_parsed -->|"summary and<br/>embedding saved"| c_read(["read"])
         c_new -->|"error, see the<br/>error field"| c_failed(["failed"])
         c_parsed -->|"error, see the<br/>error field"| c_failed
         c_failed -->|"reprocess<br/>(no OCR text yet)"| c_new
         c_failed -->|"reprocess<br/>(OCR text kept)"| c_parsed
-        c_analyzed -->|"reprocess, or the company<br/>description changed"| c_parsed
-        c_analyzed --> e0(((" ")))
-        c_skipped --> e0
+        c_read -.->|"then, for each company"| a_pending(["pending"])
+        a_pending -->|"judged, policies checked"| a_done(["analysed"])
+        a_done -->|"reprocess, or the company<br/>description changed"| a_pending
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -684,26 +467,33 @@ flowchart TB
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    classDef queued fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class s0,e0 start
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class s0 start
     class c_new queued
-    class c_parsed data
-    class c_analyzed ok
+    class c_parsed,c_read data
     class c_failed bad
     class c_skipped muted
+    class a_pending svc
+    class a_done ok
+    classDef queued fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- **`new`**: saved by the watcher, waiting for the worker.
+The circular's own status is shared by every company:
+
+- **`new`**: saved by the watcher, its `circular.read` task queued.
 - **`parsed`**: OCR is done and the text is saved. Everything after this reads the saved
   text, so OCR never runs twice for a circular, whatever happens next.
-- **`analyzed`**: finished. The circular now has its addressee, a summary, its
-  requirements, `applicable` (true, false, or empty if no company description exists yet)
-  with the reason, and any gaps it opened.
+- **`read`**: summarised and embedded. What's left depends on the company.
 - **`failed`**: something went wrong that retrying didn't fix. The `error` field says
   what, and **Reprocess** in the console queues it again.
 - **`skipped`**: older than `LOOKBACK_DAYS` (30) when the worker first saw it. That stops a
   first start from working through years of old circulars.
+
+Then each company has its own **assessment** of a read circular: `pending` until it's been
+judged for that company, then done, with `applicable` (true, false, or empty if the company
+isn't described yet), the reason, and any gaps. The console shows a read circular as
+**In progress** while your assessment is pending and **Analysed** once it's done.
 
 ---
 
@@ -723,7 +513,8 @@ flowchart TD
         isPdf -->|no| skip["Log it and skip it.<br/>Tried again next round"]
         isPdf -->|yes| store["Store it in S3 as<br/>source/sha256.pdf"]
         store --> row["Insert a circulars row<br/>with status new"]
-        row --> next
+        row --> task[["Queue a<br/>circular.read task"]]
+        task --> next
         skip --> next
     end
 
@@ -740,6 +531,7 @@ flowchart TD
     class known,isPdf ask
     class skip bad
     class store,row data
+    class task queue
     class next muted
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
@@ -757,7 +549,9 @@ Things worth knowing:
 - **Politeness.** Every request waits 1.5 seconds first, and retries up to 3 times on a
   network error, a 429 or a 5xx.
 - **Nothing half-saved.** The row is inserted only after the PDF is safely in S3, so a
-  failure simply means "try again next round".
+  failure simply means "try again next round". The task is queued only after the row is
+  saved, so a worker never gets a circular it can't find; if Redis is down at that moment,
+  the worker's reconciler queues it later.
 - **The PDF's hash is its name** (`rbi/<sha256>.pdf`), so the same file is never stored
   twice.
 
@@ -818,9 +612,10 @@ flowchart LR
 
 ## 8. Step 3: the worker decides what the circular means for us
 
-This is where the thinking happens. The worker asks Gemini three kinds of question. Each
-answer comes back as **JSON matching a Pydantic model** (LangChain's
-`with_structured_output`), never as free text the code would have to parse.
+This is where the thinking happens. The worker asks Gemini three kinds of question. The
+first is asked **once per circular**; the other two **once per company** (in its
+`circular.assess` task). Each answer comes back as **JSON matching a Pydantic model**
+(LangChain's `with_structured_output`), never as free text the code would have to parse.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -828,19 +623,19 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         text["Circular text"] --> q1["Gemini: who is it addressed to,<br/>what does it change,<br/>what does it require?"]
-        q1 --> described{"Has the company<br/>been described?"}
-        described -->|no| doneUnknown["analyzed<br/>applicable = not checked, no gaps"]
+        q1 --> described{"For each company:<br/>has it been described?"}
+        described -->|no| doneUnknown["done for this company<br/>applicable = not checked, no gaps"]
         described -->|yes| q2["Gemini: does it apply to<br/>this company? And why?"]
         q2 --> applies{"Applies?"}
-        applies -->|no| doneNo["analyzed<br/>applicable = false, no gaps"]
+        applies -->|no| doneNo["done for this company<br/>applicable = false, no gaps"]
         applies -->|yes| anyReq{"Any obligations?"}
-        anyReq -->|"no (informational)"| doneInfo["analyzed<br/>no gaps"]
+        anyReq -->|"no (informational)"| doneInfo["done for this company<br/>no gaps"]
         anyReq -->|yes| match["Pick the 3 closest policies<br/>(same regulator, by embedding similarity)"]
         match --> q3["For each of the 3 — Gemini:<br/>is this policy out of date?<br/>What's missing? Draft the new wording"]
         q3 --> impacted{"Out of date?"}
         impacted -->|yes| gap["Open a gap for the policy owner,<br/>due date by severity"]
         impacted -->|no| ok["No gap for this policy"]
-        gap --> done["analyzed"]
+        gap --> done["done for this company"]
         ok --> done
     end
 
@@ -876,10 +671,11 @@ so a circular and policy pair never get two tickets and never cost two calls.
 | 3 | Is this policy out of date? | Your company description, the circular's addressee, summary and requirements, the policy's text and its controls | `missing_from_policy`, `impacted`, `severity`, `affected_controls[]`, `draft_change` |
 
 The company description is **yours**. It's written on the console's **Company** page and
-stored in the `company` table, with no built-in default. Saving a changed description clears
-every circular's "does it apply?" answer and sends the analysed ones back to `parsed`. The
-worker then asks question 2 again, and only question 2: the OCR text, the summaries and the
-policy verdicts don't depend on the description, so they're kept.
+stored in the `companies` table, with no built-in default. Saving a changed description
+clears **your** "does it apply?" answers (your assessments go back to `pending`) and queues a
+`company.refresh`. The worker then asks question 2 again for you, and only question 2: the
+OCR text, the summaries and the policy verdicts don't depend on the description, so they're
+kept. Other companies' answers are never touched.
 
 ### Work that's done once, and kept
 
@@ -889,14 +685,14 @@ Everything slow or paid for is saved the first time and reused after that:
 |---|---|---|
 | OCR of the PDF (the slowest step) | `circulars.text` | never. A second circular with the same PDF copies it |
 | Question 1: what does it say? | `circulars.addressed_to`, `summary`, `requirements` | you press **Reprocess** |
-| Question 2: does it apply to us? | `circulars.applicable`, `applies_reason` | you change the company description, or press **Reprocess** |
+| Question 2: does it apply to us? | `assessments.applicable`, `applies_reason` (per company) | you change your company description, or press **Reprocess** |
 | The circular's embedding | `circulars.embedding` | its summary changes, or you change the embedding model |
 | A policy's embeddings | `policies.embeddings` | its title or text is edited, or you change the embedding model |
 | Question 3: is this policy out of date? | `policy_checks` (and a gap if it is) | the policy's text changes (a new version), or **Reprocess** re-asks the "up to date" ones |
 
-> ✅ **Nothing is done twice.** A restart, an outage halfway through, a new policy or a
-> changed company description never repeats a call that already succeeded. A quiet round,
-> with nothing new anywhere, makes no OCR or Gemini call at all.
+> ✅ **Nothing is done twice.** A restart, an outage halfway through, a task delivered
+> twice, a new policy or a changed company description never repeats a call that already
+> succeeded. With no task in the queue, the worker makes no call at all.
 
 ### How the closest policies are found
 
@@ -956,28 +752,28 @@ Each gap starts its history with one event: `agent` `opened` it.
 
 ## 9. When you add or edit a policy
 
-Circulars aren't the only trigger. When you add a policy, the worker checks it against the
-circulars of the **last 30 days** that apply to the company, so a library loaded today still
-finds the gaps left by last week's circulars. From then on, every new circular is checked
-against it too.
+Circulars aren't the only trigger. When you add a policy, the worker checks it against
+your company's circulars of the **last 30 days** that apply to you, so a library loaded today
+still finds the gaps left by last week's circulars. From then on, every new circular is
+checked against it too.
 
-> 💡 **No restart needed.** The worker notices a new or edited policy on its next round,
-> within a minute.
+> 💡 **No restart, no waiting.** Saving a policy queues a `policy.check` task, and a worker
+> starts on it straight away.
 
 In short, for a new policy:
 
-1. The api saves it as version 1, with no embeddings yet.
-2. Within 60 seconds the worker embeds it (turns its text into vectors, see
+1. The api saves it under your company as version 1, with no embeddings yet, and queues a
+   `policy.check` task.
+2. A worker takes the task at once and embeds the policy (turns its text into vectors, see
    [section 8](#how-the-closest-policies-are-found)).
-3. The worker lists the recent circulars that apply to the company and have obligations.
+3. The worker lists your recent circulars that apply to you and have obligations.
 4. For each one it ranks every policy by similarity. Where the new policy is among the 3
    closest, Gemini is asked whether the policy is now out of date.
 5. Each answer is saved. An out-of-date policy gets a gap ticket for its owner, with a draft
    of the new wording.
 
-The worker handles a new policy in the first steps of its round (see
-[One round, every 60 seconds](#one-round-every-60-seconds)); the rest of this section
-follows that policy through.
+The same task runs whenever you save the policy again. The rest of this section follows a
+new policy through.
 
 ### Step by step: what happens to a new policy
 
@@ -987,37 +783,29 @@ sequenceDiagram
     autonumber
     box rgb(11, 16, 32)
         participant U as You
-        participant F as console
         participant A as api
+        participant Q as Redis
         participant DB as Postgres
         participant K as worker
         participant G as Gemini
     end
 
     rect rgb(13, 20, 36)
-        U->>F: New policy or Import JSON
-        F->>A: POST /policies
+        U->>A: POST /policies (New policy or Import JSON)
         A->>DB: save as version 1, no embeddings
-        A-->>F: 201 Created
-        Note over K: next round, within 60 s
-        K->>DB: policies with no embeddings?
-        DB-->>K: the new policy
+        A->>Q: policy.check (your company, the policy)
+        A-->>U: 201 Created
+        Q-->>K: policy.check, at once
         K->>G: embed it, in 5,000-character chunks
-        G-->>K: one vector per chunk
         K->>DB: save the vectors
-        Note over K: library changed: catch up
-        K->>DB: recent circulars that apply
-        DB-->>K: circulars and their vectors
-        Note over K: rank the policies for each<br/>circular (no Gemini call)
+        K->>DB: your recent circulars that apply
+        Note over K: rank your policies for each<br/>circular (no Gemini call)
         loop each circular: new policy in its top 3, pair never judged
             K->>G: is the policy out of date?
             G-->>K: what's missing, severity, draft
-            K->>DB: save the verdict (policy_checks)
-            opt out of date
-                K->>DB: open a gap for the owner
-            end
+            K->>DB: save the verdict, and a gap if out of date
         end
-        U->>F: gap under Gaps, verdict on the circular
+        K->>Q: XACK: done
     end
 ```
 
@@ -1035,10 +823,10 @@ whether this policy is one of the right ones to ask about.
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        all(["Every circular in the database"]) --> row1
+        all(["Every circular"]) --> row1
         subgraph row1["Is the circular worth checking?"]
             direction LR
-            a["Analysed"] --> b["Applies to<br/>the company"] --> c["Published in<br/>the last 30 days"] --> d["Creates<br/>obligations"]
+            a["Analysed for<br/>your company"] --> b["Applies to<br/>your company"] --> c["Published in<br/>the last 30 days"] --> d["Creates<br/>obligations"]
         end
         row1 --> row2
         subgraph row2["Is this policy one to ask about?"]
@@ -1066,15 +854,15 @@ flowchart TD
 
 | If it fails… | It means | Setting |
 |---|---|---|
-| Analysed | the circular is still waiting, failed, or was skipped as too old | |
+| Analysed for your company | the circular is still waiting, failed, or was skipped as too old | |
 | Applies to the company | Gemini judged it's for other kinds of entity, or the company isn't described yet | |
-| Published in the last 30 days | it's older than the catch-up window | `LOOKBACK_DAYS` |
+| Published in the last 30 days | it's older than the look-back window | `LOOKBACK_DAYS` |
 | Creates obligations | it's informational (a repeal, a notice), so there's nothing a policy could miss | |
 | Lists the circular's regulator | the policy isn't tagged with RBI, SEBI or IRDAI as needed | |
 | Among the 3 closest | other policies fit this circular better | `MATCH_TOP_K` |
 | Never judged | Gemini already answered for this version of the policy, or a gap is already open | |
 
-The "3 closest" test is relative. Every policy that lists the circular's regulator competes
+The "3 closest" test is relative. Every one of your policies that lists the circular's regulator competes
 for the 3 places, by how close its best chunk is to the circular (see
 [How the closest policies are found](#how-the-closest-policies-are-found)). With 3 or fewer
 policies for that regulator, all of them are checked. With 50, only the 3 most relevant are,
@@ -1143,7 +931,7 @@ circulars from the last 30 days:
 
 The worker then:
 
-1. **Embeds** POL-DRP (3,057 characters, so 1 chunk) about 30 seconds after you save it.
+1. **Embeds** POL-DRP (3,057 characters, so 1 chunk) a few seconds after you save it.
 2. **Ranks** the 2 policies for the one eligible circular: POL-DRP scores 0.58, POL-DLP 0.55.
    With only 2 policies, both are in the top 3.
 3. **Asks Gemini** about POL-DRP. POL-DLP was already judged for this circular, so it isn't
@@ -1155,7 +943,7 @@ It's all visible in the worker's log:
 ```text
 INFO pipeline embedded 1 policies (1 chunks) with gemini-embedding-001
 INFO pipeline #98 vs POL-DRP v1 (similarity 0.58): up to date
-INFO pipeline caught up: 1 new checks against 1 recent circulars, gaps opened: none
+INFO pipeline POL-DRP checked against 1 recent circulars of company 1, gaps opened: none
 ```
 
 And in the console: the circular's page lists both policies under **Checked against your
@@ -1165,8 +953,8 @@ as soon as it's analysed.
 
 ### After that: every new circular includes the policy
 
-The catch-up above only looks back. Going forward, the new policy is simply part of the
-library: each new circular that applies ranks all the policies (the new one included) and
+The check above only looks back. Going forward, the new policy is simply part of your
+library: each new circular that applies to you ranks all your policies (the new one included) and
 the 3 closest are judged, as in [section 8](#8-step-3-the-worker-decides-what-the-circular-means-for-us).
 
 ```mermaid
@@ -1247,16 +1035,15 @@ flowchart TD
 To see what the worker did, and when:
 
 ```bash
-docker compose logs worker | grep -E "embedded|caught up| vs "
+docker compose logs worker | grep -E "embedded|checked against| vs "
 ```
 
 ### Reliability
 
-- **Each verdict is saved as soon as Gemini gives it.** If Gemini fails halfway, the next
-  round carries on from the next unjudged pair; nothing is asked twice.
-- **Nothing changed, nothing done.** The worker notes what the company, the library and the
-  recent circulars looked like when it last finished, and skips the catch-up while they're
-  the same.
+- **Each verdict is saved as soon as Gemini gives it.** If Gemini fails halfway, the task
+  is retried and carries on from the next unjudged pair; nothing is asked twice.
+- **Two quick edits, both checked.** A second `policy.check` for the same policy waits for
+  the first to finish, then checks the latest version.
 - **One ticket per pair.** An edit never opens a second gap for the same circular and policy.
 - **Changing `GEMINI_EMBEDDING_MODEL_NAME`** re-embeds every policy and circular
   automatically. Vectors from two different models can't be compared, so the worker tracks
@@ -1266,29 +1053,33 @@ docker compose logs worker | grep -E "embedded|caught up| vs "
 
 ## 10. The data
 
-Seven tables, all defined in `backend/common/common/models.py`:
+Ten tables, all defined in `backend/common/common/models.py`:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
     subgraph canvas[" "]
         direction LR
-        CO["<b>company</b><br/>one row: your description<br/>profile · updated_at"]
-        CI["<b>circulars</b><br/>source · source_key · title · pdf_url · s3_key<br/>published_at · status: new, parsed, analyzed, failed, skipped<br/>text: the OCR output · addressed_to · summary<br/>requirements · embedding<br/>applicable: empty until judged · applies_reason · error"]
-        PO["<b>policies</b><br/>code, e.g. POL-KYC · title · owner<br/>regulators, e.g. RBI, SEBI · text<br/>version: +1 on every text change<br/>embeddings: one per 5,000-character chunk"]
+        CO["<b>companies</b><br/>name · profile: the description"]
+        US["<b>users</b><br/>company_id · email · name<br/>password_hash (scrypt)"]
+        CI["<b>circulars</b> (shared)<br/>source · source_key · title · pdf_url · s3_key<br/>published_at · status: new, parsed, read, failed, skipped<br/>text: the OCR output · addressed_to · summary<br/>requirements · embedding · error"]
+        AS["<b>assessments</b><br/>company_id · circular_id<br/>status: pending, done, failed<br/>applicable · applies_reason · error"]
+        PO["<b>policies</b><br/>company_id · code, e.g. POL-KYC · title · owner<br/>regulators, e.g. RBI, SEBI · text<br/>version: +1 on every text change<br/>embeddings: one per 5,000-character chunk"]
         CT["<b>controls</b><br/>code, e.g. CTL-KYC-01 · policy_id<br/>description · owner · frequency"]
         PC["<b>policy_checks</b><br/>circular_id · policy_id · policy_version<br/>similarity · impacted: true = a gap was opened"]
-        GA["<b>gaps</b><br/>circular_id · policy_id · policy_version<br/>title · impact: what is missing · draft_change<br/>affected_controls · severity: low, medium, high<br/>owner · status · due_date · closed_at"]
-        GE["<b>gap_events</b><br/>gap_id · at · actor: agent, system or a person<br/>action · note"]
-        CO -.->|"decides which apply"| CI
-        CI -->|"1 to many: can open"| GA
-        PO -->|"1 to many: out of date in"| GA
-        PO -->|"1 to many: has"| CT
-        GA -->|"1 to many: history"| GE
-        CI -->|"1 to many: checked in"| PC
-        PO -->|"1 to many: checked in"| PC
+        GA["<b>gaps</b><br/>company_id · circular_id · policy_id · policy_version<br/>title · impact · draft_change · affected_controls<br/>severity · owner · status · due_date · closed_at"]
+        GE["<b>gap_events</b><br/>gap_id · at · actor: agent, system or a user's email<br/>action · note"]
+        CO -->|"has"| US
+        CO -->|"judges, in"| AS
+        CI -->|"judged by each company"| AS
+        CO -->|"has"| PO
+        PO -->|"has"| CT
+        CI -->|"checked in"| PC
+        PO -->|"checked in"| PC
+        PO -->|"out of date in"| GA
+        CI -->|"can open"| GA
+        GA -->|"history"| GE
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -1298,17 +1089,25 @@ flowchart LR
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class CO start
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class CO,US start
     class CI,PO,CT data
+    class AS svc
     class PC ok
     class GA bad
     class GE muted
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
+The tenth, `app_secrets`, holds secrets the services make for themselves, such as the key
+that signs login tokens when `JWT_SECRET` isn't set.
+
 Rules the database enforces:
 
 - A circular is unique by `(source, source_key)`, so the watcher can't save it twice.
+- An assessment is unique by `(company_id, circular_id)`: one answer per company.
+- A policy code is unique within a company, a control code within its policy, and an email
+  across all users.
 - A gap is unique by `(circular_id, policy_id)`: one ticket per circular and policy.
 - A check is unique by `(circular_id, policy_id, policy_version)`: Gemini judges each pair
   once per version of the policy.
@@ -1316,7 +1115,9 @@ Rules the database enforces:
 
 Tables are created at startup by every service (`init_db`), and a column added to a model
 later is added to the existing table (nothing is ever dropped). A Postgres advisory lock
-stops two services that start together from both changing the schema.
+stops two services that start together from both changing the schema. A database from before
+companies existed is moved into **company 1** once, at startup: its description, policies,
+gaps and verdicts are kept; give it a login with `backend/api/manage.py add-user`.
 
 ---
 
@@ -1357,8 +1158,8 @@ flowchart TB
 ```
 
 - **Every change is an event.** Changing the status, owner or due date, or adding a comment,
-  adds a `gap_events` row recording who did it (the name you enter under "Signed in as"),
-  when, and why.
+  adds a `gap_events` row recording who did it (the signed-in user's email), when, and
+  why.
 - **Closing or dismissing needs a note.** The API refuses without one, so the history always
   says why a gap ended.
 - **Editing the policy is noted on its gaps.** When a policy's text changes, each of its open
@@ -1402,7 +1203,10 @@ flowchart LR
 ## 12. The API and the console
 
 The console is plain HTML and JavaScript. It talks to the API through nginx, so the browser
-only ever sees one address.
+only ever sees one address. You sign in with your email and password; the API answers with a
+**login token** (a JWT naming you and your company, valid for `TOKEN_HOURS`), and the console
+sends it with every call. Every query the API runs is limited to your company: another
+company's policy, gap or verdict is simply "not found".
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -1415,9 +1219,10 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        B->>N: GET /api/gaps?status=open
+        B->>N: GET /api/gaps?status=open (Authorization: Bearer token)
         N->>A: GET /gaps?status=open (the /api prefix removed)
-        A->>DB: SELECT gaps
+        Note over A: check the token: user 7, company 1
+        A->>DB: SELECT gaps WHERE company_id = 1 AND status = 'open'
         DB-->>A: rows
         A-->>N: JSON
         N-->>B: JSON, drawn as the gaps list
@@ -1426,15 +1231,17 @@ sequenceDiagram
 
 | Area | Endpoints |
 |---|---|
-| Health and counts | `GET /health` · `GET /stats` |
-| Company | `GET /company` · `PUT /company` (a change sends analysed circulars back to be judged again) |
+| Health and counts | `GET /health` (no login) · `GET /stats` (your company's counts) |
+| Accounts | `POST /auth/signup` (a company and its first user) · `POST /auth/login` · `GET /auth/me` · `PUT /auth/password` · `GET /users` · `POST /users` (add a teammate) |
+| Company | `GET /company` · `PUT /company` (name and description; a new description queues your circulars to be judged again) |
 | Circulars | `GET /circulars` · `GET /circulars/{id}` (with its gaps and the policies it was checked against) · `GET /circulars/{id}/text` · `POST /circulars/{id}/reprocess` |
 | Policies | `GET /policies` · `POST /policies` · `GET /policies/{id}` · `PUT /policies/{id}` · `POST /policies/{id}/controls` |
 | Gaps | `GET /gaps` (filter by status, owner, policy, overdue) · `GET /gaps/{id}` (with its circular, policy and history) · `PATCH /gaps/{id}` · `POST /gaps/{id}/comments` |
 
-The API never calls Gemini or OCR. It only reads and writes Postgres. Anything that needs
-the agent, like reprocessing a circular or checking a new policy, works by changing the
-data (a status, or a cleared embedding), which the worker notices on its next round.
+The API never calls Gemini or OCR. Anything that needs the agent, like reprocessing a
+circular or checking a new policy, works in two moves: the API saves the change in Postgres,
+then queues a task on the Redis stream, which a worker picks up at once. If Redis is down,
+the change is still saved, and the worker's reconciler queues it later.
 
 Lists never read the heavy columns (the OCR text, the embeddings) from the database, since
 the console never shows them; the OCR text has its own endpoint.
@@ -1445,23 +1252,22 @@ The interactive API docs are at http://localhost:8000/docs.
 
 ## 13. When things go wrong
 
-> 🛡️ **The worker never loses work.** The question it asks about every error is: is the
-> circular to blame, or the service?
+> 🛡️ **The worker never loses work.** A task is acknowledged only when it's finished, and
+> the question it asks about every error is: is the work to blame, or the service?
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        err["An error while processing a circular"] --> down{"Service down or rate-limited?<br/>(can't connect, Gemini 429)"}
-        down -->|yes| wait["Stop this round.<br/>Try again in 60 s, for as long as it takes.<br/>The circular keeps its status"]
+        err["An error while doing a task"] --> down{"Service down or rate-limited?<br/>(can't connect, Gemini 429)"}
+        down -->|yes| wait["Wait 60 s and try again,<br/>for as long as it takes.<br/>The task stays unacknowledged"]
         down -->|no| crash{"Service hiccup?<br/>(5xx, timeout, dropped connection,<br/>a reply not in the asked-for JSON)"}
-        crash -->|yes| count{"Third time for<br/>this circular?"}
-        count -->|no| retry["Stop this round.<br/>Retry the circular in 60 s"]
+        crash -->|yes| count{"Third time for<br/>this task?"}
+        count -->|no| retry["Retry the task"]
         count -->|yes| failed
-        crash -->|"no (e.g. a 400)"| failed["Mark it failed,<br/>with the error saved.<br/>Move on to the next circular"]
+        crash -->|"no (e.g. a 400)"| failed["Mark the circular (or your assessment)<br/>failed, with the error saved.<br/>Copy the task to rci:dead, acknowledge it"]
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -1471,6 +1277,7 @@ flowchart TD
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class err,failed bad
     class down,crash,count ask
     class wait,retry muted
@@ -1484,20 +1291,17 @@ flowchart TD
 | Gemini or OCR returned a 5xx a few times | the circular shows `failed`, with the error | **Reprocess** it in the console |
 | A wrong API key or model name | the worker stops at startup: "Gemini rejected the configuration" | fix `.env`, then restart the worker |
 | A PDF link is broken | the watcher logs "failed" for that one | nothing: it's tried again next round |
+| Redis restarted or was down | the worker logs "Redis unavailable; retrying" | nothing: tasks on disk survive, and the reconciler queues anything missed |
+| A worker died mid-task | nothing | nothing: its task is taken over (after a restart at once, otherwise after 30 minutes) |
 
 LangChain first retries Gemini's rate limits and server errors itself (3 times). Only after
 that does the worker's own retry take over. LangChain wraps Gemini's errors in its own
 classes, so the worker reads the HTTP code from the original error underneath
 (`gemini_status` in `backend/worker/failures.py`, which holds all these rules).
 
-> 🔒 **Workers never step on each other.** However many run (several on purpose, a rolling
-> update, or one started by hand beside the container), each circular is claimed by one
-> worker through a Postgres lock, and a worker that dies releases its claims. See
-> [Running several workers](#running-several-workers).
-
-Checking new policies against recent circulars follows the same rules. An error there that
-isn't a service problem is logged, and that circular is left alone until the worker restarts,
-so the worker keeps processing everything else instead of stopping.
+> 🔒 **Workers never step on each other.** However many run, the consumer group gives each
+> task to one worker, and the work itself is locked in Postgres, so the same work queued
+> twice is still done once. See [Running several workers](#running-several-workers).
 
 ---
 
@@ -1545,9 +1349,12 @@ Settings you're most likely to change:
 |---|---|---|
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash` | the model that answers the three questions |
 | `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | the model used for policy matching (changing it re-embeds every policy and circular) |
-| `LOOKBACK_DAYS` | 30 | older circulars are skipped; new policies are checked against this window |
+| `LOOKBACK_DAYS` | 30 | older circulars are skipped; new policies and new companies are checked against this window |
 | `MATCH_TOP_K` | 3 | how many policies Gemini checks per circular |
 | `WORKERS` | 1 | how many workers run side by side ([how they share the work](#running-several-workers)) |
+| `RECONCILE_MINUTES` | 15 | how often one worker looks in Postgres for work whose task went missing |
+| `JWT_SECRET` | empty: a key made on first start, kept in Postgres | signs login tokens |
+| `TOKEN_HOURS` | 12 | how long a login lasts |
 | `OCR_MAX_PAGES` | 20 | how many pages of each PDF are read |
 | `WATCH_INTERVAL_MINUTES` | 60 | how often the regulator sites are checked |
 
@@ -1563,8 +1370,9 @@ flowchart TB
     subgraph canvas[" "]
         direction TB
         subgraph common["backend/common (shared)"]
-            models["models.py<br/>the 7 tables"]
-            dbpy["db.py<br/>make_engine, init_db"]
+            models["models.py<br/>the 10 tables"]
+            dbpy["db.py<br/>make_engine, init_db,<br/>migrations, lock_key"]
+            queuepy["queue.py<br/>the task stream"]
         end
         subgraph watcher["backend/watcher"]
             wmain["main.py<br/>the hourly loop"] --> sources["sources.py<br/>RBI, SEBI, IRDAI"]
@@ -1572,22 +1380,27 @@ flowchart TB
             wmain --> wstore["storage.py<br/>PDF to S3"]
         end
         subgraph worker["backend/worker"]
-            kmain["main.py<br/>the loop"] --> pipeline["pipeline.py<br/>parse, analyze, match,<br/>embed_policies, check_recent"]
+            kmain["main.py<br/>the task loop"] --> pipeline["pipeline.py<br/>read_circular, assess,<br/>check_new_policy, refresh_company"]
             kmain --> failures["failures.py<br/>wait, retry or give up"]
             pipeline --> ocrpy["ocr.py<br/>PDF to text"]
             pipeline --> llm["llm.py<br/>the Gemini prompts"]
             pipeline --> kstore["storage.py<br/>PDF from S3"]
         end
         subgraph api["backend/api"]
-            amain["main.py<br/>app, /health, /stats"] --> routes["routes/<br/>circulars, policies, gaps"]
-            amain --> database["database.py<br/>session per request"]
+            amain["main.py<br/>app, /health, /stats"] --> routes["routes/<br/>auth, company, circulars,<br/>policies, gaps"]
+            amain --> database["database.py<br/>session, enqueue"]
+            routes --> authpy["auth.py<br/>passwords, tokens"]
         end
         wmain -.-> models
         kmain -.-> models
         routes -.-> models
+        wmain -.-> queuepy
+        kmain -.-> queuepy
+        database -.-> queuepy
     end
 
     class models,dbpy data
+    class queuepy queue
     class wmain,kmain,amain svc
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1598,6 +1411,7 @@ flowchart TB
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     style common fill:#14123a,stroke:#818cf8
     style watcher fill:#0c1a24,stroke:#2dd4bf
     style worker fill:#0c1a24,stroke:#2dd4bf
@@ -1610,10 +1424,13 @@ flowchart TB
 | which sites are watched, or how they're scraped | `backend/watcher/sources.py` |
 | what Gemini is asked, or the shape of its answers | `backend/worker/llm.py` (the prompts and Pydantic models sit side by side) |
 | the order of the steps, how policies are picked, the due dates | `backend/worker/pipeline.py` |
-| what's retried and what's marked failed | `backend/worker/failures.py` (the rules) and `main.py` (the loop) |
+| what's retried and what's marked failed | `backend/worker/failures.py` (the rules) and `main.py` (`run_task`) |
+| the task types, or how tasks are queued and read | `backend/common/common/queue.py`, `backend/worker/main.py` |
+| sign-up, login, tokens, teammates | `backend/api/auth.py`, `backend/api/routes/auth.py` |
+| a login for a company from the command line | `backend/api/manage.py` |
 | how PDFs are turned into images, or how OCR output is cleaned | `backend/worker/ocr.py` |
 | the vLLM flags for the OCR model | `backend/ocr/Dockerfile` |
-| an endpoint | `backend/api/routes/` (`company.py`, `circulars.py`, `policies.py`, `gaps.py`) |
+| an endpoint | `backend/api/routes/` (`auth.py`, `company.py`, `circulars.py`, `policies.py`, `gaps.py`) |
 | a table or a column | `backend/common/common/models.py` (then rebuild all three services) |
 | the console | `frontend/js/views/` (one module per page) and `frontend/css/` (see `frontend/README.md`) |
 
@@ -1629,22 +1446,35 @@ docker compose up -d --build
 docker compose logs -f worker        # watch the agent think
 ```
 
-Then open http://localhost:8080.
+Then open http://localhost:8080 and **create an account for your company**.
+
+**…sign in to the data from before logins existed?** It's company 1. Give it a login:
+
+```bash
+cd backend/api && uv run python manage.py add-user you@company.com "Your Name" --company 1
+```
+
+It asks for a password (or `--generate` makes one). `manage.py companies` lists every company
+and its users.
+
+**…add a teammate?** On the **Company** page, under **Team**: their name, email and a first
+password. They see everything your company sees, and can change their password on the same
+page.
 
 **…tell the agent who my company is?** In the console, open **Company** and write a few
 sentences. Say what kind of entity it is, list every licence and business with its regulator,
-and say what it's *not* when that's easy to confuse ("not a small finance bank"). Within a
-few minutes every analysed circular has been judged against it, each with a one-sentence
+and say what it's *not* when that's easy to confuse ("not a small finance bank"). The
+workers start at once: every recent circular is judged against it, each with a one-sentence
 reason.
 
 **…load my company's policies?** In the console, go to **Policies**, then **Import JSON**
 (the file format is shown on that page and in `frontend/README.md`), or add them one at a
-time with **New policy**. Within a minute the worker embeds them and checks them against the
-last 30 days of circulars.
+time with **New policy**. A worker embeds each one as soon as it's saved and checks it
+against your last 30 days of circulars.
 
 **…see why a circular has no gaps?** Open it in the console:
 
-- **"Not checked for us"**: nobody has described the company yet. Do that on the
+- **"Not checked"**: nobody has described the company yet. Do that on the
   **Company** page.
 - **"Not for us"**: Gemini decided it's addressed to other kinds of entity. The reason is
   shown beside it. If it's wrong, make your company description more precise.
@@ -1652,10 +1482,11 @@ last 30 days of circulars.
 - **"No policy in the library was found out of date"**: the closest policies already comply,
   or you don't have a policy on that subject yet.
 
-**…run a circular through the agent again?** Press **Reprocess** on the circular, or
-`curl -X POST localhost:8000/circulars/<id>/reprocess`. Gemini reads the saved OCR text
-again (no new OCR), judges it and re-checks the policies it had found up to date. Gaps
-already opened are kept and never duplicated.
+**…run a circular through the agent again?** Press **Reprocess** on the circular. For a
+circular that's been read, only **your company's** answer is redone: Gemini judges it again
+for you and re-checks the policies it had found up to date, with no new OCR. A failed one is
+read again (OCR only if no text was saved). Gaps already opened are kept and never
+duplicated.
 
 **…find out why a new policy has no gap?** Follow the chart in
 [Why doesn't my new policy have a gap?](#why-doesnt-my-new-policy-have-a-gap). Most often
@@ -1668,25 +1499,36 @@ Gemini checked it and found it already up to date, which the circular's page sho
 
 ```bash
 docker compose logs worker | grep pipeline
+# #98 read: addressed to 'All Commercial Banks'
 # #98 vs POL-KYC v1 (similarity 0.74): GAP
-# #98 analyzed: addressed to 'All Commercial Banks', applies to us: True, gaps opened: ['POL-KYC']
+# #98 for company 1: applies: True, gaps opened: ['POL-KYC']
 ```
 
 **…look at the raw data?**
 
 ```bash
-curl localhost:8000/stats
-curl localhost:8000/circulars/98 | python3 -m json.tool
-curl localhost:8000/circulars/98/text            # the OCR output
-docker compose exec postgres psql -U rci -d rci -c "select id, status, applicable from circulars order by id desc limit 10"
+TOKEN=$(curl -s localhost:8000/auth/login -H 'Content-Type: application/json' \
+  -d '{"email": "you@company.com", "password": "…"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+curl -H "Authorization: Bearer $TOKEN" localhost:8000/stats
+curl -H "Authorization: Bearer $TOKEN" localhost:8000/circulars/98 | python3 -m json.tool
+curl -H "Authorization: Bearer $TOKEN" localhost:8000/circulars/98/text   # the OCR output
+docker compose exec postgres psql -U rci -d rci -c \
+  "select circular_id, status, applicable from assessments where company_id = 1 order by circular_id desc limit 10"
+```
+
+**…see the task queue?**
+
+```bash
+docker compose exec redis redis-cli XINFO GROUPS rci:tasks   # lag: waiting, pending: being worked on
+docker compose exec redis redis-cli XRANGE rci:dead - +      # tasks that failed for good
 ```
 
 **…run one service on my machine instead of in Docker?**
 
 ```bash
-docker compose up -d postgres ocr    # what it depends on
+docker compose up -d postgres redis ocr    # what it depends on
 cd backend/worker && cp .env.example .env && uv sync
-uv run python main.py --once         # one pass through the queue, then exit
+uv run python main.py --once               # work until the queue is empty, then exit
 ```
 
 ---
@@ -1700,8 +1542,13 @@ uv run python main.py --once         # one pass through the queue, then exit
 | **Control** | A regular check that puts a policy into practice, e.g. "screen customers against sanctions lists daily" |
 | **Gap** | A ticket saying "this policy is out of date because of this circular", with a draft of the fix |
 | **Gap event** | One line of a gap's history: opened, status changed, reassigned, commented, policy updated |
+| **Company** | One organisation using the app, with its own users, description, policies and gaps. Circulars are shared by all |
 | **Company description** | A few sentences you write on the console's Company page saying what kind of entity the company is. There's no default |
+| **Assessment** | One company's answer for one circular: pending, then done, with whether it applies |
 | **Applicable** | Whether a circular applies to the company you described. Empty means "not checked", because no description exists yet |
+| **Task** | A small message on the Redis stream saying what to work on, e.g. `circular.read 98`. The data stays in Postgres |
+| **Stream, consumer group** | Redis's append-only list of tasks, and the group of workers reading it, which hands each task to one of them |
+| **Login token** | A signed JWT the api gives you at sign-in, naming you and your company, sent with every call |
 | **Requirements** | The concrete obligations Gemini found in a circular |
 | **OCR** | Optical character recognition: reading text from an image of a page |
 | **Embedding** | A list of numbers that represents a text's meaning, so similar texts can be found by arithmetic |

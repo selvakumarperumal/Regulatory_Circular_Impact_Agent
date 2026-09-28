@@ -3,6 +3,10 @@
 The compliance desk: a console over the backend's API. It's plain HTML, CSS and JavaScript,
 with no build step and no dependencies.
 
+You sign in first. **Sign in** and **Create an account** (a new company and its first user)
+are the only pages shown before that; everything after shows only your company's data. The
+sidebar shows who you are, your company, and a sign-out button.
+
 Every list is a table, and every gap, circular and policy has its own page. The content is on
 the left, and a sidebar holds its properties and actions. Breadcrumbs at the top lead back to the
 list, with its filters as you left them.
@@ -12,12 +16,13 @@ list, with its filters as you left them.
 | **Overview** | A dashboard: your regulatory exposure (gaps to close, by severity) with the setup steps or headline numbers, KPI cards with 30-day trends, exposure per policy, what's due next and the latest circulars. Every card opens its filtered list |
 | **Gaps** | A table you can filter by status, owner or overdue. A gap's page shows what the policy is missing, the proposed wording (with Copy) and the activity, with a comment box. Its sidebar changes the status, owner or due date |
 | **Circulars** | A table you can filter by regulator and status, and search by title or addressee. A circular's page shows the summary, what it requires, the gaps it opened and the OCR text. Its sidebar holds the addressee, whether it applies to you and why, the source links, and **Reprocess** |
-| **Company** | Describe your company in a few sentences. Until you do, circulars are summarised but not judged, and nothing says "Applies to us" |
+| **Company** | Its name and description: until you describe it, circulars are summarised but not judged for you. Your **Team** (add a teammate with a first password), and **Your password** |
 | **Policies** | Build the library: **New policy** (the text can be loaded from a `.txt` or `.md` file), or **Import JSON** for many at once. Search it, read a policy, edit it (a text change makes a new version), add controls, see its gaps |
 
 The agent ships knowing nothing about your company. The overview shows a two-step setup (describe
-the company, add policies) until both are done. The library starts empty. A policy you add is checked by the worker against the circulars of
-the last `LOOKBACK_DAYS` that apply to the company, so its gaps appear within a minute or two.
+the company, add policies) until both are done. The library starts empty. Saving a policy queues
+a task, and a worker checks it straight away against your circulars of the last
+`LOOKBACK_DAYS` that apply to you.
 
 Import file format: a list of policies. `text` is either one string or a list of clauses.
 `controls` is optional.
@@ -38,10 +43,13 @@ Import file format: a list of policies. `text` is either one string or a list of
 ]
 ```
 
-A policy whose code already exists is skipped, so importing the same file twice is safe.
+A policy whose code already exists in your library is skipped, so importing the same file
+twice is safe.
 
-Put your name or email under **Signed in as** in the sidebar before changing a gap. Every
-change and comment is recorded under it. The dot below it shows whether the API answers.
+Every gap change and comment is recorded under your email. The login token is kept in
+`localStorage` (`rci.session`) and sent with every API call; when the API says it has ended,
+the console signs you out and shows the login page. The dot at the bottom of the sidebar
+shows whether the API answers.
 
 ## Run it
 
@@ -65,19 +73,21 @@ css/
   tokens.css          every colour, radius and font (one dark theme)
   layout.css          sidebar, top bar, list and detail page frames
   components.css      panels, tables, tags, buttons, forms, timeline, toasts
-  pages.css           overview charts and setup checklist, the company page
+  pages.css           overview charts and setup checklist, sign-in, the company page
 js/                   ES modules, loaded by the browser directly
   main.js             registers the routes and starts the app
   lib/                api.js (the API client), html.js (escaping), format.js (dates, due, ...)
   ui/                 icons.js, components.js (tags, panels, tables, ...), feedback.js (toast, tooltip)
-  app/                router.js (#/gaps/12 → a page), session.js ("Signed in as"),
+  app/                router.js (#/gaps/12 → a page; login and sign-up are the only open pages),
+                      session.js (the token, the user and their company),
                       state.js (list filters), status.js (API status, badges)
-  views/              overview.js, gaps.js, circulars.js, policies.js, company.js
+  views/              auth.js (sign in, sign up), overview.js, gaps.js, circulars.js,
+                      policies.js, company.js (with the team and your password)
 nginx.conf, Dockerfile   the image: nginx serving the files and forwarding /api
 ```
 
 To add a page, write a function that renders into `#view` in `js/views/`, and register it
-with `route("name/:id", page)` in `main.js`.
+with `route("name/:id", page)` in `main.js` (`{ open: true }` for a page shown signed out).
 
 The fonts are Sora (headings and figures), Plus Jakarta Sans (text) and JetBrains Mono (codes),
 from Google Fonts. Without internet the page falls back to system fonts.

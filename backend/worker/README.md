@@ -1,37 +1,46 @@
 # worker
 
 > 📘 **New to the worker?** Start with [The worker in plain words](../../how_it_works.md#4-the-worker-in-plain-words):
-> what it does every minute, one circular from start to finish, and what its log lines mean.
-> Then [How the worker works](../../how_the_worker_works.md) follows a new circular and a new
-> policy step by step, database included. Changing the code? [INTERNALS.md](INTERNALS.md) has
-> every SQL statement, commit and lock.
+> the task queue, one circular from start to finish, and what its log lines mean. Then
+> [How the worker works](../../how_the_worker_works.md) follows a new circular and a new
+> policy step by step, queue and database included. Changing the code?
+> [INTERNALS.md](INTERNALS.md) has every Redis command, SQL statement, commit and lock.
 
-The agent. It takes each circular the watcher saved and works out which internal policies it
-makes out of date. For each one, it opens a gap ticket for the policy owner with a draft of
-the change.
+The agent. It reads each circular the watcher saved, and works out, for each company, which of
+its internal policies the circular makes out of date. For each one, it opens a gap ticket for
+the policy owner with a draft of the change.
+
+**Tasks, not polling.** The worker reads the Redis stream `rci:tasks` as one consumer of the
+group `workers` (`XREADGROUP`), so each task goes to exactly one worker however many run, and
+it starts the moment a task is queued. It acknowledges a task (`XACK`) only when it's done.
+
+| Task | Queued by | What the worker does |
+|---|---|---|
+| `circular.read` | the watcher, Reprocess | steps 1 and 2 below, once for every company; then one `circular.assess` per company |
+| `circular.assess` | the worker, Reprocess | steps 3 to 6 for one company |
+| `policy.check` | the api (a policy saved) | embeds the policy, then steps 4 to 6 against the company's recent circulars |
+| `company.refresh` | the api (sign-up, a new description) | queues a `circular.assess` for each of the company's recent circulars |
 
 ```
-new ──OCR──► parsed ──Gemini──► analyzed        (failed: see `error`; POST /circulars/{id}/reprocess)
+new ──OCR──► parsed ──Gemini──► read ──► per company: pending ──► done   (failed: see `error`)
  └── published before LOOKBACK_DAYS ──► skipped
 ```
 
-For each circular, newest first:
-
-1. **OCR**: each page is rendered at 200 DPI and sent to Unlimited-OCR (the `ocr` service),
-   up to `OCR_MAX_PAGES` pages. The text is saved, and nothing ever OCRs that circular
-   again. A circular whose PDF is identical to one already read (same SHA-256) copies its
-   text; blank pages are skipped; if a page times out, the retry resumes at that page.
-2. **Summary** (every circular, once): Gemini finds who it's addressed to, sums up what it
-   changes, and lists every obligation, keeping the numbers and deadlines as written.
-3. **Is it for us?** Only once someone has described the company on the console's Company
-   page (the `company` table; there's no default). Gemini compares the addressees with that
-   description and gives a one-line reason. With no description, `applicable` stays empty
-   ("not checked") and the circular stops here. If it doesn't apply, it stops here too.
-4. **Closest policies**: the circular and the policies are embedded with
-   `GEMINI_EMBEDDING_MODEL_NAME` (once each; the vectors are saved). Long policies are
-   embedded in 5,000-character chunks and score their best chunk. The `MATCH_TOP_K` most
-   similar policies tagged with the circular's regulator go on to the next step. No Gemini
-   call here: it's arithmetic on the saved vectors.
+1. **OCR** (once per circular): each page is rendered at 200 DPI and sent to Unlimited-OCR
+   (the `ocr` service), up to `OCR_MAX_PAGES` pages. The text is saved, and nothing ever OCRs
+   that circular again. A circular whose PDF is identical to one already read (same SHA-256)
+   copies its text; blank pages are skipped; if a page times out, the retry resumes at that
+   page.
+2. **Summary** (once per circular): Gemini finds who it's addressed to, sums up what it
+   changes, and lists every obligation, keeping the numbers and deadlines as written. The
+   summary is embedded with `GEMINI_EMBEDDING_MODEL_NAME` for step 4.
+3. **Is it for this company?** Only once the company has described itself on the console's
+   Company page (there's no default). Gemini compares the addressees with that description
+   and gives a one-line reason, saved in the company's `assessments` row. With no
+   description, or if it doesn't apply, the company's assessment stops here.
+4. **Closest policies**: the company's policies tagged with the circular's regulator are
+   scored against the circular's embedding (long policies in 5,000-character chunks, scoring
+   their best chunk), and the `MATCH_TOP_K` most similar go on. No Gemini call here.
 5. **Out of date?** For each of those policies not judged before at its current version,
    Gemini gets the company description, the obligations, the policy text and its controls.
    It says what is missing, how severe it is, and which controls are affected, and drafts
@@ -39,22 +48,16 @@ For each circular, newest first:
 6. **Gap**: if the policy is out of date, a gap is opened for its owner. The due date
    depends on severity: high 7 days, medium 30, low 60.
 
-Policies are checked from the other side too. When a policy is added or its title, text or
-regulators edited, the worker embeds it if needed, then runs steps 4–6 against the analysed
-circulars of the last `LOOKBACK_DAYS` that apply to the company, asking only about pairs it
-hasn't judged. So a library loaded after the circulars came in still gets its gaps.
-
-**Nothing slow or paid for is done twice.** The OCR text, the summary, "does it apply?"
-(until the company description changes), the embeddings and every verdict are saved. A
-restart or an outage halfway through resumes where it stopped, and a round with nothing new
-makes no OCR or Gemini call.
+**Nothing slow or paid for is done twice.** The OCR text, the summary, the embeddings, each
+company's "does it apply?" and every verdict are saved as they come. A task delivered twice,
+a restart or an outage halfway through resumes where it stopped.
 
 | File | Job |
 |---|---|
-| `main.py` | The loop |
+| `main.py` | The task loop: take the next task, run it under a lock, acknowledge, retry or give up; the reconciler |
+| `pipeline.py` | What each task does: `read_circular`, `assess`, `check_new_policy`, `refresh_company` |
 | `failures.py` | What counts as "wait", "try again" or "give up" |
-| `locks.py` | The Postgres locks several workers share the work with |
-| `pipeline.py` | The steps above: for one circular, and for new or edited policies |
+| `locks.py` | The Postgres advisory locks that make the same work queued twice run once |
 | `ocr.py` | PDF to text through Unlimited-OCR |
 | `llm.py` | Every Gemini call, through LangChain (`ChatGoogleGenerativeAI.with_structured_output`, `GoogleGenerativeAIEmbeddings`). Each prompt comes with the Pydantic model its reply must match |
 | `storage.py` | Reads the PDFs from S3 |
@@ -62,16 +65,17 @@ makes no OCR or Gemini call.
 
 **When something fails.**
 - **OCR unreachable** (the model is still loading) **or Gemini rate-limited (429):** the
-  worker waits and tries again as long as it takes.
-- **A 5xx, a timeout, a dropped connection or a reply not in the asked-for JSON:** the
-  circular is retried up to 3 times, then marked `failed` with the error.
+  task stays unacknowledged; the worker waits `RETRY_SECONDS` and tries again, as long as it
+  takes.
+- **A 5xx, a timeout, a dropped connection or a reply not in the asked-for JSON:** the task
+  is retried up to 3 times, then given up.
+- **Given up:** the circular (or the company's assessment) is marked `failed` with the error,
+  and the task is copied to the stream `rci:dead`.
+- **A worker dies mid-task:** the task is still pending. The same container finds it on
+  restart; otherwise another worker takes it over after `CLAIM_IDLE_SECONDS` (`XAUTOCLAIM`).
+- **A task goes missing** (Redis down or wiped): every `RECONCILE_MINUTES`, one worker queues
+  again whatever Postgres shows as unfinished.
 - **A wrong API key or model name:** the worker stops at startup.
-- **Several workers at once** (`WORKERS=3` in `.env`, a rolling update, or one started by
-  hand beside the container): they share the work through Postgres advisory locks
-  (`locks.py`). Each circular is claimed by one worker; one worker at a time reads PDFs
-  on the GPU while the others run Gemini on circulars already read; one worker at a time
-  updates the policy library. Nothing is processed twice, and a worker that dies
-  releases its locks.
 
 LangChain first retries Gemini rate limits and server errors itself (`max_retries=3`), and
 raises its own error classes. The worker reads the HTTP code from the original Gemini
@@ -80,5 +84,5 @@ error underneath (`gemini_status` in `failures.py`).
 ```bash
 cp .env.example .env                # set GEMINI_API_KEY
 uv sync
-uv run python main.py --once        # one pass through the queue
+uv run python main.py --once        # work until the queue is empty, then exit
 ```

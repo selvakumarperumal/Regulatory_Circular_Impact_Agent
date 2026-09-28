@@ -1,29 +1,33 @@
 # Regulatory Circular Impact Agent
 
-![Python 3.14](https://img.shields.io/badge/Python_3.14-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![SQLModel](https://img.shields.io/badge/SQLModel-7E56C2?style=flat-square) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Gemini via LangChain](https://img.shields.io/badge/Gemini_via_LangChain-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Unlimited-OCR on vLLM](https://img.shields.io/badge/Unlimited--OCR_on_vLLM-EA580C?style=flat-square) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Python 3.14](https://img.shields.io/badge/Python_3.14-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![SQLModel](https://img.shields.io/badge/SQLModel-7E56C2?style=flat-square) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Gemini via LangChain](https://img.shields.io/badge/Gemini_via_LangChain-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Unlimited-OCR on vLLM](https://img.shields.io/badge/Unlimited--OCR_on_vLLM-EA580C?style=flat-square) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![Redis 7](https://img.shields.io/badge/Redis_7-DC382D?style=flat-square&logo=redis&logoColor=white)
 
 Every day it watches RBI, SEBI and IRDAI circulars and reads each new one with
 [Unlimited-OCR](https://github.com/baidu/Unlimited-OCR). It then asks **Gemini** (through
-LangChain) whether the circular applies to the company and which internal policy it makes out
-of date. For each such policy it opens a gap ticket for the owner, with a draft of the change,
-and keeps a history of the gap until it is closed. The company's control library and the gap
-history are data a chatbot will never have.
+LangChain) whether the circular applies to each company using it and which of that
+company's internal policies it makes out of date. For each such policy it opens a gap ticket
+for the owner, with a draft of the change, and keeps a history of the gap until it is closed.
+Each company signs in to its own console and sees only its own policies and gaps. Its control
+library and gap history are data a chatbot will never have.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
+        direction TB
         sites["RBI · SEBI · IRDAI<br/>websites"] -->|"every hour"| W["watcher"]
         W -->|PDF| S3[("S3 (Floci)")]
-        W -->|"row, status new"| DB[("Postgres")]
+        W -->|"row, status new"| DB[("Postgres<br/>every result")]
+        W -->|"circular.read"| Q[["Redis stream<br/>the tasks"]]
+        F["frontend<br/>console :8080<br/>(sign in)"] <--> A["api<br/>FastAPI :8000"]
+        A <--> DB
+        A -->|"policy.check, …"| Q
+        Q -->|"each task to one worker,<br/>the moment it's queued"| K["<b>worker × N</b>: the agent<br/>1. OCR each page, once<br/>2. summarise it, once<br/>3. for each company: does it apply?<br/>4. find its closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
         S3 -->|PDF| K
-        DB <-->|"every minute: picks up work,<br/>saves results and gaps"| K["<b>worker</b>: the agent<br/>1. OCR each page<br/>2. summarise it<br/>3. does it apply to us?<br/>4. find the closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
+        K <-->|"reads the work,<br/>saves results and gaps"| DB
         K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
         K <-->|"question → JSON answer"| G["Gemini<br/>via LangChain"]
-        DB <--> A["api<br/>FastAPI :8000"] <--> F["frontend<br/>console :8080"]
     end
-
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
     classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
@@ -33,11 +37,12 @@ flowchart LR
     classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class W,A,F svc
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class W,A,F,K svc
     class S3,DB data
+    class Q queue
     class sites,G ext
     class O gpu
-    class K svc
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -50,11 +55,11 @@ One folder per service. Each Python service has its own `pyproject.toml`, `uv.lo
 
 | Folder | Service | What it does |
 |---|---|---|
-| [backend/watcher](backend/watcher) | `watcher` | Finds new circulars, stores the PDF in S3, adds a `circulars` row |
+| [backend/watcher](backend/watcher) | `watcher` | Finds new circulars, stores the PDF in S3, adds a `circulars` row and a `circular.read` task |
 | [backend/ocr](backend/ocr) | `ocr` | Unlimited-OCR served by vLLM on the GPU (image and flags only) |
-| [backend/worker](backend/worker) | `worker` | The agent: OCR → Gemini → gap tickets |
-| [backend/api](backend/api) | `api` | FastAPI over circulars, policies, controls and gaps |
-| [backend/common](backend/common) | none | The Postgres tables, installed into each service from `../common` |
+| [backend/worker](backend/worker) | `worker` | The agent: takes tasks off the Redis stream; OCR → Gemini → gap tickets |
+| [backend/api](backend/api) | `api` | FastAPI: sign-up and login, then each company's circulars, policies, controls and gaps |
+| [backend/common](backend/common) | none | The Postgres tables and the task queue, installed into each service from `../common` |
 | [frontend](frontend) | `frontend` | A test console over every API endpoint: static files served by nginx |
 
 `docker-compose.yml` and `.env.example` are here at the root.
@@ -74,39 +79,46 @@ docker compose logs -f worker               # watch the agent work
                                             # console: http://localhost:8080   API docs: http://localhost:8000/docs
 ```
 
-The agent knows nothing about your company until you tell it, in the console:
+Open the console and **create an account for your company** (you become its first user, and
+can add teammates on the Company page). The agent knows nothing about your company until you
+tell it:
 
 1. **Company**: a few sentences on what kind of entity it is. Until this exists, circulars are
    summarised but nobody says which ones apply to you.
-2. **Policies**: add them one at a time, or **Import JSON** for a whole library. A new or edited policy is checked against the
-circulars of the last `LOOKBACK_DAYS` that apply to the company, so nothing waits for the
-next circular.
+2. **Policies**: add them one at a time, or **Import JSON** for a whole library. A new or
+   edited policy is checked at once against your circulars of the last `LOOKBACK_DAYS` that
+   apply to you, so nothing waits for the next circular.
+
+> 🔑 **Upgrading from before logins?** Your existing data is moved into company 1 on the
+> first start. Give it a login:
+> `cd backend/api && uv run python manage.py add-user you@company.com "Your Name" --company 1`
 
 Compose also takes settings from your shell, so a direnv `.envrc` that exports
 `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` works too.
 
 > ⚡ **More workers, more speed.** Set `WORKERS=3` in `.env` to run three workers side by
-> side. They share the work through Postgres locks, so nothing is done twice. See
+> side. The Redis consumer group gives each task to one of them, and Postgres locks make sure
+> the same work queued twice is still done once. See
 > [Running several workers](how_it_works.md#running-several-workers).
 
 > ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the worker
 > logs "OCR or Gemini unavailable" and keeps retrying.
 
-When the worker starts, it marks circulars published more than `LOOKBACK_DAYS` ago as
-`skipped`, then works through the rest, newest first.
+Circulars published more than `LOOKBACK_DAYS` ago are marked `skipped` instead of being
+read, so a first start doesn't work through years of history.
 
 ## Where things are explained
 
 - **[how_it_works.md](how_it_works.md): start here.** The whole backend explained with diagrams:
   the life of a circular, each service, the data, gap tracking, failures and settings.
 - **[how_the_worker_works.md](how_the_worker_works.md): how the worker works.** Two stories,
-  a new circular and a new policy, with what changes in the database at each step and how
-  workers share the work with locks.
+  a new circular and a new policy, with what goes through the Redis task queue and what
+  changes in the database at each step, and how several workers and companies share it.
 - [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md): the worker for developers:
-  every function, SQL statement, commit and lock.
+  every function, Redis command, SQL statement, commit and lock.
 - [backend/worker/README.md](backend/worker/README.md): how a circular moves through the
   pipeline, and what happens when OCR or Gemini fails.
-- [backend/api/README.md](backend/api/README.md): every endpoint, and how gaps are tracked.
+- [backend/api/README.md](backend/api/README.md): every endpoint, logins, and how gaps are tracked.
 - [frontend/README.md](frontend/README.md): the test console, and how to run it without Docker.
 - [backend/ocr/README.md](backend/ocr/README.md): why the vLLM flags are needed on an 8 GB GPU.
 - [backend/common/README.md](backend/common/README.md): the tables.
@@ -115,9 +127,9 @@ When the worker starts, it marks circulars published more than `LOOKBACK_DAYS` a
 ## Develop one service on the host
 
 ```bash
-docker compose up -d postgres ocr           # what the services need
+docker compose up -d postgres redis ocr     # what the services need
 cd backend/worker
-cp .env.example .env                        # host values: localhost:5432, localhost:4566, localhost:8001
+cp .env.example .env                        # host values: localhost:5432, localhost:6379, localhost:4566, localhost:8001
 uv sync
 uv run python main.py --once
 ```
