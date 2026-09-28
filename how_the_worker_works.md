@@ -163,7 +163,7 @@ sequenceDiagram
         M->>C: load Settings from the environment and .env
         Note over C: GEMINI_API_KEY empty? stop with a clear error
         M->>PG: make_engine: a connection pool (pool_pre_ping)
-        M->>PG: BEGIN, SELECT pg_advisory_xact_lock(1)
+        M->>PG: BEGIN, pg_advisory_xact_lock(key of "schema")
         Note over PG: only one service at a time changes the schema
         M->>PG: create_all: CREATE any missing table
         M->>PG: add_missing_columns: ALTER TABLE ADD COLUMN IF NOT EXISTS
@@ -179,8 +179,8 @@ sequenceDiagram
     end
 ```
 
-- **The schema lock** `pg_advisory_xact_lock(1)` is a *transaction* lock: it's released by
-  the COMMIT. Every service (watcher, worker, api) runs `init_db` at startup, and the lock
+- **The schema lock** (`pg_advisory_xact_lock` on the key of `schema`) is a *transaction*
+  lock: it's released by the COMMIT. Every service (watcher, worker, api) runs `init_db` at startup, and the lock
   makes them take turns, so two of them never try to create the same table at once.
 - **`add_missing_columns`** adds any column a model gained after its table was created
   (always nullable). Nothing is ever dropped or altered.
@@ -244,7 +244,7 @@ policy library (in one worker at a time), then work through the queue of circula
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        open["Open a database session"] --> lib{"Take the library lock<br/>pg_try_advisory_lock(7310, 0)"}
+        open["Open a database session"] --> lib{"Try the library lock<br/>(library)"}
         lib -->|"another worker has it"| queue
         lib -->|"got it"| skip["skip_old: mark new circulars<br/>older than 30 days as skipped"]
         skip --> embed["embed_policies: embed new<br/>and edited policies"]
@@ -397,9 +397,9 @@ flowchart LR
         subgraph proc["one worker process"]
             direction TB
             sess["<b>the work session</b><br/>(sqlmodel Session)<br/>reads and saves each step,<br/>commits after every step"]
-            l1["<b>lock connection</b><br/>holds (7311, circular id)<br/>for the whole circular"]
-            l2["<b>lock connection</b><br/>holds (7312, 0) while<br/>the PDF is on the GPU"]
-            l3["<b>lock connection</b><br/>holds (7310, 0) while<br/>the library is updated"]
+            l1["<b>lock connection</b><br/>holds circular/id<br/>for the whole circular"]
+            l2["<b>lock connection</b><br/>holds ocr while<br/>the PDF is on the GPU"]
+            l3["<b>lock connection</b><br/>holds library while<br/>the library is updated"]
         end
         pool[("the engine's connection pool<br/>5 connections + 10 extra")]
         PG[("Postgres")]
@@ -431,18 +431,27 @@ flowchart LR
 - Each **lock** lives on a connection of its own, taken by `locks.held()` for exactly the
   length of a with-block. That's what lets a lock outlast the work session's commits.
 
-The locks are Postgres **advisory locks**: locks on a pair of numbers of the app's choosing,
-not on any row. `pg_try_advisory_lock(a, b)` answers at once, true (yours now) or false
-(someone else has it); `pg_advisory_lock(a, b)` waits until it's free; `pg_advisory_unlock`
+The locks are Postgres **advisory locks**: locks on a 64-bit number of the app's choosing,
+not on any row. `pg_try_advisory_lock(key)` answers at once, true (yours now) or false
+(someone else has it); `pg_advisory_lock(key)` waits until it's free; `pg_advisory_unlock`
 gives it back. If a worker dies, its connections close and Postgres releases its locks by
 itself.
 
-| Lock | Numbers | Held while | If another worker holds it |
+Each lock has a **name**, and `lock_key()` (in `backend/common/common/db.py`) turns it into the
+key: a blake2b hash of the app, the connection's **schema** (`SELECT current_schema()`) and the
+name. Every worker derives the same key from the same name, and nothing else collides with it.
+
+| Lock | Name | Held while | If another worker holds it |
 |---|---|---|---|
-| a circular | `(7311, circular id)` | one circular is processed | skip it, try the next |
-| the GPU | `(7312, 0)` | a PDF is being read with OCR | take a circular that's already read; if none, wait |
-| the policy library | `(7310, 0)` | skipping old circulars, embedding policies, the catch-up | skip that part of the round |
-| the schema | `(1)`, a transaction lock | `init_db` at startup | wait |
+| a circular | `circular/<id>` | one circular is processed | skip it, try the next |
+| the GPU | `ocr` | a PDF is being read with OCR | take a circular that's already read; if none, wait |
+| the policy library | `library` | skipping old circulars, embedding policies, the catch-up | skip that part of the round |
+| the schema | `schema`, a transaction lock | `init_db` at startup | wait |
+
+**Several companies.** The app serves one company per deployment. Deployments for different
+companies can share a Postgres server (a database each) or even a database (a schema each):
+Postgres keeps advisory locks per database, and the schema is part of every key, so one
+company's workers never block another's.
 
 With one worker, every lock is simply always free. With several (`WORKERS=3`), they're what
 keeps the workers out of each other's way. Why advisory locks rather than
@@ -461,18 +470,18 @@ The round repeats it until nothing is left to claim:
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        list["waiting(): SELECT id FROM circulars<br/>WHERE status IN ('new','parsed')<br/>ORDER BY published_at DESC NULLS LAST"] --> tryc{"pg_try_advisory_lock<br/>(7311, id)"}
+        list["waiting(): SELECT id FROM circulars<br/>WHERE status IN ('new','parsed')<br/>ORDER BY published_at DESC NULLS LAST"] --> tryc{"Try its lock<br/>(circular/id)"}
         list -->|"none left to try"| idle["End of the queue:<br/>the round ends"]
         tryc -->|"false: another<br/>worker holds it"| skip1["Skip it:<br/>try the next one"]
         tryc -->|"true"| fresh{"SELECT the circular again<br/>(populate_existing):<br/>still new or parsed?"}
         fresh -->|"no: another worker<br/>just finished it"| skip2["Unlock it:<br/>try the next one"]
         fresh -->|"yes"| isnew{"status new?<br/>(needs step 1)"}
-        isnew -->|"yes"| gpu{"GPU lock (7312, 0):<br/>try, or wait on the<br/>second pass"}
+        isnew -->|"yes"| gpu{"The ocr lock:<br/>try, or wait on the<br/>second pass"}
         gpu -->|"busy, first pass"| skip3["Unlock it:<br/>try the next one"]
         gpu -->|"got it"| s1["Step 1: read the PDF,<br/>then unlock the GPU"]
         isnew -->|"no: parsed"| s2["Steps 2 to 4"]
         s1 --> s2
-        s2 --> done["Unlock (7311, id),<br/>start again from the list"]
+        s2 --> done["Unlock circular/id,<br/>start again from the list"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -809,7 +818,7 @@ flowchart TD
         same -->|"no"| recent["recent_circulars(): analyzed, applies,<br/>last 30 days, has obligations, from a<br/>regulator some policy lists (OCR text not loaded)"]
         recent --> emb["embed any of them not embedded yet"]
         emb --> pairs["checked_pairs(): every judged pair<br/>and every gap, in two queries"]
-        pairs --> each{"For each circular:<br/>pg_try_advisory_lock(7311, id)"}
+        pairs --> each{"For each circular:<br/>try its lock (circular/id)"}
         each -->|"another worker is<br/>processing it"| later["leave it to that worker;<br/>catch up again next round"]
         each -->|"got it"| m["match(): only unjudged<br/>top-3 pairs go to Gemini"]
         m --> fin["When every circular is done:<br/>remember the state, so the next<br/>round does nothing"]
@@ -1002,18 +1011,18 @@ trace of the real worker's SQL. `…` stands for the values.
 
 | # | Where | Statement | Why |
 |---|---|---|---|
-| 1 | `init_db` (startup) | `SELECT pg_advisory_xact_lock(1)`, `CREATE TABLE …`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS …`, `COMMIT` | create missing tables and columns, one service at a time |
-| 2 | `update_library` | `SELECT pg_try_advisory_lock(7310, 0)` | only one worker looks after the library |
+| 1 | `init_db` (startup) | `SELECT current_schema()`, `SELECT pg_advisory_xact_lock(<key of schema>)`, `CREATE TABLE …`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS …`, `COMMIT` | create missing tables and columns, one service at a time |
+| 2 | `update_library` | `SELECT current_schema()`, `SELECT pg_try_advisory_lock(<key of library>)` | only one worker looks after the library |
 | 3 | `skip_old` | `SELECT … FROM circulars WHERE status = 'new' AND published_at < …`, then `UPDATE circulars SET status = 'skipped'` for each, `COMMIT` | set aside circulars older than 30 days |
 | 4 | `embed_policies` | `SELECT … FROM policies`, then `UPDATE policies SET embeddings = …, embedding_model = … WHERE id = …`, `COMMIT` | embed new and edited policies |
 | 5 | `library_state` | `SELECT … FROM company WHERE id = 1`; `SELECT count(*), max(updated_at) FROM policies`; `SELECT count(*), max(id) FROM circulars WHERE status = 'analyzed' AND applicable IS true AND published_at >= …` | has anything changed since the last catch-up? |
 | 6 | `recent_circulars` | the same `WHERE` on `circulars`, every column except `text` | the circulars to catch up |
 | 7 | `checked_pairs` | `SELECT circular_id, policy_id, policy_version FROM policy_checks`; `SELECT circular_id, policy_id FROM gaps` | pairs never to ask about again |
-| 8 | `update_library` | `SELECT pg_advisory_unlock(7310, 0)` | release the library |
+| 8 | `update_library` | `SELECT pg_advisory_unlock(<key of library>)` | release the library |
 | 9 | `waiting` | `SELECT id FROM circulars WHERE status IN ('new', 'parsed') ORDER BY published_at DESC NULLS LAST` | the queue |
-| 10 | `process_next` | `SELECT pg_try_advisory_lock(7311, id)` | claim one circular |
+| 10 | `process_next` | `SELECT current_schema()`, `SELECT pg_try_advisory_lock(<key of circular/id>)` | claim one circular |
 | 11 | `process_next` | `SELECT … FROM circulars WHERE id = …` | re-read it after the claim |
-| 12 | `process` | `SELECT pg_try_advisory_lock(7312, 0)` or `pg_advisory_lock(7312, 0)` | the GPU, for step 1 |
+| 12 | `process` | `SELECT current_schema()`, `SELECT pg_try_advisory_lock(<key of ocr>)` or `pg_advisory_lock(…)` | the GPU, for step 1 |
 | 13 | `parse` | `SELECT … FROM circulars WHERE sha256 = … AND id <> … AND text IS NOT NULL` | a twin with the same PDF? |
 | 14 | `parse` | `UPDATE circulars SET text = …, status = 'parsed' WHERE id = …`, `COMMIT` | step 1 saved |
 | 15 | `read` | `UPDATE circulars SET addressed_to = …, summary = …, requirements = … WHERE id = …`, `COMMIT` | step 2 saved |
@@ -1026,7 +1035,7 @@ trace of the real worker's SQL. `…` stands for the values.
 | 22 | `check_policy` | `INSERT INTO policy_checks (…)`; if out of date `INSERT INTO gaps (…)` and `INSERT INTO gap_events (…)`; `COMMIT` | one verdict saved |
 | 23 | `analyze` | `UPDATE circulars SET status = 'analyzed', error = NULL WHERE id = …`, `COMMIT` | the circular is done |
 | 24 | `process` (on failure) | `ROLLBACK`; `UPDATE circulars SET status = 'failed', error = … WHERE id = …`, `COMMIT` | failed for good |
-| 25 | `process_next` | `SELECT pg_advisory_unlock(7312, 0)`, `SELECT pg_advisory_unlock(7311, id)` | release the GPU (after step 1) and the circular |
+| 25 | `process_next` | `SELECT pg_advisory_unlock(<key of ocr>)`, `SELECT pg_advisory_unlock(<key of circular/id>)` | release the GPU (after step 1) and the circular |
 
 Between these, after each commit, SQLAlchemy reads rows back as they're used (see
 [Transactions and crashes](#15-transactions-and-crashes)). Only the catch-up (#6) leaves out
@@ -1088,6 +1097,6 @@ Constants in the code:
 | `MAX_TRIES` | 3 | `failures.py` | tries before a crashing circular is given up |
 | `DPI` | 200 | `ocr.py` | page rendering for OCR |
 | OCR timeout | 600 s | `ocr.py` | per page request |
-| lock numbers | 7310, 7311, 7312 | `locks.py` | library, circular, GPU |
+| lock names | `library`, `circular/<id>`, `ocr`, `schema` | `locks.py`, `common/db.py` | hashed with the schema into 64-bit keys |
 
 For what the log lines mean, see [Reading its log](how_it_works.md#reading-its-log).

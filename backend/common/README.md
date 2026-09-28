@@ -5,8 +5,10 @@ so the three services can't drift apart.
 
 ```
 circulars  --<  gaps  >--  policies  --<  controls
-                 |
-                 +--<  gap_events
+    |            |
+    |            +--<  gap_events
+    |
+    +--<  policy_checks  >--  policies
 
 company    (one row)
 ```
@@ -18,6 +20,15 @@ company    (one row)
 | `policies`, `controls` | api | the company's policy and control library |
 | `gaps` | worker (opens them), api (status, owner, due date) | a policy that a circular made out of date |
 | `gap_events` | worker, api | the history of each gap, never edited |
+| `policy_checks` | worker (api deletes "up to date" ones on Reprocess) | Gemini's verdict on each circular and policy version, so no pair is asked about twice |
+
+`db.py` has three helpers:
+
+- `make_engine(url)`: the connection pool (`pool_pre_ping`).
+- `init_db(engine)`: creates missing tables and columns at startup, one service at a time.
+- `lock_key(conn, name)`: the key for a Postgres advisory lock named `name`. It's a hash of
+  the app, the connection's schema and the name, so copies of the app in separate schemas
+  (one per company, say) or other software in the same database never share a lock.
 
 This isn't a service. Each service installs it from `../common` as a path dependency (see
 `[tool.uv.sources]` in its `pyproject.toml`), so every service keeps its own `.venv`.

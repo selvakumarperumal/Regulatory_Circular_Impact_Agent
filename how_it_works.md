@@ -373,23 +373,30 @@ Postgres has a SQL clause with that name. This app gets the same behaviour a sli
 different way, with **advisory locks**. Both are explained below, with the reason for the
 choice.
 
-**What an advisory lock is.** A lock that Postgres keeps in memory for a pair of numbers you
-choose. It isn't tied to any table or row: the numbers just mean something to the program.
-Two calls matter:
+**What an advisory lock is.** A lock that Postgres keeps in memory for a number you choose
+(a 64-bit key). It isn't tied to any table or row: the number just means something to the
+program. Two calls matter:
 
-- `pg_try_advisory_lock(a, b)` answers at once: **true** means "it's yours now", **false**
+- `pg_try_advisory_lock(key)` answers at once: **true** means "it's yours now", **false**
   means "someone else has it". It never waits. This is the skip-if-locked part.
-- `pg_advisory_unlock(a, b)` gives it back.
+- `pg_advisory_unlock(key)` gives it back.
 
-The worker uses four of them. The first number says what kind of thing is locked, and the
-second which one:
+The worker uses four of them, each with a name. The key is a hash of the app, the Postgres
+schema and the name (`lock_key` in `backend/common/common/db.py`), so every worker derives
+the same key for the same name, and nothing else ever does:
 
-| Lock | Numbers | Taken by | If it's already taken |
+| Lock | Name | Taken by | If it's already taken |
 |---|---|---|---|
-| a circular | `(7311, circular id)` | the worker processing that circular | skip it and try the next one |
-| the GPU | `(7312, 0)` | the worker running OCR | take a circular that's already read; if there are none, wait for the GPU |
-| the policy library | `(7310, 0)` | the worker embedding policies and running the catch-up | skip that step this round |
-| the schema | `(1)` | any service creating tables at startup | wait: every service must see the tables before it carries on |
+| a circular | `circular/<id>` | the worker processing that circular | skip it and try the next one |
+| the GPU | `ocr` | the worker running OCR | take a circular that's already read; if there are none, wait for the GPU |
+| the policy library | `library` | the worker embedding policies and running the catch-up | skip that step this round |
+| the schema | `schema` | any service creating tables at startup | wait: every service must see the tables before it carries on |
+
+**Several companies.** The app serves **one company per deployment**: one description, one
+policy library. To run it for several companies, give each its own database, or its own
+schema in a shared database. Their locks never meet: Postgres keeps advisory locks per
+database, and the schema is part of every key, so company A's worker never blocks company
+B's, not even on a circular with the same id.
 
 This is what happens when two workers reach for the same circular:
 
@@ -403,16 +410,16 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        W1->>PG: pg_try_advisory_lock(7311, 98)
+        W1->>PG: pg_try_advisory_lock(key of "circular/98")
         PG-->>W1: true: circular 98 is yours
-        W2->>PG: pg_try_advisory_lock(7311, 98)
+        W2->>PG: pg_try_advisory_lock(key of "circular/98")
         PG-->>W2: false: another worker holds it
         Note over W2: don't wait: skip it
-        W2->>PG: pg_try_advisory_lock(7311, 97)
+        W2->>PG: pg_try_advisory_lock(key of "circular/97")
         PG-->>W2: true: circular 97 is yours
         Note over W1,W2: both work at the same time, on different circulars
-        W1->>PG: pg_advisory_unlock(7311, 98)
-        W2->>PG: pg_advisory_unlock(7311, 97)
+        W1->>PG: pg_advisory_unlock(key of "circular/98")
+        W2->>PG: pg_advisory_unlock(key of "circular/97")
     end
 ```
 
@@ -424,13 +431,13 @@ sequenceDiagram
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        list["List the waiting circulars, newest first<br/>(status new or parsed)"] --> tryc{"Try the next one's lock<br/>(7311, id)"}
+        list["List the waiting circulars, newest first<br/>(status new or parsed)"] --> tryc{"Try the next one's lock<br/>(circular/id)"}
         list -->|"none left to try"| idle["End the round"]
         tryc -->|"another worker holds it"| skip1["Skip it:<br/>try the next one"]
         tryc -->|"got it"| fresh{"Still waiting?<br/>(read its status again)"}
         fresh -->|"no: another worker<br/>just finished it"| skip2["Release it:<br/>try the next one"]
         fresh -->|"yes"| isnew{"Does it need OCR?<br/>(status new)"}
-        isnew -->|"yes"| gpu{"Try the GPU lock<br/>(7312, 0)"}
+        isnew -->|"yes"| gpu{"Try the GPU lock<br/>(ocr)"}
         gpu -->|"another worker<br/>is using the GPU"| skip3["Release it:<br/>try the next one"]
         gpu -->|"got it"| ocr["OCR the PDF,<br/>then release the GPU"]
         isnew -->|"no: already read"| gem["Run its Gemini steps:<br/>summarise, judge,<br/>check its policies"]
@@ -525,13 +532,13 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        L->>PG: pg_try_advisory_lock(7311, 98): held
+        L->>PG: pg_try_advisory_lock(key of "circular/98"): held
         S->>PG: save the OCR text, COMMIT
         S->>PG: save the summary, COMMIT
         S->>PG: save whether it applies, COMMIT
         S->>PG: save each policy verdict, COMMIT
         Note over L,S: the commits end the work session's transactions,<br/>not the lock: it stays held on its own connection
-        L->>PG: pg_advisory_unlock(7311, 98)
+        L->>PG: pg_advisory_unlock(key of "circular/98")
     end
 ```
 
@@ -540,12 +547,12 @@ connections held, at once and by itself. Nothing is left stuck: the circular is 
 `new` or `parsed`, so on the next round another worker claims it and carries on from the
 last step that was saved.
 
-**Seeing the locks.** While workers are busy, this lists the locks they hold (`classid` is
-the first number, `objid` the second, `pid` the Postgres connection that holds it):
+**Seeing the locks.** While workers are busy, this counts the locks each Postgres
+connection (`pid`) holds. Each key shows up split in two halves, as `classid` and `objid`:
 
 ```bash
 docker compose exec postgres psql -U rci -d rci -c \
-  "select classid, objid, pid from pg_locks where locktype = 'advisory'"
+  "select pid, count(*) from pg_locks where locktype = 'advisory' group by pid"
 ```
 
 ### Reading its log
