@@ -185,6 +185,10 @@ tray. If there's something in it, the clerk works through it; if it's empty, the
 another minute. **Looking in the tray costs nothing**: OCR and Gemini are only used when
 there is real work.
 
+> 🔬 **Want every detail?** [how_the_worker_works.md](how_the_worker_works.md) follows the
+> worker all the way down: startup, each step's database reads and writes, every commit and
+> lock, what a crash leaves behind, and every SQL statement it sends.
+
 ### What lands in the tray
 
 | What | Who put it there | What the worker does | OCR and Gemini used |

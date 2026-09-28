@@ -99,6 +99,8 @@ When the worker starts, it marks circulars published more than `LOOKBACK_DAYS` a
 
 - **[how_it_works.md](how_it_works.md): start here.** The whole backend explained with diagrams:
   the life of a circular, each service, the data, gap tracking, failures and settings.
+- **[how_the_worker_works.md](how_the_worker_works.md): the worker in depth.** Every step,
+  every database read and write, every commit and lock, with diagrams.
 - [backend/worker/README.md](backend/worker/README.md): how a circular moves through the
   pipeline, and what happens when OCR or Gemini fails.
 - [backend/api/README.md](backend/api/README.md): every endpoint, and how gaps are tracked.
