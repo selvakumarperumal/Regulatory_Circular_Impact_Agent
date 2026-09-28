@@ -3,14 +3,14 @@
 ![Python 3.14](https://img.shields.io/badge/Python_3.14-3776AB?style=flat-square&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white) ![SQLModel](https://img.shields.io/badge/SQLModel-7E56C2?style=flat-square) ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL_17-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Gemini via LangChain](https://img.shields.io/badge/Gemini_via_LangChain-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) ![Unlimited-OCR on vLLM](https://img.shields.io/badge/Unlimited--OCR_on_vLLM-EA580C?style=flat-square) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![Redis 7](https://img.shields.io/badge/Redis_7-DC382D?style=flat-square&logo=redis&logoColor=white)
 
 This is the full story of the **worker**: every task it takes, every Redis command, every row
-it reads and writes, every commit and every lock. For the plain-words version with worked
+it reads and writes, and every commit. For the plain-words version with worked
 examples, read [How the worker works](../../how_the_worker_works.md) first; this guide goes
 all the way down. The code is in this folder, and the queue's names are in
 [`common/queue.py`](../common/common/queue.py).
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 
-![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
+![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
 
 **Contents**
 
@@ -22,7 +22,7 @@ all the way down. The code is in this folder, and the queue's names are in
 6. [Doing a task](#6-doing-a-task)
 7. [The tables it uses](#7-the-tables-it-uses)
 8. [Two statuses](#8-two-statuses)
-9. [Connections and locks](#9-connections-and-locks)
+9. [No duplicates: the dedupe key](#9-no-duplicates-the-dedupe-key)
 10. [circular.read](#10-circularread)
 11. [circular.assess](#11-circularassess)
 12. [policy.check](#12-policycheck)
@@ -53,7 +53,7 @@ flowchart LR
         watcher["watcher"] -->|"INSERT circular,<br/>XADD circular.read"| Q[["Redis<br/><b>rci:tasks</b>"]]
         api["api<br/>(the console)"] -->|"saves the change,<br/>XADD the task"| Q
         Q <-->|"XREADGROUP, XACK<br/>(group: workers)"| K["<b>worker</b><br/>× WORKERS"]
-        K <-->|"reads the work,<br/>saves each step,<br/>advisory locks"| PG[("Postgres<br/>every result")]
+        K <-->|"reads the work,<br/>saves each step"| PG[("Postgres<br/>every result")]
         watcher --> PG
         api --> PG
         S3[("S3 (Floci)<br/>the PDFs")] -->|"GET the PDF"| K
@@ -80,8 +80,8 @@ flowchart LR
 
 | What | How | Used for |
 |---|---|---|
-| **Redis** | redis-py, one connection | the task stream, the dead-letter stream, the reconciler's key |
-| **Postgres** | SQLAlchemy / SQLModel, a connection pool | every result, and the advisory locks |
+| **Redis** | redis-py, one connection | the task stream, the dedupe keys, the dead-letter stream, the reconciler's key |
+| **Postgres** | SQLAlchemy / SQLModel, a connection pool | every result |
 | **S3** (Floci locally) | boto3 | each circular's PDF, read once |
 | **ocr** | HTTP, vLLM's OpenAI-compatible API | page images to text, once per PDF |
 | **Gemini** | LangChain (`langchain-google-genai`) | three questions, and embeddings |
@@ -103,23 +103,20 @@ Two rules hold everything together:
 flowchart TB
     subgraph canvas[" "]
         direction TB
-        main["<b>main.py</b><br/>the task loop: next_task, handle,<br/>run_task, give_up, reconcile"]
-        pipeline["<b>pipeline.py</b><br/>what each task does,<br/>embeddings, missing_work"]
-        queue[["<b>common/queue.py</b><br/>the stream's names,<br/>connect, enqueue"]]
-        locks["<b>locks.py</b><br/>Postgres advisory locks"]
+        main["<b>main.py</b><br/>the task loop: next_task, run_task,<br/>give_up, reconcile"]
+        pipeline["<b>pipeline.py</b><br/>one function per task type,<br/>embeddings, missing_work"]
+        queue[["<b>common/queue.py</b><br/>the stream's names, connect,<br/>enqueue with its dedupe key"]]
         failures["<b>failures.py</b><br/>wait, retry or give up"]
         llm["<b>llm.py</b><br/>the three Gemini questions,<br/>embeddings"]
         ocr["<b>ocr.py</b><br/>PDF pages → text"]
         storage["<b>storage.py</b><br/>PDFs from S3"]
-        common[("<b>common/models.py, db.py</b><br/>the tables, engine, init_db,<br/>lock_key, migrations")]
+        common[("<b>common/models.py, db.py</b><br/>the tables, engine, init_db")]
         main --> pipeline
         main --> queue
-        main --> locks
         main --> failures
         pipeline --> llm
         pipeline --> ocr
         pipeline --> storage
-        pipeline --> locks
         llm --> failures
         main -.-> common
         pipeline -.-> common
@@ -136,7 +133,7 @@ flowchart TB
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class main,pipeline svc
     class queue queue
-    class locks,failures muted
+    class failures muted
     class llm ext
     class ocr gpu
     class storage,common data
@@ -145,13 +142,12 @@ flowchart TB
 
 | File | What's in it |
 |---|---|
-| `main.py` | `main()` (the loop), `join_group`, `next_task`, `handle` (task → pipeline, under a lock), `run_task` (acknowledge, retry or give up), `give_up`, `reconcile`, `forget_stopped_workers`, `check_gemini` |
-| `pipeline.py` | `read_circular` (`parse`, `summarise`, `pending_companies`), `assess` (`judge`, `match`, `check_policy`), `check_new_policy`, `refresh_company`, the embeddings, `missing_work` |
-| `../common/common/queue.py` | `STREAM`, `GROUP`, `DEAD`, `RECONCILED`, `MAXLEN`; `connect()`, `enqueue()` (shared with the watcher and the api) |
+| `main.py` | `main()` (the loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `give_up`, `reconcile`, `check_gemini` |
+| `pipeline.py` | one function per task type: `read_circular`, `assess`, `check_policy`, `refresh_company`; `match` and `judge_policy`; the embeddings; `missing_work` for the reconciler. Each returns the tasks to queue next |
+| `../common/common/queue.py` | the Redis names, `connect()`, `key()` (a task's dedupe key) and `enqueue()` (shared with the watcher and the api) |
 | `llm.py` | the Gemini client, the three prompts with their Pydantic reply models, `embed()` |
 | `ocr.py` | PDF to text: rendering pages, the OCR request, cleaning the output |
-| `locks.py` | `held()`: an advisory lock on its own connection for a with-block; the lock names |
-| `failures.py` | which errors mean wait, retry or give up |
+| `failures.py` | `should_wait`, `should_retry`, `gemini_status` |
 | `storage.py` | `get_pdf()` from S3 |
 | `config.py` | every setting, from the environment or `.env` |
 
@@ -170,16 +166,14 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        Note right of M: load Settings (GEMINI_API_KEY empty? stop)
-        M->>PG: BEGIN, pg_advisory_xact_lock(key of "schema")
-        Note over PG: one service at a time changes the schema
-        M->>PG: create_all, add_missing_columns
-        M->>PG: move_single_company (once): company 1, assessments
-        M->>PG: per_company_codes (once): unique per company
-        M->>PG: COMMIT (the schema lock is released)
+        Note right of M: load Settings (GEMINI_API_KEY missing? stop)
+        M->>PG: BEGIN, pg_advisory_xact_lock(hashtext('rci-schema'))
+        Note over PG: services starting together take turns
+        M->>PG: create_all, then ADD COLUMN for any column a model gained
+        M->>PG: COMMIT (the transaction lock is released)
         M->>G: llm.check: one chat call and one embedding
         alt 400 / 403 / 404
-            Note right of M: stop: "Gemini rejected the configuration"
+            Note right of M: stop: "Gemini rejected the key or model name"
         else OK, or 429 / 5xx / no network
             Note right of M: carry on (a warning if unavailable)
         end
@@ -188,14 +182,10 @@ sequenceDiagram
     end
 ```
 
-- **The schema lock** (`pg_advisory_xact_lock`) is released by the COMMIT. Every service
-  runs `init_db` at startup, and the lock makes them take turns.
-- **Migrations** are additive and run once: `add_missing_columns` adds any column a model
-  gained (nullable). `move_single_company` runs only while the old single-company table
-  `company` exists and `companies` is empty: it creates company 1 from the old row, gives
-  every policy and gap `company_id = 1`, turns each analysed circular's verdict into a done
-  assessment, and moves those circulars to `read`. `per_company_codes` swaps the global
-  unique codes for (company, code) and (policy, code).
+- **Tables.** Every service runs `init_db` at startup: `create_all` makes missing tables, and
+  a column a model gained later is added (nullable; nothing is ever dropped). A transaction
+  lock (`pg_advisory_xact_lock`) makes services that start together take turns, so two never
+  create the same table at once; the COMMIT releases it.
 - **`check_gemini`** turns a wrong key or model name (a 4xx) into one clear error. A 429, a
   5xx or no network only logs a warning: tasks wait for Gemini themselves.
 - **The consumer name** is `<hostname>-<pid>`. In a container the pid is 1, so a restarted
@@ -288,27 +278,27 @@ flowchart TD
   the stream by `MAXLEN`) is acknowledged and skipped.
 - **`XAUTOCLAIM`** moves a task that has been pending with *another* consumer for
   `CLAIM_IDLE_SECONDS` (1,800) to this one. That worker is presumed dead. If it was only
-  slow (waiting for the GPU, say), both may run the task; the advisory lock makes the second
-  one a no-op.
+  slow, both may run the task once; every step checks the database first, so the second run
+  mostly finds the work done.
 - **`>`** asks for a task never delivered to anyone in the group.
 
 ---
 
 ## 6. Doing a task
 
-`handle()` turns the task's fields into ids and runs the pipeline function under a lock on
-the work itself:
+`run_task()` turns the task's fields into ids and calls its function from `TASKS`. There
+are no locks: the consumer group gave this task to this worker only.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
-        t{"task type"} -->|"circular.read"| cr["try lock circular/id<br/>read_circular()<br/>XADD circular.assess<br/>per pending company"]
-        t -->|"circular.assess"| ca["try lock assess/company/circular<br/>assess()"]
-        t -->|"policy.check"| pc["wait for lock policy/id<br/>check_new_policy()"]
-        t -->|"company.refresh"| co["wait for lock company/id<br/>refresh_company()<br/>XADD circular.assess each"]
-        t -->|"anything else"| drop["log 'unknown task',<br/>acknowledge it"]
+        direction TB
+        t(["run_task(task)"]) --> fn["TASKS[type](session, **ids)<br/>read_circular · assess ·<br/>check_policy · refresh_company"]
+        fn -->|"returns follow-up tasks"| del["DEL its dedupe key"]
+        del --> xadd[["enqueue each follow-up<br/>(circular.assess, or policy.check<br/>for a policy edited meanwhile)"]]
+        xadd --> ack(["XACK"])
+        fn -.->|"raised"| fail["should_wait / should_retry /<br/>give_up (section 16)"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -320,20 +310,20 @@ flowchart LR
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class t ask
-    class cr,ca,pc,co svc
-    class drop muted
+    class t start
+    class fn svc
+    class del,xadd queue
+    class ack ok
+    class fail bad
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- **Try-locks** (`circular.read`, `circular.assess`): if another worker holds the lock, it is
-  doing this exact work right now; this copy of the task is acknowledged without doing
-  anything.
-- **Waiting locks** (`policy.check`, `company.refresh`): a policy or a company can change
-  again while its task runs (two quick edits). The second task waits, then runs against the
-  latest state, so the second edit is never skipped.
-- Tasks are queued **after** the lock is released: `circular.assess` for each company
-  returned by `read_circular` or `refresh_company`.
+- **Follow-ups.** Each function returns the tasks to queue next: `read_circular` and
+  `refresh_company` return a `circular.assess` per pending company or circular;
+  `check_policy` returns itself when the policy was edited while it ran.
+- **The order at the end** is: delete the task's dedupe key, queue the follow-ups,
+  acknowledge. Deleting the key first lets a task queue itself again; a crash between the
+  steps only means the task runs once more.
 
 ---
 
@@ -460,31 +450,23 @@ sees:
 
 ---
 
-## 9. Connections and locks
+## 9. No duplicates: the dedupe key
 
-The engine keeps a **pool** of Postgres connections (5, plus up to 10 when busy;
-`pool_pre_ping` replaces any the server closed). One worker uses several at once:
+The consumer group gives each task to one worker, so workers need no locks to share the
+work. What's left is the same **work** queued twice (the reconciler, a double Reprocess, a
+watcher restart). `enqueue` prevents it with a key per task:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
-        subgraph proc["one worker process"]
-            direction TB
-            sess["<b>the work session</b><br/>reads and saves each step,<br/>commits after every step"]
-            l1["<b>lock connection</b><br/>holds circular/id, assess/…,<br/>policy/id or company/id<br/>for the whole task"]
-            l2["<b>lock connection</b><br/>holds ocr while<br/>the PDF is on the GPU"]
-            rc["<b>Redis connection</b><br/>XREADGROUP, XADD, XACK"]
-        end
-        pool[("the engine's pool<br/>5 + 10 extra")]
-        PG[("Postgres")]
-        R[["Redis"]]
-        sess --> pool
-        l1 --> pool
-        l2 --> pool
-        pool --> PG
-        rc --> R
+        direction TB
+        add(["enqueue(kind, **ids)"]) --> nx{"SET rci:queued:&lt;task&gt;<br/>1 NX EX 86400"}
+        nx -->|"OK"| xadd[["XADD rci:tasks"]]
+        nx -->|"nil: queued or running"| skip(["dropped"])
+        xadd --> w["a worker: XREADGROUP,<br/>does the work"]
+        w --> del["DEL rci:queued:&lt;task&gt;"]
+        del --> ack(["XACK"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -496,32 +478,30 @@ flowchart LR
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class sess svc
-    class l1,l2 ask
-    class rc,R queue
-    class pool,PG data
-    style proc fill:#0c1a24,stroke:#2dd4bf
+    class add start
+    class nx ask
+    class xadd queue
+    class skip muted
+    class w,del svc
+    class ack ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-Each lock lives on a connection of its own, taken by `locks.held()` for exactly the length
-of a with-block, so it outlasts the work session's commits. `lock_key()` (in
-`common/db.py`) turns a name into a 64-bit key: a blake2b hash of the app, the connection's
-schema and the name. If a worker dies, its connections close and Postgres releases its
-locks.
+- The key is `rci:queued:` plus the task's fields, sorted, e.g.
+  `rci:queued:circular_id=98:type=circular.read`. It expires after a day, in case a worker
+  dies between finishing a task and deleting it.
+- A retry keeps the key: the task is still queued, so no copy can be added meanwhile.
+- **The rare clash.** Two *different* tasks can still judge the same (circular, policy) pair at
+  once: a `policy.check` and a `circular.assess` for the same company. The unique constraint
+  on `policy_checks` rejects the second save with an `IntegrityError`, which `should_retry`
+  treats as a hiccup: the retry reloads the judged pairs and skips it.
+- **The GPU.** The OCR server runs one sequence at a time (`--max-num-seqs 1`) and queues
+  concurrent requests, so workers send pages freely.
 
-| Lock | Name | Taken by | Held while | If another worker holds it |
-|---|---|---|---|---|
-| a circular | `circular/<id>` | `circular.read` | the circular is read | acknowledge, do nothing |
-| an assessment | `assess/<company>/<circular>` | `circular.assess`, and `policy.check` for each circular | one company works on one circular | `circular.assess`: acknowledge, do nothing · `policy.check`: wait |
-| a policy | `policy/<id>` | `policy.check` | the policy is embedded and checked | wait |
-| a company | `company/<id>` | `company.refresh` | its assessments are listed | wait |
-| the GPU | `ocr` | `parse` | a PDF is on the GPU | wait |
-| the schema | `schema` (transaction lock) | `init_db` | tables are created or upgraded | wait |
-
-Why advisory locks rather than `SELECT … FOR UPDATE SKIP LOCKED`: a row lock falls off at
-the first COMMIT, and the worker commits after every step. See
-[the plain-words guide](../../how_the_worker_works.md#why-not-sqls-for-update-skip-locked).
+Why no `SELECT … FOR UPDATE SKIP LOCKED`: the queue is Redis, and the consumer group already
+hands each task to one worker; a row lock would also be released by the first of the
+worker's step-by-step commits. See
+[the plain-words guide](../../how_the_worker_works.md#why-no-skip-locked).
 
 ---
 
@@ -542,16 +522,13 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        K->>PG: pg_try_advisory_lock(key of circular/98): true
         K->>PG: SELECT the circular
         alt status new, published before the cutoff
             K->>PG: UPDATE status = 'skipped', COMMIT
         else status new
-            K->>PG: pg_advisory_lock(key of ocr): wait for the GPU
             K->>PG: a twin with the same sha256 and text?
             K->>X: else GET the PDF, OCR each page
             K->>PG: UPDATE text, status = 'parsed', COMMIT ①
-            K->>PG: pg_advisory_unlock(ocr)
         end
         opt summary IS NULL
             K->>X: SUMMARY_PROMPT + up to 100,000 characters
@@ -560,11 +537,9 @@ sequenceDiagram
         K->>X: embed title + summary + requirements (RETRIEVAL_QUERY)
         K->>PG: UPDATE embedding, embedding_model, COMMIT ③
         K->>PG: UPDATE status = 'read', error = NULL, COMMIT ④
-        K->>PG: INSERT INTO assessments … ON CONFLICT DO NOTHING (each company), COMMIT
-        K->>PG: SELECT company_id FROM assessments WHERE pending
-        K->>PG: pg_advisory_unlock(circular/98)
-        K->>R: XADD circular.assess, one per pending company
-        K->>R: XACK
+        K->>PG: INSERT INTO assessments … ON CONFLICT DO NOTHING (every company), COMMIT
+        K->>PG: SELECT the pending assessments of this circular
+        K->>R: DEL its key, XADD circular.assess per pending company, XACK
     end
 ```
 
@@ -619,8 +594,8 @@ flowchart LR
 - **The embedding** is made from the title, summary and obligations
   (`RETRIEVAL_QUERY`), once, for every company's matching.
 - **Fan-out:** `pending_companies()` inserts a pending assessment for every company (`ON
-  CONFLICT DO NOTHING`) and returns the companies still pending; `handle()` queues a
-  `circular.assess` for each.
+  CONFLICT DO NOTHING`) and returns a `circular.assess` task for each company still
+  pending.
 
 Logs: `#98 parsed: 12408 chars`, `#98 read: addressed to '…'`.
 
@@ -642,7 +617,6 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        K->>PG: pg_try_advisory_lock(key of assess/A/98): true
         K->>PG: SELECT the company, the circular (must be 'read')
         K->>PG: INSERT the assessment ON CONFLICT DO NOTHING, COMMIT
         K->>PG: SELECT the assessment
@@ -662,8 +636,7 @@ sequenceDiagram
             end
         end
         K->>PG: UPDATE assessment status = 'done', COMMIT
-        K->>PG: pg_advisory_unlock(assess/A/98)
-        K->>R: XACK
+        K->>R: DEL its key, XACK
     end
 ```
 
@@ -715,7 +688,7 @@ flowchart LR
 The verdict, the gap and its first event are one transaction. Each verdict is committed
 before the next policy is asked about, so a retry after a failure only asks about the rest.
 
-Logs: `#98 vs POL-KYC v1 (similarity 0.74): GAP`, then
+Logs: `#98 vs POL-KYC v1 (0.74): GAP` (0.74 is the similarity), then
 `#98 for company 1: applies: True, gaps opened: ['POL-KYC']`.
 
 ---
@@ -736,21 +709,22 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        K->>PG: pg_advisory_lock(key of policy/11): wait if another worker has it
+        Note right of K: started = now()
         K->>PG: SELECT the policy (must be the task's company's) and the company
         opt no embeddings, or another model
             K->>G: embed each 5,000-char chunk of "title + text" (RETRIEVAL_DOCUMENT)
             K->>PG: UPDATE embeddings, embedding_model, COMMIT
         end
-        K->>PG: recent_applicable(): the company's done + applicable assessments,<br/>read circulars since the cutoff, with requirements
-        Note right of K: keep those from a regulator the policy lists,<br/>stop if none (or no description)
-        loop each such circular
-            K->>PG: pg_advisory_lock(key of assess/A/98): wait
+        K->>PG: the company's done + applicable assessments of circulars since the cutoff
+        loop each one from a regulator the policy lists, with requirements
             Note right of K: match(): the company's top policies for it,<br/>only unjudged pairs go to Gemini
-            K->>PG: pg_advisory_unlock(assess/A/98)
         end
-        K->>PG: pg_advisory_unlock(policy/11)
-        K->>R: XACK
+        K->>PG: UPDATE policies SET checked_at = started, COMMIT
+        alt updated_at > started (edited meanwhile)
+            K->>R: DEL its key, XADD policy.check again, XACK
+        else
+            K->>R: DEL its key, XACK
+        end
     end
 ```
 
@@ -761,13 +735,14 @@ sequenceDiagram
 - **Which circulars:** `recent_applicable()`: the company's assessments that are `done` and
   apply, of `read` circulars published in the last `LOOKBACK_DAYS` with obligations, from a
   regulator the policy lists. Their OCR text isn't loaded.
-- **Each circular** is matched under its `assess/<company>/<circular>` lock, waiting for it,
-  so a `circular.assess` of the same pair never runs alongside.
+- **`checked_at`.** At the end the policy's `checked_at` is set to when the check started.
+  A policy saved after that (`updated_at > checked_at`) shows as "Waiting for the worker" in
+  the console, and `check_policy` queues itself once more.
 - **Only unjudged pairs cost anything.** A policy whose owner or regulators changed is
   embedded already; only pairs never judged go to Gemini. An edited text is a new version,
   so its pairs are judged again, except those with a gap.
 
-Log: `POL-AML checked against 4 recent circulars of company 1, gaps opened: ['POL-AML']`.
+Log: `POL-AML checked, gaps opened: ['POL-AML']`.
 
 ---
 
@@ -787,13 +762,10 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        K->>PG: pg_advisory_lock(key of company/A): wait
         K->>PG: SELECT id FROM circulars WHERE status = 'read' AND published_at >= cutoff
         K->>PG: INSERT INTO assessments … ON CONFLICT DO NOTHING (each), COMMIT
         K->>PG: SELECT the company's pending assessments of read circulars
-        K->>PG: pg_advisory_unlock(company/A)
-        K->>R: XADD circular.assess, one per pending circular
-        K->>R: XACK
+        K->>R: DEL its key, XADD circular.assess per pending circular, XACK
     end
 ```
 
@@ -818,13 +790,12 @@ flowchart TD
         tick(["every minute, each worker"]) --> nx{"SET rci:reconciled &lt;me&gt;<br/>NX EX RECONCILE_MINUTES×60"}
         nx -->|"nil: another worker<br/>did it this interval"| skip(["nothing"])
         nx -->|"OK: my turn"| mw["missing_work(): three queries"]
-        mw --> q1["circulars new or parsed<br/>→ circular.read"]
-        mw --> q2["assessments pending,<br/>circular read → circular.assess"]
-        mw --> q3["policies not embedded with<br/>the current model → policy.check"]
-        q1 --> add[["XADD each"]]
+        mw --> q1["circulars still<br/>new or parsed<br/>→ circular.read"]
+        mw --> q2["assessments pending,<br/>circular read<br/>→ circular.assess"]
+        mw --> q3["policies saved after their<br/>checked_at, or never checked<br/>→ policy.check"]
+        q1 --> add[["enqueue each: work still<br/>queued is skipped by its key"]]
         q2 --> add
         q3 --> add
-        add --> gc["forget_stopped_workers():<br/>XGROUP DELCONSUMER each consumer<br/>with no pending task, idle over a day"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -841,17 +812,15 @@ flowchart TD
     class skip muted
     class mw svc
     class q1,q2,q3 data
-    class add,gc queue
+    class add queue
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - **One worker per interval.** Each worker tries once a minute; `SET NX EX` succeeds for
-  exactly one of them, and the key expires when the next run is due. At startup a worker
-  reconciles only if no worker did so in the last interval.
-- **Duplicates are harmless.** Work already queued or being done is queued again; the
-  locks and the status checks make the second copy a no-op.
-- **Stopped workers.** Every container restart joins the group under a new name. Names that
-  hold no task and haven't read for a day are removed (`XGROUP DELCONSUMER`).
+  exactly one of them, and the key expires when the next run is due.
+- **No duplicates.** Work that's still queued or running is skipped by its dedupe key.
+- **Policies** are unfinished when they were saved after their last check (`checked_at` is
+  missing or older than `updated_at`) or embedded with another model.
 
 ---
 
@@ -876,12 +845,12 @@ sequenceDiagram
         K->>PG: UPDATE embedding: COMMIT ③
         K->>PG: UPDATE status 'read': COMMIT ④
         K->>PG: INSERT assessments: COMMIT ⑤
-        K->>R: XADD circular.assess × companies, then XACK ⑥
+        K->>R: DEL its key, XADD circular.assess × companies, XACK ⑥
         Note right of K: circular.assess A/98
         K->>PG: UPDATE applicable: COMMIT ⑦
         K->>PG: INSERT policy_checks (+ gap): COMMIT ⑧
         K->>PG: UPDATE assessment 'done': COMMIT ⑨
-        K->>R: XACK ⑩
+        K->>R: DEL its key, XACK ⑩
     end
 ```
 
@@ -901,8 +870,7 @@ task is still pending in Redis, under the dead worker's name:
 
 **Who picks it up.** The same container, restarted by Docker, reads its own pending list
 first. Otherwise another worker takes the task over after `CLAIM_IDLE_SECONDS`, and the
-reconciler may queue the unfinished work sooner. Postgres released the dead process's locks
-when its connections closed.
+reconciler may queue the unfinished work sooner.
 
 **Reloading after a commit.** SQLAlchemy expires a session's objects when it commits, so the
 next use reads the row again: the worker always sees the latest values, including changes
@@ -912,22 +880,22 @@ the api made meanwhile.
 
 ## 16. When something fails
 
-Every error in `handle()` goes through `run_task()` (the rules are in `failures.py`):
+Every error goes through `run_task()`, with the rules in `failures.py`:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        err["handle() raised"] --> rb["ROLLBACK the work session"]
-        rb --> down{"service_down?<br/>can't connect (OCR loading),<br/>Gemini 429 (quota)"}
+        err["the task raised"] --> rb["ROLLBACK the work session"]
+        rb --> down{"should_wait?<br/>can't connect (OCR loading),<br/>Gemini 429 (quota)"}
         down -->|"yes"| wait["sleep RETRY_SECONDS (60),<br/><b>no XACK</b>: the task is<br/>this worker's next one"]
-        down -->|"no"| crashed{"service_crashed?<br/>5xx, timeout, dropped connection,<br/>BadReply"}
-        crashed -->|"yes"| count{"tries for this task id<br/>reached MAX_TRIES (3)?"}
-        count -->|"no"| retry["<b>no XACK</b>: retried<br/>straight away"]
+        down -->|"no"| retry{"should_retry?<br/>5xx, timeout, dropped connection,<br/>BadReply, IntegrityError"}
+        retry -->|"yes"| count{"tries for this task id<br/>reached MAX_TRIES (3)?"}
+        count -->|"no"| again["<b>no XACK</b>: retried<br/>straight away"]
         count -->|"yes"| give
-        crashed -->|"no: a 400,<br/>'OCR found no text', …"| give["give_up(): circular or assessment<br/>status 'failed', error saved, COMMIT;<br/>XADD rci:dead the task + error"]
-        give --> ack(["XACK"])
+        retry -->|"no: a 400,<br/>'OCR found no text', …"| give["give_up(): circular or assessment<br/>status 'failed', error saved, COMMIT;<br/>XADD rci:dead the task + error"]
+        give --> ack(["DEL its key, XACK"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -941,8 +909,8 @@ flowchart TD
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class err bad
     class rb muted
-    class down,crashed,count ask
-    class wait,retry muted
+    class down,retry,count ask
+    class wait,again muted
     class give bad
     class ack ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
@@ -950,17 +918,16 @@ flowchart TD
 
 | Error | Examples | What happens | What you do |
 |---|---|---|---|
-| **service down** | can't connect to ocr (the model is loading); Gemini 429 (quota) | wait `RETRY_SECONDS`, retry, for as long as it takes | nothing, or raise your Gemini quota |
-| **service crashed** | a 5xx; a timeout; a dropped connection; `BadReply` (not the asked-for JSON) | retried up to `MAX_TRIES` (3), then given up | usually nothing |
-| **anything else** | a 400 from Gemini; `OCR found no text in the PDF` | `give_up()`: `failed` with the error, the task copied to `rci:dead`, acknowledged | open the circular, read the error, press **Reprocess** |
+| **should wait** | can't connect to ocr (the model is loading); Gemini 429 (quota) | wait `RETRY_SECONDS`, retry, for as long as it takes | nothing, or raise your Gemini quota |
+| **should retry** | a 5xx; a timeout; a dropped connection; `BadReply` (not the asked-for JSON); `IntegrityError` (another task saved the same verdict first) | retried up to `MAX_TRIES` (3), then given up | usually nothing |
+| **anything else** | a 400 from Gemini; `OCR found no text in the PDF` | `give_up()`: `failed` with the error, the task copied to `rci:dead`, its key deleted, acknowledged | open the circular, read the error, press **Reprocess** |
 
-- LangChain retries Gemini's rate limits and server errors itself first (`max_retries=3`).
+- LangChain retries Gemini rate limits and server errors itself first (`max_retries=3`).
   `gemini_status()` reads the HTTP code from the error underneath LangChain's.
 - The tries counter lives in the worker process, keyed by task id.
 - `give_up` marks a `circular.read` failure on the circular (every company sees it) and a
-  `circular.assess` failure on that company's assessment only. A `policy.check` or
-  `company.refresh` failure only goes to `rci:dead`; the reconciler retries an unembedded
-  policy later.
+  `circular.assess` failure on that company's assessment only. Other failures only go to
+  `rci:dead`; the reconciler tries an unchecked policy again later.
 
 ---
 
@@ -981,18 +948,18 @@ sequenceDiagram
 
     rect rgb(13, 20, 36)
         W->>PG: INSERT circulars (status new), COMMIT
-        W->>R: XADD circular.read
-        A->>PG: POST /auth/signup: INSERT companies, users
-        A->>R: XADD company.refresh
+        W->>R: enqueue circular.read
+        A->>PG: POST /auth/signup: INSERT companies, users (one transaction)
+        A->>R: enqueue company.refresh
         A->>PG: POST or PUT /policies: INSERT or UPDATE policies
-        A->>R: XADD policy.check
+        A->>R: enqueue policy.check
         A->>PG: PUT /company (new description): UPDATE companies,<br/>its assessments of read circulars back to pending
-        A->>R: XADD company.refresh
+        A->>R: enqueue company.refresh
         A->>PG: POST /circulars/{id}/reprocess (read): upsert its assessment pending,<br/>DELETE its "up to date" policy_checks
-        A->>R: XADD circular.assess
+        A->>R: enqueue circular.assess
         A->>PG: POST /circulars/{id}/reprocess (not read): status new or parsed
-        A->>R: XADD circular.read
-        Note over W,R: every XADD comes after the COMMIT, so a worker<br/>never gets a task before its change is visible
+        A->>R: enqueue circular.read
+        Note over W,R: every enqueue comes after the COMMIT, and is dropped<br/>if the same task is already queued or running
     end
 ```
 
@@ -1014,34 +981,32 @@ sequenceDiagram
 
 | Command | Who | When |
 |---|---|---|
-| `XADD rci:tasks MAXLEN ~ 100000 * type … ids …` | watcher, api, worker | a task is queued (`enqueue`) |
+| `SET rci:queued:<task> 1 NX EX 86400`, then `XADD rci:tasks MAXLEN ~ 100000 * type … ids …` | watcher, api, worker | a task is queued (`enqueue`); skipped if the key exists |
 | `XGROUP CREATE rci:tasks workers 0 MKSTREAM` | worker | every turn of the loop; `BUSYGROUP` means it exists |
 | `XREADGROUP GROUP workers <me> COUNT 1 STREAMS rci:tasks 0` | worker | its own unfinished task |
 | `XAUTOCLAIM rci:tasks workers <me> 1800000 0-0 COUNT 1` | worker | a dead worker's task |
 | `XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS rci:tasks >` | worker | a new task |
-| `XACK rci:tasks workers <id>` | worker | a task finished, given up, or a no-op |
+| `DEL rci:queued:<task>`, then `XACK rci:tasks workers <id>` | worker | a task finished or given up |
 | `XADD rci:dead * type … ids … task_id … error …` | worker | a task given up |
 | `SET rci:reconciled <me> NX EX 900` | worker | once a minute: is it my turn to reconcile? |
-| `XINFO CONSUMERS rci:tasks workers`, `XGROUP DELCONSUMER …` | worker | after reconciling: forget stopped workers |
 
 To look inside: `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` (`lag`: waiting,
-`pending`: being worked on), `XPENDING rci:tasks workers`, `XRANGE rci:dead - +`.
+`pending`: being worked on), `XRANGE rci:dead - +`, `KEYS rci:queued:*`.
 
 ---
 
 ## 19. Every database operation
 
-What each task sends, in order. `…` stands for the values; each lock is `SELECT
-current_schema()` then the lock call on its own connection.
+What each task sends, in order. `…` stands for the values.
 
 | Task | Statements |
 |---|---|
-| startup | `pg_advisory_xact_lock(<schema>)`; `CREATE TABLE …`; `ALTER TABLE … ADD COLUMN IF NOT EXISTS …`; the one-off migrations; `COMMIT` |
-| `circular.read` | `pg_try_advisory_lock(<circular/id>)`; `SELECT … FROM circulars WHERE id = …`; if new: `pg_advisory_lock(<ocr>)`, `SELECT … WHERE sha256 = … AND id <> … AND text IS NOT NULL`, `UPDATE circulars SET text, status = 'parsed'`, `COMMIT`, unlock `ocr`; `UPDATE … SET addressed_to, summary, requirements, embedding = NULL`, `COMMIT`; `UPDATE … SET embedding, embedding_model`, `COMMIT`; `UPDATE … SET status = 'read', error = NULL`, `COMMIT`; `SELECT id FROM companies`; `INSERT INTO assessments … ON CONFLICT DO NOTHING` each, `COMMIT`; `SELECT company_id FROM assessments WHERE circular_id = … AND status = 'pending'`; unlock |
-| `circular.assess` | `pg_try_advisory_lock(<assess/c/id>)`; `SELECT` the company and the circular; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT` the assessment; maybe `UPDATE assessments SET applicable, applies_reason`, `COMMIT`; `SELECT … FROM policies WHERE company_id = …`; `SELECT … FROM policy_checks WHERE circular_id = …`; `SELECT … FROM gaps WHERE circular_id = …`; per policy asked: `SELECT … FROM controls`, `INSERT INTO policy_checks`, maybe `INSERT INTO gaps … RETURNING id` and `INSERT INTO gap_events`, `COMMIT`; `UPDATE assessments SET status = 'done', error = NULL, updated_at`, `COMMIT`; unlock |
-| `policy.check` | `pg_advisory_lock(<policy/id>)`; `SELECT` the policy and the company; maybe `UPDATE policies SET embeddings, embedding_model`, `COMMIT`; `SELECT circulars … JOIN assessments …` (no `text`); maybe `UPDATE circulars SET embedding`, `COMMIT`; per circular: `pg_advisory_lock(<assess/c/id>)` and the matching statements of `circular.assess`; unlock |
-| `company.refresh` | `pg_advisory_lock(<company/id>)`; `SELECT id FROM circulars WHERE status = 'read' AND published_at >= …`; `INSERT INTO assessments … ON CONFLICT DO NOTHING` each, `COMMIT`; `SELECT circular_id FROM assessments JOIN circulars … WHERE pending`; unlock |
-| reconciler | `SELECT id FROM circulars WHERE status IN ('new', 'parsed')`; `SELECT company_id, circular_id FROM assessments JOIN circulars … WHERE assessments.status = 'pending' AND circulars.status = 'read'`; `SELECT … FROM policies` (no `text`) |
+| startup | `SELECT pg_advisory_xact_lock(hashtext('rci-schema'))`; `CREATE TABLE …`; `ALTER TABLE … ADD COLUMN …` for new columns; `COMMIT` |
+| `circular.read` | `SELECT … FROM circulars WHERE id = …`; if new: `SELECT text … WHERE sha256 = … AND id <> … AND text IS NOT NULL`, `UPDATE circulars SET text, status = 'parsed'`, `COMMIT`; `UPDATE … SET addressed_to, summary, requirements, embedding = NULL`, `COMMIT`; `UPDATE … SET embedding, embedding_model`, `COMMIT`; `UPDATE … SET status = 'read', error = NULL`, `COMMIT`; `SELECT id FROM companies`; `INSERT INTO assessments … ON CONFLICT DO NOTHING` (one statement for all), `COMMIT`; `SELECT company_id, circular_id FROM assessments JOIN circulars … WHERE pending` |
+| `circular.assess` | `SELECT` the company and the circular; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT` the assessment; maybe `UPDATE assessments SET applicable, applies_reason`, `COMMIT`; `SELECT … FROM policies WHERE company_id = …`; `SELECT policy_id, policy_version FROM policy_checks WHERE circular_id = …`; `SELECT policy_id FROM gaps WHERE circular_id = …`; per policy asked: `SELECT … FROM controls`, `INSERT INTO policy_checks`, maybe `INSERT INTO gaps … RETURNING id` and `INSERT INTO gap_events`, `COMMIT`; `UPDATE assessments SET status = 'done', error = NULL, updated_at`, `COMMIT` |
+| `policy.check` | `SELECT` the policy and the company; maybe `UPDATE policies SET embeddings, embedding_model`, `COMMIT`; `SELECT circulars … JOIN assessments …` (no `text`); per circular, the matching statements of `circular.assess`; `UPDATE policies SET checked_at`, `COMMIT` |
+| `company.refresh` | `SELECT id FROM circulars WHERE status = 'read' AND published_at >= …`; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT … WHERE pending` |
+| reconciler | `SELECT id FROM circulars WHERE status IN ('new', 'parsed')`; the pending assessments; `SELECT company_id, id FROM policies WHERE checked_at IS NULL OR checked_at < updated_at OR embedding_model IS DISTINCT FROM …` |
 | giving up | `ROLLBACK`; `UPDATE circulars` or `UPDATE assessments SET status = 'failed', error = …`; `COMMIT` |
 
 To watch them yourself, run a worker on the host with `echo=True` in `make_engine` for a
@@ -1096,14 +1061,14 @@ Constants in the code:
 | Constant | Value | Where | Meaning |
 |---|---|---|---|
 | `STREAM`, `GROUP`, `DEAD`, `RECONCILED` | `rci:tasks`, `workers`, `rci:dead`, `rci:reconciled` | `common/queue.py` | the Redis names |
-| `MAXLEN` | 100000 (approximate) | `common/queue.py` | the stream is trimmed beyond this |
-| `BLOCK_MS` | 5000 | `main.py` | how long a worker waits for a new task per read |
+| dedupe keys | `rci:queued:…`, expire after 1 day | `common/queue.py` | a task is queued at most once at a time |
+| stream length | 100000 (approximate) | `common/queue.py` | the stream is trimmed beyond this |
+| blocking read | 5000 ms | `main.py` | how long a worker waits for a new task per read |
 | `MAX_TRIES` | 3 | `failures.py` | tries before a crashing task is given up |
 | `DUE_DAYS` | high 7, medium 30, low 60 | `pipeline.py` | days a gap's owner gets, by severity |
 | `EMBED_CHARS` | 5000 | `pipeline.py` | the chunk size for embeddings |
-| `EMBED_DIMENSIONS` | 768 | `llm.py` | numbers per embedding |
-| `APPLICABILITY_CHARS` | 4000 | `llm.py` | text sent for "does it apply?" |
+| embedding size | 768 | `llm.py` | numbers per embedding |
+| applicability text | 4000 characters | `llm.py` | text sent for "does it apply?" |
 | `DPI` | 200 | `ocr.py` | page rendering for OCR |
-| lock names | `circular`, `assess`, `policy`, `company`, `ocr`, `schema` | `locks.py`, `common/db.py` | hashed with the schema into 64-bit keys |
 
 For what the log lines mean, see [Reading its log](../../how_it_works.md#reading-its-log).

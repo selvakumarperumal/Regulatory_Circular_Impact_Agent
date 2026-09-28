@@ -24,7 +24,7 @@ At every step you'll see what the worker does, **what goes through the task queu
 4. [Other things you can do](#4-other-things-you-can-do)
 5. [The task queue: Redis Streams](#5-the-task-queue-redis-streams)
 6. [How the worker uses the database](#6-how-the-worker-uses-the-database)
-7. [Locks: when the same task arrives twice](#7-locks-when-the-same-task-arrives-twice)
+7. [No duplicates: each task is queued once](#7-no-duplicates-each-task-is-queued-once)
 8. [Companies and logins](#8-companies-and-logins)
 9. [When something goes wrong](#9-when-something-goes-wrong)
 10. [Quick reference](#10-quick-reference)
@@ -384,8 +384,8 @@ The console sends it to the api, which saves the row under **your company** and 
 XADD rci:tasks * type policy.check company_id A policy_id 11
 ```
 
-The console answers at once; the worker does the rest in the background, starting straight
-away.
+The console answers at once, and the policy's page shows **Waiting for the worker**. The
+worker does the rest in the background, starting straight away.
 
 ### Step 2: the worker embeds it
 
@@ -422,7 +422,9 @@ Only **one** Gemini question is asked: the pair nobody has checked yet.
 | `gaps` | **company A · POL-AML · severity high · due in 7 days** |
 | `gap_events` | **agent · opened · "…"** |
 
-The task is acknowledged. **What it cost:** 1 embedding (the policy) and 1 check.
+The worker stamps the policy's `checked_at`, and the page, which has been looking every
+3 seconds, switches to **Checked** by itself, listing the new gap. The task is acknowledged.
+**What it cost:** 1 embedding (the policy) and 1 check.
 
 > 💡 **No restart, no waiting.** The worker starts on the new policy the moment you save it.
 
@@ -590,8 +592,8 @@ flowchart LR
 ```
 
 Only one worker does this per interval: the first to set the key `rci:reconciled` (with
-`SET … NX EX 900`) wins, and the others skip it. A task queued twice this way is harmless
-(see [section 7](#7-locks-when-the-same-task-arrives-twice)).
+`SET … NX EX 900`) wins, and the others skip it. Work that's already queued isn't queued
+again (see [section 7](#7-no-duplicates-each-task-is-queued-once)).
 
 ### The dead-letter stream
 
@@ -735,80 +737,33 @@ already done is lost or paid for twice:
 
 ---
 
-## 7. Locks: when the same task arrives twice
+## 7. No duplicates: each task is queued once
 
-The consumer group never hands **one** task to two workers. But the same **work** can be
-queued twice: the watcher queued `circular.read 98`, and the reconciler, seeing 98 still
-`parsed`, queued it again. Two workers could each get one copy. To make sure the work is
-done once, the worker also takes a **Postgres advisory lock** on the work itself.
+The consumer group already gives each task to **one** worker, so the workers need no locks
+to share the work. What's left to prevent is the same **work** being queued twice: the
+watcher queued `circular.read 98`, then the reconciler, seeing 98 still `parsed`, queues it
+again, or you press **Reprocess** twice. Two copies would go to two workers, and both would
+pay for the same OCR and Gemini calls.
 
-### A lock is a sticky note
-
-Before reading circular 98, a worker puts a sticky note on it saying **"mine"**. Another
-worker that sees the note leaves it alone. When the first worker is done, it takes the note
-off. In Postgres the note is an **advisory lock**: a lock Postgres keeps in memory for a
-number the app chooses (a 64-bit key), not tied to any table or row. Three calls matter:
-
-| Call | In sticky-note terms | Answers |
-|---|---|---|
-| `pg_try_advisory_lock(key)` | **try** to put the note on; if someone else's is there, **don't wait** | `true`: it's yours · `false`: someone else has it |
-| `pg_advisory_lock(key)` | put the note on, **waiting** until any other note is removed | (returns when it's yours) |
-| `pg_advisory_unlock(key)` | take your note off | |
-
-### "Skip locked": try, and if it's taken, skip it
-
-People call this pattern **"skip locked"**: when several workers share work, each takes an
-item, and the others **skip** whatever is **locked** instead of waiting for it. Here it's what
-happens when a duplicate `circular.read` reaches a second worker:
-
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant Q as Redis stream
-        participant K1 as worker 1
-        participant DB as Postgres
-        participant K2 as worker 2
-    end
-
-    rect rgb(13, 20, 36)
-        Q-->>K1: circular.read 98 (from the watcher)
-        K1->>DB: pg_try_advisory_lock("circular/98")
-        DB-->>K1: true: 98 is yours
-        Q-->>K2: circular.read 98 again (from the reconciler)
-        K2->>DB: pg_try_advisory_lock("circular/98")
-        DB-->>K2: false: someone is on it
-        K2->>Q: XACK: nothing to do
-        Note over K1: reads 98, once
-        K1->>DB: pg_advisory_unlock("circular/98")
-        K1->>Q: XACK
-    end
-```
-
-The second worker doesn't wait for 98: the first is already doing exactly that work, so it
-acknowledges its copy and moves on to its next task.
-
-### Try, or wait?
-
-Not every task skips. Reading a circular or assessing it is the same work whoever does it,
-so a second copy can simply be dropped. But a policy or a company can **change again** while
-its task runs (you save a policy twice in a row), and the second task must see the second
-edit. Those tasks **wait** for the lock instead, then read the latest state:
+So a task is queued **at most once at a time**. `enqueue` first sets a small key for the
+task in Redis with `SET … NX` ("only if it doesn't exist"). If the key was already there,
+the same task is queued or running, and the new copy is simply dropped: the one already
+there will do the work. When a worker finishes a task, it deletes the key, so the task can
+be queued again later:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        task(["A task arrives"]) --> kind{"Which kind<br/>of work?"}
-        kind -->|"circular.read<br/>circular.assess"| tryl{"pg_try_advisory_lock<br/>answers at once"}
-        tryl -->|"true: it's mine"| work1["Do the work,<br/>pg_advisory_unlock"]
-        tryl -->|"false: another worker<br/>is doing exactly this"| skip["Skip: XACK<br/>without doing anything"]
-        kind -->|"policy.check<br/>company.refresh"| waitl["pg_advisory_lock<br/>waits until it's free"]
-        waitl --> fresh["Read the latest state<br/>(a second edit may<br/>have just been saved)"]
-        fresh --> work2["Do the work,<br/>pg_advisory_unlock"]
-        work1 --> ack(["XACK"])
-        work2 --> ack
+        add(["enqueue: circular.read 98"]) --> nx{"SET rci:queued:…:circular_id=98<br/>NX EX 1 day"}
+        nx -->|"OK: not queued yet"| x[["XADD to rci:tasks"]]
+        nx -->|"nil: already queued<br/>or running"| skip(["skip: the task that's<br/>there will do the work"])
+        x --> take["a worker takes it<br/>(XREADGROUP)"]
+        take --> work["does the work"]
+        work --> del["DEL the key: it can<br/>be queued again"]
+        del --> follow[["XADD its follow-up tasks"]]
+        follow --> ack(["XACK"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -820,153 +775,74 @@ flowchart TD
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class task start
-    class kind,tryl ask
-    class work1,work2,fresh svc
-    class waitl queue
+    class add start
+    class nx ask
+    class x,follow queue
     class skip muted
+    class take,work,del svc
     class ack ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-### The notes
+A few details make this safe:
 
-| Note (lock name) | Protects | Taken with | If another worker has it |
-|---|---|---|---|
-| `circular/<id>` | reading one circular | try | skip: the other worker is reading it |
-| `assess/<company>/<circular>` | one company's assessment of one circular | try (wait, inside `policy.check`) | skip |
-| `policy/<id>` | embedding and checking one policy | wait | wait, then check the latest version |
-| `company/<id>` | refreshing one company | wait | wait, then refresh with the latest description |
-| `ocr` | the GPU, which reads one page at a time | wait | wait for the GPU |
-| `schema` | creating and upgrading tables when a service starts | wait | wait: every service needs the tables |
+- **The key is deleted before the follow-ups are queued**, so a task can queue itself again.
+  A policy edited while its check was running is checked once more, against the new text.
+- **A key expires after a day**, in case a worker dies at the wrong moment and never
+  deletes it.
+- **Retries keep the key.** A task that waits for Gemini, or is retried after a hiccup, is
+  still the same task, so nothing else can queue a copy meanwhile.
 
-A lock in Postgres is a **number**, not a name, so each name becomes a number with a hash of
-the app, the database **schema** and the name (`lock_key` in `backend/common/common/db.py`).
-Every worker gets the same number for the same name, and nothing else ever does: another copy
-of the app in its own schema or database never blocks these workers.
+### The rare clash
+
+Two **different** tasks can still touch the same row at the same moment: a new policy's
+`policy.check` and a new circular's `circular.assess` may both ask Gemini about the same
+(circular, policy) pair. The database keeps only one verdict per pair (a unique
+constraint), so the second save fails with an `IntegrityError`. The worker treats that as a
+hiccup and retries the task, which then sees the verdict already saved and skips it.
+Nothing is marked failed, and no gap is opened twice.
 
 ### Sharing the GPU
 
-The GPU reads one page at a time, so only one worker runs OCR at once (the `ocr` note). The
-others don't sit idle: assessments and policy checks need no GPU, so they run on Gemini at
-the same time:
+The OCR server takes one page at a time (`--max-num-seqs 1`) and queues the rest, so the
+workers don't need to take turns themselves: they all send pages, and the server works
+through them in order. Meanwhile the other steps, which need no GPU, keep running:
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     box rgb(11, 16, 32)
         participant K1 as worker 1
-        participant DB as Postgres
         participant O as ocr (GPU)
         participant G as Gemini
         participant K2 as worker 2
     end
 
     rect rgb(13, 20, 36)
-        K1->>DB: circular.read 99: take the ocr lock
-        K1->>O: read circular 99, page by page
-        K2->>DB: circular.assess (A, 98): no GPU needed
-        K2->>G: does 98 apply to A? A's closest policies?
-        Note over K1,K2: the Gemini work runs while the GPU reads
-        K2->>DB: circular.read 100: pg_advisory_lock(ocr)
-        Note left of K2: the GPU is busy: wait
-        K1->>DB: save 99's text, release the ocr lock
-        K2->>O: read circular 100
-        K1->>G: summarise 99
+        K1->>O: circular.read 99: page 1
+        K2->>O: circular.read 100: page 1
+        Note over O: one page at a time (--max-num-seqs 1):<br/>worker 2's page waits in the OCR server's queue
+        O-->>K1: page 1 text
+        O-->>K2: page 1 text
+        K1->>G: circular.assess (A, 98) meanwhile needs no GPU
     end
 ```
 
-That's where extra workers pay off: one circular is on the GPU while other circulars are
-judged for each company. Only workers that need the GPU wait for it.
+### Why no "skip locked"?
 
-### Why not SQL's FOR UPDATE SKIP LOCKED?
+"Skip locked" is the classic way for several workers to share one queue in a database: each
+worker locks the row it takes, and the others skip locked rows. Here the queue is Redis, and
+the consumer group already does that job:
 
-Postgres also has a "skip locked" clause in SQL. It locks a **row** while picking it:
+| | Redis consumer group (used here) | `SELECT … FOR UPDATE SKIP LOCKED` |
+|---|---|---|
+| What it hands out | each **task** to one worker | each **row** to one transaction |
+| Held until | `XACK` (or taken over after 30 minutes idle) | the next COMMIT or ROLLBACK |
+| Survives the step-by-step commits? | yes | **no**: the first COMMIT releases the row |
+| If the worker dies | the task stays pending and is taken over | the lock is released; the row is picked again |
 
-```sql
-SELECT id FROM circulars
-WHERE status IN ('new', 'parsed')
-ORDER BY published_at DESC
-LIMIT 1
-FOR UPDATE SKIP LOCKED;     -- lock the row found; step over rows other workers have locked
-```
-
-It's a good fit when one job is done inside **one transaction**, because a row lock lasts
-exactly until that transaction ends with a COMMIT or ROLLBACK. The worker doesn't work that
-way on purpose: it **commits after every step** (the OCR text, the summary, each answer), so
-that a crash or an outage halfway loses nothing. The first of those commits would also
-release the row lock, and the circular would be up for grabs while it's still being worked
-on:
-
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant W1 as worker 1
-        participant DB as Postgres
-        participant W2 as worker 2
-    end
-
-    rect rgb(13, 20, 36)
-        W1->>DB: BEGIN, then SELECT … FOR UPDATE SKIP LOCKED
-        DB-->>W1: circular 98 (its row is now locked)
-        W2->>DB: BEGIN, then SELECT … FOR UPDATE SKIP LOCKED
-        DB-->>W2: skips 98, gives circular 97
-        W1->>DB: save 98's OCR text, COMMIT
-        Note over DB: the COMMIT ends worker 1's transaction,<br/>so the row lock on 98 is gone
-        W2->>DB: done with 97: SELECT … FOR UPDATE SKIP LOCKED
-        DB-->>W2: circular 98 (status parsed, and nothing locks it)
-        Note over W1,W2: both now run Gemini on 98: double the calls,<br/>and the second to save a verdict fails
-    end
-```
-
-Keeping one transaction open for the whole circular would avoid that, but it would hold a
-database transaction open through minutes of OCR and Gemini calls, and a failure halfway
-would throw away every step already done.
-
-**Why the advisory lock survives the commits.** It belongs to a **connection**, not to a
-transaction. The worker takes it on a connection of its own (`locks.held` in
-`backend/worker/locks.py`) and does the work on another, so the work can commit as often as
-it likes, and the lock stays until the worker takes it off:
-
-```mermaid
-%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
-sequenceDiagram
-    box rgb(11, 16, 32)
-        participant L as lock connection
-        participant DB as Postgres
-        participant S as work session
-    end
-
-    rect rgb(13, 20, 36)
-        L->>DB: pg_try_advisory_lock(key of "circular/98"): held
-        S->>DB: save the OCR text, COMMIT
-        S->>DB: save the summary, COMMIT
-        S->>DB: save the embedding, COMMIT
-        Note over L,S: the commits end the work session's transactions,<br/>not the lock: it stays held on its own connection
-        L->>DB: pg_advisory_unlock(key of "circular/98")
-    end
-```
-
-### Three ways to "skip locked", side by side
-
-| | Redis consumer group | `FOR UPDATE SKIP LOCKED` | Postgres advisory lock |
-|---|---|---|---|
-| What it hands out | each **task** to one worker | each **row** to one transaction | each **piece of work** (a name) to one connection |
-| Held until | `XACK` (or taken over after 30 min idle) | the next COMMIT or ROLLBACK | `pg_advisory_unlock`, or the connection closes |
-| Survives the step-by-step commits? | yes | **no** | yes |
-| Used here for | sharing tasks between workers | nothing | making the same work queued twice run once |
-
-### If a worker dies
-
-If a worker crashes or its machine restarts, its database connections close and **Postgres
-removes all its notes by itself**. Its task was never acknowledged, so it's still pending in
-Redis: the same container picks it up when it restarts, or another worker takes it over after
-30 minutes. The work carries on from the last saved step. Nothing gets stuck.
-
-> 🔍 **See the notes live.** While workers are busy, this counts the locks each database
-> connection holds (each key shows up split in two halves, as `classid` and `objid`):
-> `docker compose exec postgres psql -U rci -d rci -c "select pid, count(*) from pg_locks where locktype = 'advisory' group by pid"`
+The row lock is also why it would fit badly: the worker commits after every step, and the
+first commit would release the row while the circular is still being worked on.
 
 ---
 
@@ -1054,4 +930,4 @@ flowchart LR
 
 - [How it works](how_it_works.md), the main guide to the whole app.
 - [Worker internals](backend/worker/INTERNALS.md): every function, every SQL statement,
-  every Redis command, commit and lock, for developers changing the code.
+  every Redis command, SQL statement and commit, for developers changing the code.

@@ -31,16 +31,13 @@ companies  --<  users
 `db.py`:
 
 - `make_engine(url)`: the connection pool (`pool_pre_ping`).
-- `init_db(engine)`: creates missing tables and columns at startup, one service at a time,
-  and runs the one-off migrations: `move_single_company` (a database from before companies
-  becomes company 1) and `per_company_codes` (policy codes unique per company).
-- `lock_key(conn, name)`: the key for a Postgres advisory lock named `name`. It's a hash of
-  the app, the connection's schema and the name, so copies of the app in separate schemas or
-  other software in the same database never share a lock.
+- `init_db(engine)`: creates missing tables at startup, and adds any column a model gained
+  since (nullable; nothing is dropped). Services starting together take turns.
 
 `queue.py`: the task stream. `STREAM` (`rci:tasks`), `GROUP` (`workers`), `DEAD`
 (`rci:dead`), `connect(url)`, and `enqueue(client, kind, **ids)`, which adds a task after the
-caller has committed its change, and only logs if Redis is down. The task types are listed in
+caller has committed its change, unless the same task is already queued or running (its
+dedupe key, `key(task)`, exists). If Redis is down it only logs. The task types are listed in
 its docstring.
 
 This isn't a service. Each service installs it from `../common` as a path dependency (see

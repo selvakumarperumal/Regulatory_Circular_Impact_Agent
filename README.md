@@ -89,16 +89,15 @@ tell it:
    edited policy is checked at once against your circulars of the last `LOOKBACK_DAYS` that
    apply to you, so nothing waits for the next circular.
 
-> 🔑 **Upgrading from before logins?** Your existing data is moved into company 1 on the
-> first start. Give it a login:
+> 🔑 **A login from the command line** (or a new password for one):
 > `cd backend/api && uv run python manage.py add-user you@company.com "Your Name" --company 1`
 
 Compose also takes settings from your shell, so a direnv `.envrc` that exports
 `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` works too.
 
 > ⚡ **More workers, more speed.** Set `WORKERS=3` in `.env` to run three workers side by
-> side. The Redis consumer group gives each task to one of them, and Postgres locks make sure
-> the same work queued twice is still done once. See
+> side. The Redis consumer group gives each task to one of them, and a task is never queued
+> twice, so no work is done twice. See
 > [Running several workers](how_it_works.md#running-several-workers).
 
 > ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the worker

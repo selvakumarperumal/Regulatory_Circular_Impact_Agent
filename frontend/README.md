@@ -17,7 +17,7 @@ list, with its filters as you left them.
 | **Gaps** | A table you can filter by status, owner or overdue. A gap's page shows what the policy is missing, the proposed wording (with Copy) and the activity, with a comment box. Its sidebar changes the status, owner or due date |
 | **Circulars** | A table you can filter by regulator and status, and search by title or addressee. A circular's page shows the summary, what it requires, the gaps it opened and the OCR text. Its sidebar holds the addressee, whether it applies to you and why, the source links, and **Reprocess** |
 | **Company** | Its name and description: until you describe it, circulars are summarised but not judged for you. Your **Team** (add a teammate with a first password), and **Your password** |
-| **Policies** | Build the library: **New policy** (the text can be loaded from a `.txt` or `.md` file), or **Import JSON** for many at once. Search it, read a policy, edit it (a text change makes a new version), add controls, see its gaps |
+| **Policies** | Build the library: **New policy** (the text can be loaded from a `.txt` or `.md` file), or **Import JSON** for many at once. Search it, read a policy, edit it (a text change makes a new version), add controls, see its gaps. Each policy shows the worker's progress: **Waiting for the worker** after a save, then **Checked**, updating by itself |
 
 The agent ships knowing nothing about your company. The overview shows a two-step setup (describe
 the company, add policies) until both are done. The library starts empty. Saving a policy queues

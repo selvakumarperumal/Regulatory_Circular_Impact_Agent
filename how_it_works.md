@@ -342,17 +342,17 @@ more: set `WORKERS=3` in `.env`, or `docker compose up -d --scale worker=3`. The
 work with no setup:
 
 - **Each task goes to one worker.** The consumer group hands them out.
-- **The same work queued twice is still done once.** A task can be queued twice (by the
-  watcher and by the reconciler, say), so each worker also takes a Postgres **advisory lock**
-  on the work itself; a second worker that finds it locked leaves it alone.
-- **One PDF on the GPU at a time.** OCR takes the `ocr` lock and waits its turn, so extra
-  workers mainly speed up the Gemini steps and the companies' assessments.
-- **A worker that dies** leaves its task unacknowledged, and its locks are released by
-  Postgres. The task is picked up again: at once if its container restarts, otherwise by
-  another worker after 30 minutes.
+- **The same work is never queued twice.** Each task gets a small Redis key when it's
+  queued, and a copy is dropped while that key exists (the watcher and the reconciler may
+  both find the same circular). The worker deletes the key when the task is done.
+- **No locks.** Nothing else needs coordinating. The OCR server takes one page at a time
+  and queues the rest, so extra workers mainly speed up the Gemini steps and the
+  companies' assessments.
+- **A worker that dies** leaves its task unacknowledged. It's picked up again: at once if
+  its container restarts, otherwise by another worker after 30 minutes.
 
-How the queue and the locks work, with diagrams: [The task queue](how_the_worker_works.md#5-the-task-queue-redis-streams)
-and [Locks](how_the_worker_works.md#7-locks-when-the-same-task-arrives-twice).
+How the queue works, with diagrams: [The task queue](how_the_worker_works.md#5-the-task-queue-redis-streams)
+and [No duplicates](how_the_worker_works.md#7-no-duplicates-each-task-is-queued-once).
 
 ### Reading its log
 
@@ -360,18 +360,18 @@ and [Locks](how_the_worker_works.md#7-locks-when-the-same-task-arrives-twice).
 
 | Log line | What happened |
 |---|---|
-| `worker 4b2f…-1: using gemini-… and gemini-embedding-001, waiting for tasks` | the worker started, and Gemini accepted the key and model names |
+| `worker 4b2f…-1: using gemini-…, waiting for tasks` | the worker started, and Gemini accepted the key and model names |
 | `#98 same PDF as #97: reusing its OCR text` | the PDF was already read for another circular, so no OCR |
 | `#98 parsed: 12408 chars` | OCR is done and the text is saved |
 | `#98 read: addressed to '…'` | the summary is saved; each company's assessment is queued |
-| `#98 vs POL-KYC v1 (similarity 0.74): GAP` | Gemini checked one policy: out of date, and a gap was opened (or `up to date`) |
+| `#98 vs POL-KYC v1 (0.74): GAP` | Gemini checked one policy (similarity 0.74): out of date, and a gap was opened (or `up to date`) |
 | `#98 for company 1: applies: True, gaps opened: ['POL-KYC']` | the circular is done for company 1 |
-| `embedded 1 policies (1 chunks) with gemini-embedding-001` | a new or edited policy was turned into an embedding |
-| `POL-AML checked against 4 recent circulars of company 1, gaps opened: none` | a new policy was checked against the company's recent circulars |
+| `embedded POL-AML (1 chunks) with gemini-embedding-001` | a new or edited policy was turned into an embedding |
+| `POL-AML checked, gaps opened: none` | a saved policy was checked against the company's recent circulars (its page now says **Checked**) |
 | `#98 skipped: published before 2026-08-28` | an old circular was set aside |
-| `OCR or Gemini unavailable (…); retrying circular.read in 60s` | a service is down or rate-limited; the task waits and tries again |
+| `OCR or Gemini unavailable (…); retrying` | a service is down or rate-limited; the task waits and tries again |
 | `took over task … from a worker that stopped` | a dead worker's task was picked up |
-| `reconciler: queued 3 tasks for unfinished work` | tasks that had gone missing were queued again |
+| `reconciler: 3 unfinished tasks checked` | unfinished work was queued again, unless it was still queued |
 | `… failed for good` | the circular or assessment was marked failed; the error is on its page |
 
 A worker with nothing to do prints nothing.
@@ -941,9 +941,9 @@ The worker then:
 It's all visible in the worker's log:
 
 ```text
-INFO pipeline embedded 1 policies (1 chunks) with gemini-embedding-001
-INFO pipeline #98 vs POL-DRP v1 (similarity 0.58): up to date
-INFO pipeline POL-DRP checked against 1 recent circulars of company 1, gaps opened: none
+INFO pipeline embedded POL-DRP (1 chunks) with gemini-embedding-001
+INFO pipeline #98 vs POL-DRP v1 (0.58): up to date
+INFO pipeline POL-DRP checked, gaps opened: none
 ```
 
 And in the console: the circular's page lists both policies under **Checked against your
@@ -1042,8 +1042,11 @@ docker compose logs worker | grep -E "embedded|checked against| vs "
 
 - **Each verdict is saved as soon as Gemini gives it.** If Gemini fails halfway, the task
   is retried and carries on from the next unjudged pair; nothing is asked twice.
-- **Two quick edits, both checked.** A second `policy.check` for the same policy waits for
-  the first to finish, then checks the latest version.
+- **Two quick edits, both checked.** While a policy's check is queued, saving it again
+  adds nothing: the queued task checks the latest version. If you save it while the check
+  is running, the worker checks it once more when it finishes.
+- **You can watch it.** The policy's page says **Waiting for the worker** until the check is
+  done (the worker stamps the policy's `checked_at`), then switches to **Checked** by itself.
 - **One ticket per pair.** An edit never opens a second gap for the same circular and policy.
 - **Changing `GEMINI_EMBEDDING_MODEL_NAME`** re-embeds every policy and circular
   automatically. Vectors from two different models can't be compared, so the worker tracks
@@ -1114,10 +1117,9 @@ Rules the database enforces:
 - `gap_events` rows are only ever added, never edited or deleted. That's the audit trail.
 
 Tables are created at startup by every service (`init_db`), and a column added to a model
-later is added to the existing table (nothing is ever dropped). A Postgres advisory lock
-stops two services that start together from both changing the schema. A database from before
-companies existed is moved into **company 1** once, at startup: its description, policies,
-gaps and verdicts are kept; give it a login with `backend/api/manage.py add-user`.
+later is added to the existing table (nothing is ever dropped). A transaction lock
+stops two services that start together from both changing the schema. To give a company a
+login from the command line, use `backend/api/manage.py add-user`.
 
 ---
 
@@ -1286,7 +1288,7 @@ flowchart TD
 
 | What happened | What you see | What to do |
 |---|---|---|
-| The OCR model is still loading (first start downloads 6.7 GB) | the worker logs "OCR or Gemini unavailable; retrying in 60s" | nothing: it carries on by itself |
+| The OCR model is still loading (first start downloads 6.7 GB) | the worker logs "OCR or Gemini unavailable; retrying" every minute | nothing: it carries on by itself |
 | Gemini's quota ran out (429) | the same message | wait, or raise your quota |
 | Gemini or OCR returned a 5xx a few times | the circular shows `failed`, with the error | **Reprocess** it in the console |
 | A wrong API key or model name | the worker stops at startup: "Gemini rejected the configuration" | fix `.env`, then restart the worker |
@@ -1300,8 +1302,8 @@ classes, so the worker reads the HTTP code from the original error underneath
 (`gemini_status` in `backend/worker/failures.py`, which holds all these rules).
 
 > 🔒 **Workers never step on each other.** However many run, the consumer group gives each
-> task to one worker, and the work itself is locked in Postgres, so the same work queued
-> twice is still done once. See [Running several workers](#running-several-workers).
+> task to one worker, and a task is never queued twice. See
+> [Running several workers](#running-several-workers).
 
 ---
 
@@ -1371,7 +1373,7 @@ flowchart TB
         direction TB
         subgraph common["backend/common (shared)"]
             models["models.py<br/>the 10 tables"]
-            dbpy["db.py<br/>make_engine, init_db,<br/>migrations, lock_key"]
+            dbpy["db.py<br/>make_engine, init_db"]
             queuepy["queue.py<br/>the task stream"]
         end
         subgraph watcher["backend/watcher"]
@@ -1454,7 +1456,8 @@ Then open http://localhost:8080 and **create an account for your company**.
 cd backend/api && uv run python manage.py add-user you@company.com "Your Name" --company 1
 ```
 
-It asks for a password (or `--generate` makes one). `manage.py companies` lists every company
+It asks for a password (or reads `RCI_PASSWORD`); for an existing login it sets a new one.
+`manage.py companies` lists every company
 and its users.
 
 **…add a teammate?** On the **Company** page, under **Team**: their name, email and a first
@@ -1500,7 +1503,7 @@ Gemini checked it and found it already up to date, which the circular's page sho
 ```bash
 docker compose logs worker | grep pipeline
 # #98 read: addressed to 'All Commercial Banks'
-# #98 vs POL-KYC v1 (similarity 0.74): GAP
+# #98 vs POL-KYC v1 (0.74): GAP
 # #98 for company 1: applies: True, gaps opened: ['POL-KYC']
 ```
 

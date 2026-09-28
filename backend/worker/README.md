@@ -54,10 +54,9 @@ a restart or an outage halfway through resumes where it stopped.
 
 | File | Job |
 |---|---|
-| `main.py` | The task loop: take the next task, run it under a lock, acknowledge, retry or give up; the reconciler |
+| `main.py` | The task loop: take the next task, run it, then acknowledge, retry or give up; the reconciler |
 | `pipeline.py` | What each task does: `read_circular`, `assess`, `check_new_policy`, `refresh_company` |
 | `failures.py` | What counts as "wait", "try again" or "give up" |
-| `locks.py` | The Postgres advisory locks that make the same work queued twice run once |
 | `ocr.py` | PDF to text through Unlimited-OCR |
 | `llm.py` | Every Gemini call, through LangChain (`ChatGoogleGenerativeAI.with_structured_output`, `GoogleGenerativeAIEmbeddings`). Each prompt comes with the Pydantic model its reply must match |
 | `storage.py` | Reads the PDFs from S3 |

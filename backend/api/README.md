@@ -57,10 +57,10 @@ curl -X PATCH localhost:8000/gaps/1 -H "Authorization: Bearer $TOKEN" -H 'conten
 | `auth.py` | Password hashing, login tokens, and `CurrentUser` (who is calling) |
 | `routes/` | `auth.py` (sign-up, login, the team), `company.py`, `circulars.py`, `policies.py`, `gaps.py` |
 | `database.py` | The session each request gets, `owned_or_404`, and `enqueue` for tasks |
-| `manage.py` | Admin commands: `add-user`, `set-password`, `companies` |
+| `manage.py` | Admin commands: `add-user` (a login, or a new password for one), `companies` |
 | `config.py` | Settings, from the environment or `.env` |
 
-**A login for an existing company.** Data from before logins is company 1, with no user yet:
+**A login from the command line**, for any company (or a new password for an existing login):
 
 ```bash
 uv run python manage.py add-user you@company.com "Your Name" --company 1   # asks for a password
