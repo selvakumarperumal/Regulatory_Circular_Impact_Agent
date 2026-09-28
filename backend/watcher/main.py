@@ -1,9 +1,10 @@
 """Watcher: python main.py [--only RBI]
 
-Finds circulars not seen before, stores the PDF in S3 and adds a row with status
-'new' for the worker. With INTERVAL_MINUTES > 0 it keeps running (as in Docker); 0
-runs once. A circular that fails to download is skipped and tried again next run,
-since nothing about it was saved."""
+Finds circulars not seen before, stores the PDF in S3, adds a row with status 'new',
+and queues a circular.read task for the workers. With INTERVAL_MINUTES > 0 it keeps
+running (as in Docker); 0 runs once. A circular that fails to download is skipped and
+tried again next run, since nothing about it was saved. If Redis is down, the row is
+still saved and the worker's reconciler queues it later."""
 
 import argparse
 import hashlib
@@ -14,6 +15,7 @@ from sqlmodel import Session, select
 
 import fetch
 import storage
+from common import queue
 from common.db import init_db, make_engine
 from common.models import Circular
 from config import settings
@@ -21,6 +23,7 @@ from sources import SOURCES, Item, resolve_pdf_url
 
 log = logging.getLogger("watcher")
 engine = make_engine(settings.DATABASE_URL)
+tasks = queue.connect(settings.REDIS_URL)
 
 
 def known_keys(source: str) -> set[str]:
@@ -44,19 +47,19 @@ def fetch_new(item: Item) -> None:
     s3_key = f"{item.source.lower()}/{sha}.pdf"
     storage.put_pdf(s3_key, data)
     with Session(engine) as session:
-        session.add(
-            Circular(
-                source=item.source,
-                source_key=item.source_key,
-                title=item.title,
-                detail_url=item.detail_url,
-                pdf_url=pdf_url,
-                published_at=item.published_at,
-                sha256=sha,
-                s3_key=s3_key,
-            )
+        circular = Circular(
+            source=item.source,
+            source_key=item.source_key,
+            title=item.title,
+            detail_url=item.detail_url,
+            pdf_url=pdf_url,
+            published_at=item.published_at,
+            sha256=sha,
+            s3_key=s3_key,
         )
+        session.add(circular)
         session.commit()
+        queue.enqueue(tasks, "circular.read", circular_id=circular.id)
 
 
 def run_source(name: str) -> None:

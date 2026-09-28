@@ -1,39 +1,48 @@
-"""What the agent does with one circular, and with a policy that's new or edited.
+"""What the worker does for each task (the task types are in common/queue.py).
 
-1. parse   OCR the PDF from S3 with Unlimited-OCR and save the text (status 'parsed').
-           Once per PDF: the same file under another circular reuses the saved text.
-2. read    Gemini summarises it: who it's addressed to, what changes, every obligation.
-           Saved with an embedding of it. It doesn't depend on the company: done once.
-3. judge   Once the company is described (the console's Company page): does the
-           circular apply to it? Once per description; the api clears the answer when
-           the description changes.
-4. match   If it applies: the closest policies (embeddings, no Gemini call), then
-           Gemini decides whether each one is now out of date. Each verdict is saved in
-           policy_checks, so a (circular, policy version) pair is never asked twice.
-           An out-of-date policy gets a gap ticket with a draft change. The circular
-           is then 'analyzed'.
+circular.read     A circular is read once, for every company:
+                  1. parse  OCR the PDF and save the text (status 'parsed'). Once per
+                            PDF: the same file under another circular reuses the text.
+                  2. read   Gemini summarises it, and it's embedded (status 'read').
+                  Every company then gets a pending assessment, and a circular.assess
+                  task each.
+circular.assess   For one company and one circular:
+                  3. judge  does it apply to the company? (needs its description)
+                  4. match  its closest policies (embeddings, no Gemini call), then
+                            Gemini decides whether each is now out of date. Each verdict
+                            is saved in policy_checks; an out-of-date policy gets a gap.
+policy.check      A new or edited policy is embedded, then checked against the
+                  company's recent circulars that apply (only pairs never judged).
+company.refresh   A company's recent circulars get assessments, and circular.assess
+                  tasks for the pending ones (after sign-up or a new description).
 
-New and edited policies are embedded by embed_policies(); check_recent() then makes
-sure every recent circular that applies has been checked against its closest
-policies, asking Gemini only about pairs it hasn't judged. Each step commits as soon
-as it's done, so a failure halfway loses nothing and the next round picks up where it
-stopped."""
+Each step commits as soon as it's done, so a task that fails halfway loses nothing
+and its retry picks up where it stopped. Everything checks the database first, so a
+task delivered twice is harmless."""
 
 import logging
 import math
-from collections import Counter
-from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import defer
-from sqlmodel import Session, col, func, select
+from sqlmodel import Session, col, select
 
-import failures
 import llm
 import locks
 import ocr
 import storage
-from common.models import Circular, Company, Control, Gap, GapEvent, Policy, PolicyCheck
+from common.models import (
+    Assessment,
+    Circular,
+    Company,
+    Control,
+    Gap,
+    GapEvent,
+    Policy,
+    PolicyCheck,
+    now,
+)
 from config import settings
 
 log = logging.getLogger("pipeline")
@@ -45,19 +54,33 @@ MODEL = settings.GEMINI_EMBEDDING_MODEL_NAME
 type Pairs = set[tuple[int, int, int | None]]
 
 
-@dataclass
-class CatchUp:
-    """What check_recent remembers between rounds: the state of the library when it
-    last finished (it does nothing while that's unchanged), and the circulars it gave
-    up on for a reason retrying won't fix. Those are left alone until the worker
-    restarts, so one bad circular can't cost a Gemini call every minute."""
-
-    finished: tuple | None = None
-    given_up: set[int] = field(default_factory=set)
-    tries: Counter[int] = field(default_factory=Counter)
+def cutoff() -> datetime:
+    return datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
 
 
-catch_up = CatchUp()
+# circular.read
+
+
+def read_circular(session: Session, circular_id: int) -> list[int]:
+    """Steps 1 and 2, once for every company. Returns the companies whose assessment
+    of the circular is still pending, to queue a circular.assess task each."""
+    c = session.get(Circular, circular_id)
+    if c is None or c.status in ("skipped", "failed"):
+        return []
+    if c.status == "new" and c.published_at and c.published_at < cutoff():
+        c.status = "skipped"
+        session.commit()
+        log.info("#%d skipped: published before %s", c.id, cutoff().date())
+        return []
+    if c.status == "new":
+        with locks.held(session.get_bind(), locks.OCR, wait=True):
+            parse(session, c)
+    if c.summary is None:
+        summarise(session, c)
+    embed_circulars(session, [c])
+    c.status, c.error = "read", None
+    session.commit()
+    return pending_companies(session, c.id)
 
 
 def parse(session: Session, c: Circular) -> None:
@@ -80,75 +103,112 @@ def parse(session: Session, c: Circular) -> None:
     log.info("#%d parsed: %d chars", c.id, len(c.text))
 
 
-def analyze(session: Session, c: Circular) -> None:
-    if c.summary is None:
-        read(session, c)
-    company = company_profile(session)
-    if company and c.applicable is None:
-        judge(session, c, company)
-    opened = (
-        check_against_policies(session, c, company)
-        if c.applicable and c.requirements
-        else []
-    )
-    c.status, c.error = "analyzed", None
-    session.commit()
-    applies = (
-        "not judged (no company description)" if c.applicable is None else c.applicable
-    )
-    log.info(
-        "#%d analyzed: addressed to %r, applies to us: %s, gaps opened: %s",
-        c.id,
-        (c.addressed_to or "")[:80],
-        applies,
-        opened or "none",
-    )
-
-
-def read(session: Session, c: Circular) -> None:
+def summarise(session: Session, c: Circular) -> None:
     s = llm.summarize(c.source, c.title, c.text or "")
     c.addressed_to = s.addressed_to
     c.summary = s.summary
     c.requirements = s.requirements
     c.embedding = None
     session.commit()
+    log.info("#%d read: addressed to %r", c.id, (c.addressed_to or "")[:80])
 
 
-def judge(session: Session, c: Circular, company: str) -> None:
-    a = llm.check_applicability(
-        company, c.source, c.title, c.addressed_to or "", c.text or ""
+def pending_companies(session: Session, circular_id: int) -> list[int]:
+    """Give every company an assessment of the circular (pending if it's new), and
+    return the companies still to judge it."""
+    for company_id in session.exec(select(Company.id)).all():
+        add_assessment(session, company_id, circular_id)
+    session.commit()
+    return list(
+        session.exec(
+            select(Assessment.company_id).where(
+                Assessment.circular_id == circular_id, Assessment.status == "pending"
+            )
+        ).all()
     )
-    c.applicable, c.applies_reason = a.applies_to_company, a.reason
+
+
+def add_assessment(session: Session, company_id: int, circular_id: int) -> None:
+    """A pending assessment, unless there's one already (two workers may try at
+    once)."""
+    session.execute(
+        insert(Assessment)
+        .values(company_id=company_id, circular_id=circular_id, status="pending")
+        .on_conflict_do_nothing()
+    )
+
+
+# circular.assess
+
+
+def assess(session: Session, company_id: int, circular_id: int) -> list[str]:
+    """Steps 3 and 4 for one company. Returns the codes of the policies that got a
+    gap."""
+    company = session.get(Company, company_id)
+    c = session.get(Circular, circular_id)
+    if company is None or c is None or c.status != "read":
+        return []
+    add_assessment(session, company_id, circular_id)
+    session.commit()
+    a = session.exec(
+        select(Assessment).where(
+            Assessment.company_id == company_id, Assessment.circular_id == circular_id
+        )
+    ).one()
+    if a.status == "done":
+        return []
+    profile = company.profile.strip()
+    if profile and a.applicable is None:
+        judge(session, a, c, profile)
+    opened = []
+    if a.applicable and c.requirements:
+        policies = [
+            p for p in embedded_policies(session, company_id) if c.source in p.regulators
+        ]
+        if policies:
+            opened = match(
+                session, c, policies, profile, checked_pairs(session, c.id), company_id
+            )
+    a.status, a.error, a.updated_at = "done", None, now()
+    session.commit()
+    applies = "not judged (no description)" if a.applicable is None else a.applicable
+    log.info(
+        "#%d for company %d: applies: %s, gaps opened: %s",
+        c.id,
+        company_id,
+        applies,
+        opened or "none",
+    )
+    return opened
+
+
+def judge(session: Session, a: Assessment, c: Circular, profile: str) -> None:
+    r = llm.check_applicability(
+        profile, c.source, c.title, c.addressed_to or "", c.text or ""
+    )
+    a.applicable, a.applies_reason = r.applies_to_company, r.reason
     session.commit()
 
 
-def check_against_policies(session: Session, c: Circular, company: str) -> list[str]:
-    policies = [p for p in embedded_policies(session) if c.source in p.regulators]
-    if not policies:
-        return []
-    embed_circulars(session, [c])
-    return match(session, c, policies, company, checked_pairs(session, c.id))
-
-
-def company_profile(session: Session) -> str | None:
-    """The company's description from the console, or None if nobody has written one
-    yet."""
-    company = session.get(Company, 1)
-    return company.profile if company and company.profile.strip() else None
-
-
 def match(
-    session: Session, c: Circular, policies: list[Policy], company: str, done: Pairs
+    session: Session,
+    c: Circular,
+    policies: list[Policy],
+    profile: str,
+    done: Pairs,
+    company_id: int,
 ) -> list[str]:
     """Ask Gemini about each of the circular's closest policies it hasn't judged yet,
     saving each verdict as it comes. Returns the codes of the policies that got a
-    gap."""
+    gap. A circular read before embeddings were kept for every circular is embedded
+    here, once."""
+    embed_circulars(session, [c])
     opened = []
     for policy, score in closest_policies(c, policies):
         pair = (c.id, policy.id, policy.version)
         if pair in done or (c.id, policy.id, None) in done:
             continue
-        gap = check_policy(session, c, policy, company, score)
+        gap = check_policy(session, c, policy, profile, score, company_id)
         session.commit()
         done.add(pair)
         log.info(
@@ -177,12 +237,17 @@ def closest_policies(c: Circular, policies: list[Policy]) -> list[tuple[Policy, 
 
 
 def check_policy(
-    session: Session, c: Circular, policy: Policy, company: str, score: float
+    session: Session,
+    c: Circular,
+    policy: Policy,
+    profile: str,
+    score: float,
+    company_id: int,
 ) -> Gap | None:
     """Gemini's verdict on one policy, saved in policy_checks. If the policy is out
     of date, a gap is opened for its owner, with controls Gemini made up left out."""
     controls = session.exec(select(Control).where(Control.policy_id == policy.id)).all()
-    a = llm.assess(company, describe_circular(c), describe_policy(policy, controls))
+    a = llm.assess(profile, describe_circular(c), describe_policy(policy, controls))
     impacted = bool(a.impacted and a.missing_from_policy)
     session.add(
         PolicyCheck(
@@ -197,6 +262,7 @@ def check_policy(
         return None
     known_controls = {k.code for k in controls}
     gap = Gap(
+        company_id=company_id,
         circular_id=c.id,
         policy_id=policy.id,
         policy_version=policy.version,
@@ -240,20 +306,106 @@ def describe_policy(policy: Policy, controls: list[Control]) -> str:
     )
 
 
-def checked_pairs(session: Session, circular_id: int | None = None) -> Pairs:
-    """Every (circular, policy, version) Gemini has judged, plus (circular, policy,
-    None) for each gap: a pair with a gap isn't checked again whatever the version
-    (its owner is on it)."""
+def checked_pairs(session: Session, circular_id: int) -> Pairs:
+    """Every (circular, policy, version) Gemini has judged for this circular, plus
+    (circular, policy, None) for each gap: a pair with a gap isn't checked again
+    whatever the version (its owner is on it)."""
     checks = select(
         PolicyCheck.circular_id, PolicyCheck.policy_id, PolicyCheck.policy_version
-    )
-    gaps = select(Gap.circular_id, Gap.policy_id)
-    if circular_id is not None:
-        checks = checks.where(PolicyCheck.circular_id == circular_id)
-        gaps = gaps.where(Gap.circular_id == circular_id)
+    ).where(PolicyCheck.circular_id == circular_id)
+    gaps = select(Gap.circular_id, Gap.policy_id).where(Gap.circular_id == circular_id)
     return {tuple(r) for r in session.exec(checks)} | {
         (c, p, None) for c, p in session.exec(gaps)
     }
+
+
+# policy.check
+
+
+def check_new_policy(session: Session, company_id: int, policy_id: int) -> list[str]:
+    """Embed a new or edited policy, then check the company's recent circulars that
+    apply against their closest policies, the new one included. Only pairs never
+    judged cost a Gemini call. Returns the codes of the policies that got a gap."""
+    policy = session.get(Policy, policy_id)
+    company = session.get(Company, company_id)
+    if policy is None or company is None or policy.company_id != company_id:
+        return []
+    embed_policies(session, [policy])
+    profile = company.profile.strip()
+    recent = [
+        c for c in recent_applicable(session, company_id) if c.source in policy.regulators
+    ]
+    if not profile or not recent:
+        return []
+    embed_circulars(session, recent)
+    opened = []
+    for c in recent:
+        policies = [
+            p for p in embedded_policies(session, company_id) if c.source in p.regulators
+        ]
+        with locks.held(session.get_bind(), locks.ASSESS, f"{company_id}/{c.id}", True):
+            opened += match(
+                session, c, policies, profile, checked_pairs(session, c.id), company_id
+            )
+    log.info(
+        "%s checked against %d recent circulars of company %d, gaps opened: %s",
+        policy.code,
+        len(recent),
+        company_id,
+        opened or "none",
+    )
+    return opened
+
+
+def recent_applicable(session: Session, company_id: int) -> list[Circular]:
+    """The company's circulars of the last LOOKBACK_DAYS that apply and have
+    obligations. Their OCR text isn't needed, so it isn't loaded."""
+    query = (
+        select(Circular)
+        .options(defer(Circular.text))
+        .join(Assessment, col(Assessment.circular_id) == Circular.id)
+        .where(
+            Assessment.company_id == company_id,
+            Assessment.status == "done",
+            col(Assessment.applicable).is_(True),
+            Circular.status == "read",
+            Circular.published_at >= cutoff(),
+        )
+    )
+    return [c for c in session.exec(query).all() if c.requirements]
+
+
+# company.refresh
+
+
+def refresh_company(session: Session, company_id: int) -> list[int]:
+    """Give the company an assessment of every circular read in the last
+    LOOKBACK_DAYS, and return the circulars it still has to judge. The api has
+    already cleared the old answers if the description changed."""
+    if session.get(Company, company_id) is None:
+        return []
+    recent = session.exec(
+        select(Circular.id).where(
+            Circular.status == "read", Circular.published_at >= cutoff()
+        )
+    ).all()
+    for circular_id in recent:
+        add_assessment(session, company_id, circular_id)
+    session.commit()
+    return list(
+        session.exec(
+            select(Assessment.circular_id)
+            .join(Circular, col(Circular.id) == Assessment.circular_id)
+            .where(
+                Assessment.company_id == company_id,
+                Assessment.status == "pending",
+                Circular.status == "read",
+            )
+        ).all()
+    )
+
+
+# embeddings
 
 
 def chunks(text: str) -> list[str]:
@@ -262,23 +414,19 @@ def chunks(text: str) -> list[str]:
     return [text[i : i + EMBED_CHARS] for i in range(0, len(text), EMBED_CHARS)] or [""]
 
 
-def embedded_policies(session: Session) -> list[Policy]:
+def embedded_policies(session: Session, company_id: int) -> list[Policy]:
     return [
         p
-        for p in session.exec(select(Policy)).all()
+        for p in session.exec(select(Policy).where(Policy.company_id == company_id))
         if p.embeddings and p.embedding_model == MODEL
     ]
 
 
-def embed_policies(session: Session) -> None:
+def embed_policies(session: Session, policies: list[Policy]) -> None:
     """Embed the policies that are new, edited (the api clears their embeddings) or
     embedded with another model (vectors from two models can't be compared). All
-    chunks of all of them go out in as few requests as possible."""
-    todo = [
-        p
-        for p in session.exec(select(Policy)).all()
-        if not p.embeddings or p.embedding_model != MODEL
-    ]
+    chunks go out in as few requests as possible."""
+    todo = [p for p in policies if not p.embeddings or p.embedding_model != MODEL]
     if not todo:
         return
     parts = {p.id: [f"{p.title}\n{part}" for part in chunks(p.text)] for p in todo}
@@ -312,94 +460,34 @@ def embed_circulars(session: Session, circulars: list[Circular]) -> None:
     session.commit()
 
 
-def recent_and_applicable() -> tuple:
-    cutoff = datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
-    return (
-        Circular.status == "analyzed",
-        col(Circular.applicable).is_(True),
-        Circular.published_at >= cutoff,
-    )
+# the reconciler
 
 
-def library_state(session: Session) -> tuple:
-    """Changes whenever the company, a policy or the set of recent circulars that
-    apply does."""
-    company = session.get(Company, 1)
-    policies = session.exec(select(func.count(), func.max(Policy.updated_at))).one()
-    circulars = session.exec(
-        select(func.count(), func.max(Circular.id)).where(*recent_and_applicable())
-    ).one()
-    return company and company.updated_at, settings.MATCH_TOP_K, *policies, *circulars
-
-
-def recent_circulars(session: Session, policies: list[Policy]) -> list[Circular]:
-    """Recent circulars that apply, have obligations and have a policy for their
-    regulator. Their OCR text isn't needed here, so it isn't loaded."""
-    regulators = {r for p in policies for r in p.regulators}
-    query = (
-        select(Circular).options(defer(Circular.text)).where(*recent_and_applicable())
-    )
-    return [
-        c
-        for c in session.exec(query).all()
-        if c.requirements and c.source in regulators and c.id not in catch_up.given_up
-    ]
-
-
-def check_recent(session: Session) -> None:
-    """Make sure every recent circular that applies to us has been checked against
-    its closest policies, at their current version. That normally happens when the
-    circular is analysed; this catches up after a policy is added or edited (text or
-    regulators), and after an interruption. Only pairs Gemini hasn't judged are sent,
-    and nothing is done while the company, the library and the recent circulars are
-    unchanged. A service that's down ends the round; a crash is retried next round,
-    up to MAX_TRIES times per circular. A circular another worker is processing is
-    left to that worker, and checked next round."""
-    state = library_state(session)
-    if state == catch_up.finished:
-        return
-    profile = company_profile(session)
-    policies = embedded_policies(session)
-    recent = recent_circulars(session, policies) if profile else []
-    if not recent:
-        catch_up.finished = state
-        return
-    embed_circulars(session, recent)
-    done, opened, unfinished = checked_pairs(session), [], False
-    before = len(done)
-    for c in recent:
-        try:
-            with locks.held(session.get_bind(), locks.CIRCULAR, c.id) as mine:
-                if not mine:
-                    unfinished = True
-                    continue
-                opened += match(session, c, policies, profile, done)
-        except Exception as e:
-            session.rollback()
-            if failures.service_down(e):
-                raise
-            catch_up.tries[c.id] += 1
-            if (
-                failures.service_crashed(e)
-                and catch_up.tries[c.id] < failures.MAX_TRIES
-            ):
-                unfinished = True
-                log.warning("#%d: %s; trying again next round", c.id, e)
-            else:
-                catch_up.given_up.add(c.id)
-                log.exception(
-                    "#%d: couldn't check it against the policy library; skipping it",
-                    c.id,
-                )
-    if len(done) > before:
-        log.info(
-            "caught up: %d new checks against %d recent circulars, gaps opened: %s",
-            len(done) - before,
-            len(recent),
-            opened or "none",
+def missing_work(session: Session) -> list[tuple[str, dict[str, int]]]:
+    """Every piece of work Postgres shows as unfinished, as the task that does it.
+    Queued by the reconciler in case a task went missing; a task queued twice is
+    harmless."""
+    tasks: list[tuple[str, dict[str, int]]] = [
+        ("circular.read", {"circular_id": cid})
+        for cid in session.exec(
+            select(Circular.id).where(col(Circular.status).in_(["new", "parsed"]))
         )
-    if not unfinished:
-        catch_up.finished = state
+    ]
+    pending = session.exec(
+        select(Assessment.company_id, Assessment.circular_id)
+        .join(Circular, col(Circular.id) == Assessment.circular_id)
+        .where(Assessment.status == "pending", Circular.status == "read")
+    )
+    tasks += [
+        ("circular.assess", {"company_id": company, "circular_id": circular})
+        for company, circular in pending
+    ]
+    tasks += [
+        ("policy.check", {"company_id": p.company_id, "policy_id": p.id})
+        for p in session.exec(select(Policy).options(defer(Policy.text)))
+        if not p.embeddings or p.embedding_model != MODEL
+    ]
+    return tasks
 
 
 def cosine(a: list[float], b: list[float]) -> float:

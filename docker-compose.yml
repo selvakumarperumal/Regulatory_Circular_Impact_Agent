@@ -5,12 +5,13 @@
 #   open http://localhost:8080                  # the console: add your policies there
 #
 # One folder per service under backend/:
-#   watcher   new RBI / SEBI / IRDAI circulars -> PDF in S3 + a row in Postgres
+#   watcher   new RBI / SEBI / IRDAI circulars -> PDF in S3 + a row in Postgres,
+#             and a task on the Redis stream (one replica only)
 #   ocr       Baidu Unlimited-OCR on the GPU (vLLM)
-#   worker    OCR -> Gemini -> gap tickets for the policy owners
-#   api       FastAPI on :8000
-# plus Postgres, and frontend/ (a static console served by nginx, which forwards
-# /api to the api service). Floci (local S3) runs outside this file, on the host's port 4566,
+#   worker    takes tasks off the stream: OCR -> Gemini -> gap tickets (scale freely)
+#   api       FastAPI on :8000; queues a task when a policy or a company changes
+# plus Postgres, Redis (the task stream), and frontend/ (a static console served by
+# nginx, which forwards /api to the api service). Floci (local S3) runs outside this file, on the host's port 4566,
 # and Gemini is Google's API, reached over the internet.
 #
 # Settings come from .env beside this file; every one except GEMINI_API_KEY has a
@@ -20,6 +21,7 @@ name: rci
 
 x-app-env: &app-env
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rci}:${POSTGRES_PASSWORD:-rci}@postgres:5432/${POSTGRES_DB:-rci}
+  REDIS_URL: redis://redis:6379/0
   # Floci on the host. Not taken from .env: a shell with S3_ENDPOINT_URL=http://localhost:4566
   # (right for `uv run` on the host) would point the containers at themselves. "" = real AWS.
   S3_ENDPOINT_URL: http://host.docker.internal:4566
@@ -45,13 +47,31 @@ services:
       interval: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes   # the task stream survives restarts
+    ports:
+      - "${REDIS_PORT:-6379}:6379"          # for services run on the host with `uv run`
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   watcher:
     build:
       context: ./backend              # not ./backend/watcher: the image also needs backend/common
       dockerfile: watcher/Dockerfile
     restart: unless-stopped
+    deploy:
+      replicas: 1                     # one watcher: two would race to insert the same circular
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       <<: *app-env
@@ -82,9 +102,11 @@ services:
       dockerfile: worker/Dockerfile
     restart: unless-stopped
     deploy:
-      replicas: ${WORKERS:-1}         # workers share the work through Postgres locks
+      replicas: ${WORKERS:-1}         # the consumer group gives each task to one worker
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       <<: *app-env
@@ -95,6 +117,7 @@ services:
       OCR_MAX_PAGES: ${OCR_MAX_PAGES:-}
       MATCH_TOP_K: ${MATCH_TOP_K:-}
       LOOKBACK_DAYS: ${LOOKBACK_DAYS:-}
+      RECONCILE_MINUTES: ${RECONCILE_MINUTES:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -106,9 +129,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rci}:${POSTGRES_PASSWORD:-rci}@postgres:5432/${POSTGRES_DB:-rci}
+      REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      TOKEN_HOURS: ${TOKEN_HOURS:-}
+      LOOKBACK_DAYS: ${LOOKBACK_DAYS:-}
     ports:
       - "${API_PORT:-8000}:8000"
 
@@ -123,4 +152,5 @@ services:
 
 volumes:
   pgdata:
+  redis-data:
   hf-cache:

@@ -1,10 +1,12 @@
 """Postgres advisory locks: how several workers share the work without doing anything
-twice. Run as many workers as you like; these locks keep them out of each other's way.
+twice. The queue already gives each task to one worker, but the same work can be
+queued twice (a retry, the reconciler, a Reprocess), so the work itself is locked too.
 
-- "library"         embedding policies and the catch-up: one worker at a time, the
-                    others skip it
-- "circular/<id>"   processing one circular: the worker holding it owns that circular
-- "ocr"             reading a PDF on the GPU, which serves one page at a time
+- "circular/<id>"               reading one circular (OCR, summary)
+- "assess/<company>/<circular>" one company's assessment of one circular
+- "policy/<id>"                 embedding and checking one policy
+- "company/<id>"                refreshing one company's assessments
+- "ocr"                         the GPU, which serves one page at a time
 
 Each name becomes a key with common.db.lock_key, which includes the Postgres schema, so
 copies of the app in separate schemas or databases never block each other. Each lock is
@@ -19,12 +21,13 @@ from sqlalchemy.exc import DBAPIError
 
 from common.db import lock_key
 
-LIBRARY, CIRCULAR, OCR = "library", "circular", "ocr"
+CIRCULAR, ASSESS, POLICY, COMPANY = "circular", "assess", "policy", "company"
+OCR = "ocr"
 
 
 @contextmanager
 def held(
-    engine: Engine, name: str, item: int | None = None, wait: bool = False
+    engine: Engine, name: str, item: int | str | None = None, wait: bool = False
 ) -> Iterator[bool]:
     """Yield whether the lock `name` (or `name/item`) is held for the block: at once
     if it's free, or, with wait, as soon as it's free."""

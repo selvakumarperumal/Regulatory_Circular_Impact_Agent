@@ -1,147 +1,204 @@
 """Worker: python main.py [--once]
 
-Every POLL_SECONDS: embed new/edited policies and check them against the recent
-circulars that apply, mark circulars older than LOOKBACK_DAYS as 'skipped', then run
-the pipeline on waiting circulars, newest first. If OCR or Gemini is down,
-rate-limited or fails for a moment, it waits and tries again; nothing already done is
-lost or done twice.
+Reads tasks from the Redis stream as one consumer of the group "workers" (XREADGROUP),
+so each task goes to exactly one worker, however many run (WORKERS=3). There's no
+polling: a worker blocks until a task arrives. The task types are in common/queue.py,
+and what each does is in pipeline.py.
 
-Several workers can run side by side (docker compose --scale worker=N). They share
-the work through Postgres locks (locks.py): each circular is claimed by one worker,
-one worker at a time reads PDFs on the GPU while the others run Gemini on circulars
-already read, and one worker at a time updates the policy library."""
+- A finished task is acknowledged (XACK).
+- OCR or Gemini down or rate-limited: the task stays unacknowledged; the worker waits
+  RETRY_SECONDS and tries it again.
+- A hiccup (a timeout, a 5xx, an answer in the wrong shape): the task is retried up to
+  MAX_TRIES times, then treated as below.
+- Anything else: the circular or the assessment is marked failed with the error, and
+  the task is copied to the dead-letter stream rci:dead.
+- A task left unfinished by a worker that died is taken over by another after
+  CLAIM_IDLE_SECONDS (XAUTOCLAIM).
+- Every RECONCILE_MINUTES (and at startup, unless another worker just did it), one
+  worker queues any work Postgres shows as unfinished, in case its task went missing
+  (Redis lost it, or was down)."""
 
 import argparse
 import logging
+import os
+import socket
 import time
 from collections import Counter
-from datetime import UTC, datetime, timedelta
 
-from sqlmodel import Session, col, select
+import redis
+from sqlmodel import Session, select
 
 import llm
 import locks
 import pipeline
+from common import queue
 from common.db import init_db, make_engine
-from common.models import Circular
+from common.models import Assessment, Circular
 from config import settings
-from failures import MAX_TRIES, gemini_status, service_crashed, service_down, temporary
+from failures import MAX_TRIES, gemini_status, service_crashed, service_down
 
 log = logging.getLogger("worker")
 engine = make_engine(settings.DATABASE_URL)
-crashes: Counter[int] = Counter()
-WAITING = ("new", "parsed")
+tries: Counter[str] = Counter()
+BLOCK_MS = 5000
 
 
-def skip_old(session: Session) -> None:
-    cutoff = datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
-    old = session.exec(
-        select(Circular).where(Circular.status == "new", Circular.published_at < cutoff)
-    ).all()
-    for c in old:
-        c.status = "skipped"
+def join_group(r: redis.Redis) -> None:
+    """Create the consumer group (and the stream) unless they exist. It starts from
+    the beginning of the stream, so tasks queued before any worker ran are kept."""
+    try:
+        r.xgroup_create(queue.STREAM, queue.GROUP, id="0", mkstream=True)
+    except redis.ResponseError as e:
+        if "BUSYGROUP" not in str(e):
+            raise
+
+
+def next_task(r: redis.Redis, me: str) -> tuple[str, dict[str, str]] | None:
+    """The next task for this worker: first its own unfinished ones (a retry), then
+    one abandoned by a worker that died, then a new one, waiting up to 5 seconds."""
+    for _, entries in r.xreadgroup(queue.GROUP, me, {queue.STREAM: "0"}, count=1):
+        for task_id, fields in entries:
+            if fields:
+                return task_id, fields
+            r.xack(queue.STREAM, queue.GROUP, task_id)
+    claimed = r.xautoclaim(
+        queue.STREAM,
+        queue.GROUP,
+        me,
+        min_idle_time=settings.CLAIM_IDLE_SECONDS * 1000,
+        count=1,
+    )[1]
+    for task_id, fields in claimed:
+        if fields:
+            log.info("took over task %s from a worker that stopped", task_id)
+            return task_id, fields
+        r.xack(queue.STREAM, queue.GROUP, task_id)
+    new = r.xreadgroup(queue.GROUP, me, {queue.STREAM: ">"}, count=1, block=BLOCK_MS)
+    for _, entries in new or []:
+        for task_id, fields in entries:
+            return task_id, fields
+    return None
+
+
+def handle(session: Session, r: redis.Redis, task: dict[str, str]) -> None:
+    """Do one task. The work itself is locked, so a task queued twice (a retry, the
+    reconciler) is done once: a second worker sees the lock and lets it go. A policy
+    or a company can change again while its task runs, so those tasks wait for the
+    lock instead, and then pick up the latest change."""
+    kind = task["type"]
+    ids = {name: int(value) for name, value in task.items() if name != "type"}
+    if kind == "circular.read":
+        circular_id = ids["circular_id"]
+        with locks.held(engine, locks.CIRCULAR, circular_id) as mine:
+            companies = pipeline.read_circular(session, circular_id) if mine else []
+        for company_id in companies:
+            queue.enqueue(
+                r, "circular.assess", company_id=company_id, circular_id=circular_id
+            )
+    elif kind == "circular.assess":
+        pair = f"{ids['company_id']}/{ids['circular_id']}"
+        with locks.held(engine, locks.ASSESS, pair) as mine:
+            if mine:
+                pipeline.assess(session, ids["company_id"], ids["circular_id"])
+    elif kind == "policy.check":
+        with locks.held(engine, locks.POLICY, ids["policy_id"], wait=True):
+            pipeline.check_new_policy(session, ids["company_id"], ids["policy_id"])
+    elif kind == "company.refresh":
+        company_id = ids["company_id"]
+        with locks.held(engine, locks.COMPANY, company_id, wait=True):
+            circulars = pipeline.refresh_company(session, company_id)
+        for circular_id in circulars:
+            queue.enqueue(
+                r, "circular.assess", company_id=company_id, circular_id=circular_id
+            )
+    else:
+        log.warning("unknown task %s: dropped", task)
+
+
+def give_up(
+    session: Session, r: redis.Redis, task_id: str, task: dict[str, str], e: Exception
+) -> None:
+    """Mark the work failed, so it shows in the console with the error, and keep the
+    task in the dead-letter stream."""
+    error = f"{type(e).__name__}: {e}"
+    if task["type"] == "circular.read":
+        c = session.get(Circular, int(task["circular_id"]))
+        if c:
+            c.status, c.error = "failed", error
+    elif task["type"] == "circular.assess":
+        a = session.exec(
+            select(Assessment).where(
+                Assessment.company_id == int(task["company_id"]),
+                Assessment.circular_id == int(task["circular_id"]),
+            )
+        ).first()
+        if a:
+            a.status, a.error = "failed", error
     session.commit()
-    if old:
-        log.info("skipped %d circulars published before %s", len(old), cutoff.date())
+    r.xadd(queue.DEAD, {**task, "task_id": task_id, "error": error[:2000]})
 
 
-def update_library(session: Session) -> None:
-    """Mark old circulars skipped, embed new and edited policies, and check them against
-    the recent circulars. One worker at a time; the others skip it. A temporary failure
-    ends the round (it's retried); any other is logged, and circulars still get
-    processed."""
-    with locks.held(engine, locks.LIBRARY) as mine:
-        if not mine:
-            return
-        skip_old(session)
+def run_task(r: redis.Redis, task_id: str, task: dict[str, str]) -> None:
+    """Do the task, and acknowledge it unless it's to be retried."""
+    with Session(engine) as session:
         try:
-            pipeline.embed_policies(session)
-            pipeline.check_recent(session)
+            handle(session, r, task)
         except Exception as e:
             session.rollback()
-            if temporary(e):
-                raise
-            log.exception("couldn't update the policy library's embeddings or checks")
+            if service_down(e):
+                log.warning(
+                    "OCR or Gemini unavailable (%s); retrying %s in %ds",
+                    e,
+                    task["type"],
+                    settings.RETRY_SECONDS,
+                )
+                time.sleep(settings.RETRY_SECONDS)
+                return
+            tries[task_id] += 1
+            if service_crashed(e) and tries[task_id] < MAX_TRIES:
+                log.warning("%s failed (%s); trying again", task, e)
+                return
+            log.exception("%s failed for good", task)
+            give_up(session, r, task_id, task, e)
+    r.xack(queue.STREAM, queue.GROUP, task_id)
+    tries.pop(task_id, None)
 
 
-def retry_later(c: Circular, e: Exception) -> bool:
-    """A service that's down is waited for as long as it takes; one that crashed gets
-    the circular retried up to MAX_TRIES times. Either way the circular keeps its
-    status."""
-    if service_down(e):
-        return True
-    if service_crashed(e):
-        crashes[c.id] += 1
-        return crashes[c.id] < MAX_TRIES
-    return False
-
-
-def waiting(session: Session) -> list[int]:
-    return session.exec(
-        select(Circular.id)
-        .where(col(Circular.status).in_(WAITING))
-        .order_by(col(Circular.published_at).desc().nulls_last())
-    ).all()
-
-
-def process(session: Session, c: Circular, wait_for_gpu: bool) -> bool:
-    """Run the pipeline on a claimed circular. A new one needs the GPU first: without
-    wait_for_gpu, it's left for later if another worker is using it. Returns whether
-    the circular was worked on."""
-    try:
-        if c.status == "new":
-            with locks.held(engine, locks.OCR, wait=wait_for_gpu) as gpu:
-                if not gpu:
-                    return False
-                log.info("#%d %s: %s", c.id, c.source, c.title[:90])
-                pipeline.parse(session, c)
-        else:
-            log.info("#%d %s: %s", c.id, c.source, c.title[:90])
-        pipeline.analyze(session, c)
-    except Exception as e:
-        session.rollback()
-        if retry_later(c, e):
-            raise
-        log.exception("#%d failed", c.id)
-        c.status, c.error = "failed", f"{type(e).__name__}: {e}"
-        session.commit()
-    return True
-
-
-def process_next(session: Session) -> bool:
-    """Claim one waiting circular that no other worker holds, and process it. The first
-    pass takes only what can start now; if nothing can, the second waits for the GPU.
-    Returns False when every waiting circular belongs to another worker."""
-    candidates = waiting(session)
-    for wait_for_gpu in (False, True):
-        for circular_id in candidates:
-            with locks.held(engine, locks.CIRCULAR, circular_id) as mine:
-                if not mine:
-                    continue
-                c = session.get(Circular, circular_id, populate_existing=True)
-                if c is None or c.status not in WAITING:
-                    continue
-                if process(session, c, wait_for_gpu):
-                    return True
-    return False
-
-
-def run_once() -> None:
+def reconcile(r: redis.Redis, me: str) -> None:
+    """Queue every piece of unfinished work Postgres shows, in case its task went
+    missing. Once per RECONCILE_MINUTES across all workers: the first to set the key
+    does it, and the key expires when the next one is due."""
+    period = settings.RECONCILE_MINUTES * 60
+    if not r.set(queue.RECONCILED, me, nx=True, ex=period):
+        return
     with Session(engine) as session:
-        update_library(session)
-        while process_next(session):
-            pass
+        tasks = pipeline.missing_work(session)
+    for kind, ids in tasks:
+        queue.enqueue(r, kind, **ids)
+    if tasks:
+        log.info("reconciler: queued %d tasks for unfinished work", len(tasks))
+    forget_stopped_workers(r)
+
+
+def forget_stopped_workers(r: redis.Redis) -> None:
+    """Every container restart joins the group under a new name. Drop the names that
+    hold no task and haven't read anything for a day: workers long gone."""
+    for consumer in r.xinfo_consumers(queue.STREAM, queue.GROUP):
+        if consumer["pending"] == 0 and consumer["idle"] > 86_400_000:
+            r.xgroup_delconsumer(queue.STREAM, queue.GROUP, consumer["name"])
 
 
 def check_gemini() -> None:
     """A 4xx at startup means a wrong key or model name, so nothing would work: stop
-    with a clear message. A 429, a 5xx or no network is not a configuration problem."""
+    with a clear message. A 429, a 5xx or no network is not a configuration problem:
+    start anyway, and let each task wait for Gemini as usual."""
     try:
         llm.check()
     except Exception as e:
         status = gemini_status(e)
         if status is None or status == 429 or status >= 500:
-            raise
+            log.warning("Gemini unavailable at startup (%s); starting anyway", e)
+            return
         raise SystemExit(
             f"Gemini rejected the configuration (GEMINI_API_KEY / GEMINI_MODEL_NAME / "
             f"GEMINI_EMBEDDING_MODEL_NAME): {e}"
@@ -162,33 +219,39 @@ def setup_logging() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--once", action="store_true", help="work through the queue once and exit"
+        "--once", action="store_true", help="work until the queue is empty, then exit"
     )
     args = parser.parse_args()
     setup_logging()
 
     init_db(engine)
     check_gemini()
+    r = queue.connect(settings.REDIS_URL)
+    me = f"{socket.gethostname()}-{os.getpid()}"
     log.info(
-        "using %s and %s",
+        "worker %s: using %s and %s, waiting for tasks",
+        me,
         settings.GEMINI_MODEL_NAME,
         settings.GEMINI_EMBEDDING_MODEL_NAME,
     )
 
+    next_reconcile = 0.0
     while True:
         try:
-            run_once()
-        except Exception as e:
-            if not temporary(e):
-                raise
+            join_group(r)
+            if time.monotonic() >= next_reconcile:
+                reconcile(r, me)
+                next_reconcile = time.monotonic() + 60
+            task = next_task(r, me)
+            if task:
+                run_task(r, *task)
+            elif args.once:
+                break
+        except (redis.ConnectionError, redis.TimeoutError) as e:
             log.warning(
-                "OCR or Gemini unavailable (%s); retrying in %ds",
-                e,
-                settings.POLL_SECONDS,
+                "Redis unavailable (%s); retrying in %ds", e, settings.RETRY_SECONDS
             )
-        if args.once:
-            break
-        time.sleep(settings.POLL_SECONDS)
+            time.sleep(settings.RETRY_SECONDS)
 
 
 if __name__ == "__main__":

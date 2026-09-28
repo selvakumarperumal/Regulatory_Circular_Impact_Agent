@@ -1,11 +1,12 @@
 [project]
 name = "common"
 version = "0.1.0"
-description = "The database tables shared by the watcher, worker and api services"
+description = "The database tables and the task queue shared by the watcher, worker and api"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "psycopg[binary]>=3.3.6",
+    "redis>=5.2",
     "sqlmodel>=0.0.47",
 ]
 

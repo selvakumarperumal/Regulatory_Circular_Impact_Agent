@@ -1,19 +1,21 @@
-"""Who the company is. The worker uses this description to decide which circulars
-apply to the company; until someone writes it, circulars are summarised but not
-judged."""
+"""The signed-in user's company: its name and its description. The worker uses the
+description to decide which circulars apply to the company; until someone writes it,
+circulars are read but not judged for this company."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import update
-from sqlmodel import Field, SQLModel, col
+from sqlmodel import Field, SQLModel, col, select
 
-from common.models import Circular, Company, now
-from database import SessionDep, save
+from auth import CurrentUser
+from common.models import Assessment, Circular, Company, now
+from database import SessionDep, enqueue, save
 
 router = APIRouter(prefix="/company", tags=["company"])
 
 
 class CompanyIn(SQLModel):
+    name: str | None = Field(default=None, min_length=2)
     profile: str = Field(
         min_length=20,
         description="A few sentences: what kind of entity the company is, "
@@ -22,40 +24,41 @@ class CompanyIn(SQLModel):
 
 
 class CompanySaved(BaseModel):
-    """The saved description, and how many analysed circulars were queued to be
-    judged again."""
+    """The saved company, and how many circulars were queued to be judged again."""
 
     company: Company
     requeued: int
 
 
 @router.get("")
-def get_company(session: SessionDep) -> Company | None:
-    """The description, or null if nobody has written one yet."""
-    return session.get(Company, 1)
+def get_company(user: CurrentUser, session: SessionDep) -> Company:
+    return session.get(Company, user.company_id)
 
 
 @router.put("")
-def set_company(body: CompanyIn, session: SessionDep) -> CompanySaved:
-    """Save the description. If it changed, every circular's "does it apply to us?"
-    is cleared and the analysed ones are queued again, so the worker judges them
-    against the new description. Only that question goes back to Gemini: the OCR
-    text, the summaries and every policy check already made are kept, and gaps are
-    never duplicated."""
+def set_company(body: CompanyIn, user: CurrentUser, session: SessionDep) -> CompanySaved:
+    """Save the name and description. A new description clears the company's "does it
+    apply to us?" answers and queues its circulars to be judged again. Only that
+    question goes back to Gemini: the OCR text, the summaries and every policy check
+    already made are kept, and gaps are never duplicated."""
+    company = session.get(Company, user.company_id)
+    if body.name:
+        company.name = body.name.strip()
     profile = body.profile.strip()
-    company = session.get(Company, 1)
-    if company is not None and company.profile == profile:
-        return CompanySaved(company=company, requeued=0)
-    if company is None:
-        company = Company(id=1, profile=profile)
-    else:
-        company.profile, company.updated_at = profile, now()
-    session.execute(
-        update(Circular)
-        .where(col(Circular.applicable).is_not(None))
-        .values(applicable=None, applies_reason=None)
-    )
+    if company.profile == profile:
+        return CompanySaved(company=save(session, company), requeued=0)
+    company.profile, company.updated_at = profile, now()
+    read = select(Circular.id).where(Circular.status == "read")
     requeued = session.execute(
-        update(Circular).where(Circular.status == "analyzed").values(status="parsed")
+        update(Assessment)
+        .where(
+            Assessment.company_id == company.id,
+            col(Assessment.circular_id).in_(read),
+        )
+        .values(
+            status="pending", applicable=None, applies_reason=None, error=None, updated_at=now()
+        )
     ).rowcount
-    return CompanySaved(company=save(session, company), requeued=requeued)
+    saved = save(session, company)
+    enqueue("company.refresh", company_id=company.id)
+    return CompanySaved(company=saved, requeued=requeued)

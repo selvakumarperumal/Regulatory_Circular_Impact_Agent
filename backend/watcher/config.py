@@ -4,8 +4,8 @@ else in the watcher reads os.environ.
 A variable set to "" keeps its default, since docker compose passes unset ones that
 way. Empty S3 endpoint and keys mean real AWS with the usual credential chain; for
 Floci (local S3) set S3_ENDPOINT_URL=http://localhost:4566 and both keys to "test".
-INTERVAL_MINUTES is how often the regulator sites are checked; 0 checks once and
-exits."""
+REDIS_URL is the Redis holding the task stream the workers read. INTERVAL_MINUTES is
+how often the regulator sites are checked; 0 checks once and exits."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str = "postgresql+psycopg://rci:rci@localhost:5432/rci"
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     S3_ENDPOINT_URL: str = ""
     S3_BUCKET: str = "rci"

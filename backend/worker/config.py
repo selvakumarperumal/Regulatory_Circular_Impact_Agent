@@ -8,7 +8,13 @@ Empty S3 endpoint and keys mean real AWS with the usual credential chain; for Fl
 GEMINI_API_KEY is the only required setting. OCR_MAX_PAGES caps the pages read per
 PDF (long master circulars state their changes up front), LLM_MAX_CHARS the circular
 text sent for the summary, MATCH_TOP_K the closest policies Gemini checks per
-circular, and LOOKBACK_DAYS how old a new circular can be before it's skipped."""
+circular, and LOOKBACK_DAYS how old a new circular can be before it's skipped (and how
+far back a new policy or a new company is checked).
+
+The queue: REDIS_URL is the Redis holding the task stream. A task a worker has held for
+CLAIM_IDLE_SECONDS without finishing (its worker died) is taken over by another.
+RETRY_SECONDS is the wait before retrying while OCR or Gemini is down, and every
+RECONCILE_MINUTES one worker looks in Postgres for work whose task went missing."""
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +26,7 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str = "postgresql+psycopg://rci:rci@localhost:5432/rci"
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     S3_ENDPOINT_URL: str = ""
     S3_BUCKET: str = "rci"
@@ -37,7 +44,10 @@ class Settings(BaseSettings):
 
     MATCH_TOP_K: int = 3
     LOOKBACK_DAYS: int = 30
-    POLL_SECONDS: int = 60
+
+    CLAIM_IDLE_SECONDS: int = 1800
+    RETRY_SECONDS: int = 60
+    RECONCILE_MINUTES: int = 15
 
     @field_validator("GEMINI_API_KEY")
     @classmethod
