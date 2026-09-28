@@ -60,6 +60,7 @@
   --ok-soft: rgba(52, 211, 153, 0.1);
   --warn: #fbbf24;
 
+  --page-max: 1360px;              /* content width; centred beside the sidebar */
   --radius: 16px;
   --radius-sm: 10px;
   --shadow-sm: inset 0 1px 0 rgba(255, 255, 255, 0.03);

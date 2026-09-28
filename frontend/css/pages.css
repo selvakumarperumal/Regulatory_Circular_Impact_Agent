@@ -160,7 +160,7 @@ a.xbar:hover .name { color: var(--accent); }
 
 /* ── Company page ────────────────────────────────────────────────────── */
 
-.company { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 24px; align-items: start; max-width: 1180px; }
+.company { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 24px; align-items: start; }
 
 /* ── Narrow screens ──────────────────────────────────────────────────── */
 
