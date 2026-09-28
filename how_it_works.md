@@ -185,9 +185,10 @@ tray. If there's something in it, the clerk works through it; if it's empty, the
 another minute. **Looking in the tray costs nothing**: OCR and Gemini are only used when
 there is real work.
 
-> 🔬 **Want every detail?** [how_the_worker_works.md](how_the_worker_works.md) follows the
-> worker all the way down: startup, each step's database reads and writes, every commit and
-> lock, what a crash leaves behind, and every SQL statement it sends.
+> 📖 **Two stories, step by step.** [how_the_worker_works.md](how_the_worker_works.md) follows
+> a new circular and a new policy through the worker, and shows exactly what changes in the
+> database at each step. For developers, [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md)
+> has every SQL statement, commit and lock.
 
 ### What lands in the tray
 

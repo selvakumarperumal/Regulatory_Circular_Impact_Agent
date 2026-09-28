@@ -2,8 +2,9 @@
 
 > 📘 **New to the worker?** Start with [The worker in plain words](../../how_it_works.md#4-the-worker-in-plain-words):
 > what it does every minute, one circular from start to finish, and what its log lines mean.
-> For every detail, down to each database operation, read
-> [how_the_worker_works.md](../../how_the_worker_works.md).
+> Then [How the worker works](../../how_the_worker_works.md) follows a new circular and a new
+> policy step by step, database included. Changing the code? [INTERNALS.md](INTERNALS.md) has
+> every SQL statement, commit and lock.
 
 The agent. It takes each circular the watcher saved and works out which internal policies it
 makes out of date. For each one, it opens a gap ticket for the policy owner with a draft of
