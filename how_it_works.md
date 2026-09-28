@@ -361,6 +361,189 @@ running side by side. In a test with 6 circulars, 3 workers finished in half the
 > connection closes, Postgres releases its locks, and another worker picks the circular up
 > on its next round.
 
+### How the locks work
+
+People often call this pattern **"SKIP LOCKED"**: when several workers share one queue, each
+takes an item, and the others **skip** whatever is **locked** instead of waiting for it.
+Postgres has a SQL clause with that name. This app gets the same behaviour a slightly
+different way, with **advisory locks**. Both are explained below, with the reason for the
+choice.
+
+**What an advisory lock is.** A lock that Postgres keeps in memory for a pair of numbers you
+choose. It isn't tied to any table or row: the numbers just mean something to the program.
+Two calls matter:
+
+- `pg_try_advisory_lock(a, b)` answers at once: **true** means "it's yours now", **false**
+  means "someone else has it". It never waits. This is the skip-if-locked part.
+- `pg_advisory_unlock(a, b)` gives it back.
+
+The worker uses four of them. The first number says what kind of thing is locked, and the
+second which one:
+
+| Lock | Numbers | Taken by | If it's already taken |
+|---|---|---|---|
+| a circular | `(7311, circular id)` | the worker processing that circular | skip it and try the next one |
+| the GPU | `(7312, 0)` | the worker running OCR | take a circular that's already read; if there are none, wait for the GPU |
+| the policy library | `(7310, 0)` | the worker embedding policies and running the catch-up | skip that step this round |
+| the schema | `(1)` | any service creating tables at startup | wait: every service must see the tables before it carries on |
+
+This is what happens when two workers reach for the same circular:
+
+```mermaid
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+sequenceDiagram
+    box rgb(11, 16, 32)
+        participant W1 as worker 1
+        participant PG as Postgres
+        participant W2 as worker 2
+    end
+
+    rect rgb(13, 20, 36)
+        W1->>PG: pg_try_advisory_lock(7311, 98)
+        PG-->>W1: true: circular 98 is yours
+        W2->>PG: pg_try_advisory_lock(7311, 98)
+        PG-->>W2: false: another worker holds it
+        Note over W2: don't wait: skip it
+        W2->>PG: pg_try_advisory_lock(7311, 97)
+        PG-->>W2: true: circular 97 is yours
+        Note over W1,W2: both work at the same time, on different circulars
+        W1->>PG: pg_advisory_unlock(7311, 98)
+        W2->>PG: pg_advisory_unlock(7311, 97)
+    end
+```
+
+**Claiming a circular, step by step.** Each worker runs this loop
+(`process_next` in `backend/worker/main.py`):
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        list["List the waiting circulars, newest first<br/>(status new or parsed)"] --> tryc{"Try the next one's lock<br/>(7311, id)"}
+        list -->|"none left to try"| idle["End the round"]
+        tryc -->|"another worker holds it"| skip1["Skip it:<br/>try the next one"]
+        tryc -->|"got it"| fresh{"Still waiting?<br/>(read its status again)"}
+        fresh -->|"no: another worker<br/>just finished it"| skip2["Release it:<br/>try the next one"]
+        fresh -->|"yes"| isnew{"Does it need OCR?<br/>(status new)"}
+        isnew -->|"yes"| gpu{"Try the GPU lock<br/>(7312, 0)"}
+        gpu -->|"another worker<br/>is using the GPU"| skip3["Release it:<br/>try the next one"]
+        gpu -->|"got it"| ocr["OCR the PDF,<br/>then release the GPU"]
+        isnew -->|"no: already read"| gem["Run its Gemini steps:<br/>summarise, judge,<br/>check its policies"]
+        ocr --> gem
+        gem --> done["Release its lock,<br/>then start again from the list"]
+    end
+
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    class list data
+    class tryc,fresh,isnew,gpu ask
+    class idle,skip1,skip2,skip3 muted
+    class gem ext
+    class ocr gpu
+    class done ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+Two details make it safe:
+
+- **The status is read again after the lock is taken.** Between listing the circulars and
+  locking one, another worker may have finished it. Re-reading means a finished circular is
+  never started again.
+- **Nobody sits idle while there's work.** The first pass through the list takes only what
+  can start at once. If everything left needs the GPU and the GPU is busy, a second pass
+  claims the first free new circular and **waits** for the GPU, rather than skipping it.
+
+### Why not FOR UPDATE SKIP LOCKED
+
+The SQL version of the pattern locks a **row** while picking it:
+
+```sql
+SELECT id FROM circulars
+WHERE status IN ('new', 'parsed')
+ORDER BY published_at DESC
+LIMIT 1
+FOR UPDATE SKIP LOCKED;     -- lock the row found; step over rows other workers have locked
+```
+
+It's a good fit when one job is done inside **one transaction**, because a row lock lasts
+exactly until that transaction ends with a COMMIT or ROLLBACK. The worker doesn't work that
+way on purpose. It **commits after every step** (the OCR text, the summary, whether the
+circular applies, each policy verdict), so that a crash or an outage halfway loses nothing.
+The first of those commits would also release the row lock, and the circular would be
+up for grabs again while it's still being processed:
+
+```mermaid
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+sequenceDiagram
+    box rgb(11, 16, 32)
+        participant W1 as worker 1
+        participant PG as Postgres
+        participant W2 as worker 2
+    end
+
+    rect rgb(13, 20, 36)
+        W1->>PG: BEGIN, then SELECT … FOR UPDATE SKIP LOCKED
+        PG-->>W1: circular 98 (its row is now locked)
+        W2->>PG: BEGIN, then SELECT … FOR UPDATE SKIP LOCKED
+        PG-->>W2: skips 98, gives circular 97
+        W1->>PG: save 98's OCR text, COMMIT
+        Note over PG: the COMMIT ends worker 1's transaction,<br/>so the row lock on 98 is gone
+        W2->>PG: done with 97: SELECT … FOR UPDATE SKIP LOCKED
+        PG-->>W2: circular 98 (status parsed, and nothing locks it)
+        Note over W1,W2: both now run Gemini on circular 98: double the calls,<br/>and the second one to save a verdict fails
+    end
+```
+
+Keeping one transaction open for the whole circular would avoid that, but it would hold a
+database transaction open through minutes of OCR and Gemini calls, and a failure halfway
+would throw away every step already done.
+
+**Why the advisory lock survives the commits.** It belongs to a **connection**, not to a
+transaction. The worker takes it on a connection of its own (`locks.held` in
+`backend/worker/locks.py`) and does the work on another. So the work can commit as often as
+it likes, and the lock stays held until the worker says `pg_advisory_unlock`:
+
+```mermaid
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+sequenceDiagram
+    box rgb(11, 16, 32)
+        participant L as lock connection
+        participant PG as Postgres
+        participant S as work session
+    end
+
+    rect rgb(13, 20, 36)
+        L->>PG: pg_try_advisory_lock(7311, 98): held
+        S->>PG: save the OCR text, COMMIT
+        S->>PG: save the summary, COMMIT
+        S->>PG: save whether it applies, COMMIT
+        S->>PG: save each policy verdict, COMMIT
+        Note over L,S: the commits end the work session's transactions,<br/>not the lock: it stays held on its own connection
+        L->>PG: pg_advisory_unlock(7311, 98)
+    end
+```
+
+**When a worker dies.** Its connections close, and Postgres releases every lock those
+connections held, at once and by itself. Nothing is left stuck: the circular is still
+`new` or `parsed`, so on the next round another worker claims it and carries on from the
+last step that was saved.
+
+**Seeing the locks.** While workers are busy, this lists the locks they hold (`classid` is
+the first number, `objid` the second, `pid` the Postgres connection that holds it):
+
+```bash
+docker compose exec postgres psql -U rci -d rci -c \
+  "select classid, objid, pid from pg_locks where locktype = 'advisory'"
+```
+
 ### Reading its log
 
 `docker compose logs -f worker` shows what the worker is doing. Each line means:
