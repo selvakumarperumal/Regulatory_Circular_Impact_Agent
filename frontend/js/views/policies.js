@@ -5,7 +5,7 @@ import { $, html, put } from "../lib/html.js";
 import { OPEN, fmtDate, plural } from "../lib/format.js";
 import { icon } from "../ui/icons.js";
 import { busy, dimWhile, toast } from "../ui/feedback.js";
-import { emptyState, pageHead, panel, person, plist, regChip, table } from "../ui/components.js";
+import { emptyState, pageHead, panel, person, plist, regChip, table, tag } from "../ui/components.js";
 import { filters } from "../app/state.js";
 import { render, setCrumbs } from "../app/router.js";
 import { refreshBadges } from "../app/status.js";
@@ -28,6 +28,26 @@ const SAMPLE_JSON = `[
     ]
   }
 ]`;
+
+/** Saving a policy queues a policy.check task; the worker stamps checked_at when it's done. */
+const checked = (p) => Boolean(p.checked_at) && new Date(p.checked_at) >= new Date(p.updated_at);
+const workerTag = (p) => checked(p)
+  ? tag({ label: `Checked ${fmtDate(p.checked_at)}`, c: "var(--st-closed)" })
+  : html`<span class="tag working" style="--c: var(--st-progress)"><i></i>Waiting for the worker</span>`;
+
+/** While the worker hasn't checked the policy, look again every 3 seconds. */
+function watchWorker(p) {
+  const page = location.hash;
+  const timer = setInterval(async () => {
+    if (location.hash !== page) return clearInterval(timer);
+    const { policy } = await api(`/policies/${p.id}`).catch(() => ({}));
+    if (!policy || !checked(policy)) return;
+    clearInterval(timer);
+    toast(`${policy.code} checked by the worker`);
+    if ($("#policy-form")) put($("#worker-status"), workerTag(policy));
+    else policyPage({ id: p.id });
+  }, 3000);
+}
 
 const libraryActions = () => html`
   <button class="btn" data-import>${icon("upload")}Import JSON</button>
@@ -66,7 +86,7 @@ export async function policiesPage() {
         head: ["Code", "Policy", "Regulators", "Owner", "#Version", "#Open gaps"],
         rows: policies.map((p) => html`<a class="trow" href="#/policies/${p.id}" data-search="${`${p.code} ${p.title} ${p.owner}`.toLowerCase()}">
           <div class="cell"><span class="chip">${p.code}</span></div>
-          <div class="cell"><div class="cell-title">${p.title}</div><div class="cell-sub">Updated ${fmtDate(p.updated_at)}</div></div>
+          <div class="cell"><div class="cell-title">${p.title}</div><div class="cell-sub">${workerTag(p)}</div></div>
           <div class="cell">${p.regulators.map((r) => html`${regChip(r)} `)}</div>
           <div class="cell hide-sm">${person(p.owner)}</div>
           <div class="cell num">v${p.version}</div>
@@ -98,6 +118,7 @@ export async function policyPage({ id }, { editing = false } = {}) {
     <header class="detail-head">
       <div class="eyebrow">${p.code} · version ${p.version}</div>
       <h1>${p.title}</h1>
+      <div class="tags" id="worker-status">${workerTag(p)}</div>
     </header>
 
     <div class="detail">
@@ -147,6 +168,7 @@ export async function policyPage({ id }, { editing = false } = {}) {
             ["Owner", person(p.owner)],
             ["Regulators", html`<span class="chip-row">${p.regulators.map(regChip)}</span>`],
             ["Updated", fmtDate(p.updated_at)],
+            ["Worker", checked(p) ? `Checked ${fmtDate(p.checked_at)}` : "Waiting"],
             ["Open gaps", String(openCount)],
           ]),
         })}
@@ -164,6 +186,7 @@ export async function policyPage({ id }, { editing = false } = {}) {
     wrap.hidden = !wrap.hidden;
     if (!wrap.hidden) $("#control-form input[name=code]").focus();
   });
+  if (!checked(p)) watchWorker(p);
   if (editing) bindPolicyForm(p);
   else $("#edit-policy").addEventListener("click", () => policyPage({ id }, { editing: true }));
 
@@ -250,11 +273,11 @@ function bindPolicyForm(p) {
       if (!body.regulators.length) throw new Error("Pick at least one regulator.");
       if (!p) {
         const created = await api("/policies", { method: "POST", body });
-        toast(`${created.code} added. A worker is checking it against recent circulars now.`);
+        toast(`${created.code} saved and queued: a worker is checking it now`);
         location.hash = `#/policies/${created.id}`;
       } else {
         const saved = await api(`/policies/${p.id}`, { method: "PUT", body });
-        toast(saved.version > p.version ? `Saved as version ${saved.version}` : "Saved (text unchanged, same version)");
+        toast(`${saved.version > p.version ? `Saved as version ${saved.version}` : "Saved"}, and queued for the worker`);
         await policyPage({ id: p.id });
       }
       refreshBadges();

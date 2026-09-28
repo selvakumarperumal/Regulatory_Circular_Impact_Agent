@@ -18,7 +18,7 @@ function store() {
 
 export const signedIn = () => Boolean(current?.token);
 export const currentUser = () => current?.user ?? null;
-export const currentCompany = () => current?.company ?? null;
+const currentCompany = () => current?.company ?? null;
 
 /** After login or sign-up: keep what the API returned ({ token, user, company }). */
 export function signIn({ token, user, company }) {
@@ -36,7 +36,7 @@ export function updateSession({ user, company }) {
   showUser();
 }
 
-export function signOut() {
+function signOut() {
   current = null;
   store();
   showUser();

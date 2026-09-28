@@ -272,3 +272,7 @@ ul.tips b { color: var(--ink); font-weight: 600; }
   .trow .hide-sm { display: none; }
   .table-toolbar input[type=search] { max-width: none; }
 }
+
+/* A task waiting for the worker: the dot pulses until it's done. */
+.tag.working i { animation: pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .tag.working i { animation: none; } }
