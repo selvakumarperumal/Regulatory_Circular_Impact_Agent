@@ -85,6 +85,10 @@ next circular.
 Compose also takes settings from your shell, so a direnv `.envrc` that exports
 `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` works too.
 
+> ⚡ **More workers, more speed.** Set `WORKERS=3` in `.env` to run three workers side by
+> side. They share the work through Postgres locks, so nothing is done twice. See
+> [Running several workers](how_it_works.md#running-several-workers).
+
 > ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the worker
 > logs "OCR or Gemini unavailable" and keeps retrying.
 

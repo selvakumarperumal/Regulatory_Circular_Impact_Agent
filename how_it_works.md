@@ -16,19 +16,20 @@ renders on GitHub and in VS Code's Markdown preview.
 1. [The idea in one minute](#1-the-idea-in-one-minute)
 2. [The big picture](#2-the-big-picture)
 3. [What runs where](#3-what-runs-where)
-4. [The life of one circular](#4-the-life-of-one-circular)
-5. [Step 1: the watcher finds new circulars](#5-step-1-the-watcher-finds-new-circulars)
-6. [Step 2: OCR turns the PDF into text](#6-step-2-ocr-turns-the-pdf-into-text)
-7. [Step 3: the worker decides what the circular means for us](#7-step-3-the-worker-decides-what-the-circular-means-for-us)
-8. [When you add or edit a policy](#8-when-you-add-or-edit-a-policy)
-9. [The data](#9-the-data)
-10. [Tracking a gap until it's closed](#10-tracking-a-gap-until-its-closed)
-11. [The API and the console](#11-the-api-and-the-console)
-12. [When things go wrong](#12-when-things-go-wrong)
-13. [Where settings come from](#13-where-settings-come-from)
-14. [The code, file by file](#14-the-code-file-by-file)
-15. [How do I…?](#15-how-do-i)
-16. [Glossary](#16-glossary)
+4. [The worker in plain words](#4-the-worker-in-plain-words)
+5. [The life of one circular](#5-the-life-of-one-circular)
+6. [Step 1: the watcher finds new circulars](#6-step-1-the-watcher-finds-new-circulars)
+7. [Step 2: OCR turns the PDF into text](#7-step-2-ocr-turns-the-pdf-into-text)
+8. [Step 3: the worker decides what the circular means for us](#8-step-3-the-worker-decides-what-the-circular-means-for-us)
+9. [When you add or edit a policy](#9-when-you-add-or-edit-a-policy)
+10. [The data](#10-the-data)
+11. [Tracking a gap until it's closed](#11-tracking-a-gap-until-its-closed)
+12. [The API and the console](#12-the-api-and-the-console)
+13. [When things go wrong](#13-when-things-go-wrong)
+14. [Where settings come from](#14-where-settings-come-from)
+15. [The code, file by file](#15-the-code-file-by-file)
+16. [How do I…?](#16-how-do-i)
+17. [Glossary](#17-glossary)
 
 ---
 
@@ -161,7 +162,7 @@ flowchart LR
 |---|---|---|---|
 | `watcher` | `backend/watcher` | `python main.py`, one round every 60 minutes | none |
 | `ocr` | `backend/ocr` | vLLM serving `baidu/Unlimited-OCR` on the GPU | 8001 |
-| `worker` | `backend/worker` | `python main.py`, one round every 60 seconds ([how a round works](#how-the-worker-works-one-round-every-60-seconds)) | none |
+| `worker` | `backend/worker` | `python main.py`, one round every 60 seconds ([how it works](#4-the-worker-in-plain-words)) | none |
 | `api` | `backend/api` | `uvicorn main:app` | 8000 (docs at `/docs`) |
 | `frontend` | `frontend` | nginx serving static files | 8080 |
 | `postgres` | none (official image) | the database | 5432 |
@@ -176,7 +177,228 @@ worker and api. Each of those has its own `pyproject.toml` and virtualenv.
 
 ---
 
-## 4. The life of one circular
+## 4. The worker in plain words
+
+The worker is the agent: one Python program ([`backend/worker/main.py`](backend/worker/main.py))
+that runs all the time. Picture a clerk with an in-tray. Every minute the clerk looks in the
+tray. If there's something in it, the clerk works through it; if it's empty, the clerk waits
+another minute. **Looking in the tray costs nothing**: OCR and Gemini are only used when
+there is real work.
+
+### What lands in the tray
+
+| What | Who put it there | What the worker does | OCR and Gemini used |
+|---|---|---|---|
+| A **new circular** | the watcher, when a regulator publishes one | reads it, decides whether it applies to you, checks your policies, opens gaps | OCR once, 2 Gemini questions, 1 embedding, up to 3 policy checks |
+| A **circular sent back** | you pressed **Reprocess**, or changed the company description | redoes only what that change affects; never OCR again | only the questions whose answer may have changed |
+| A **new or edited policy** | you saved it in the console | turns it into an embedding, then checks it against the recent circulars that apply | 1 embedding, plus 1 check per circular where it's among the 3 closest policies |
+| **Nothing** | | waits a minute | none |
+
+### One round, every 60 seconds
+
+Each time the worker wakes up it does one **round**, then waits 60 seconds (`POLL_SECONDS`).
+The wait starts when the round ends, so a round that reads a long circular just takes longer.
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        boot(["Worker starts"]) --> init["Create any missing tables and columns.<br/>Check the Gemini key and model names"]
+        init --> r1
+        subgraph round["One round"]
+            r1["1. Tidy up: mark new circulars older<br/>than 30 days as skipped"] --> r2["2. Embed policies that are<br/>new or edited"]
+            r2 --> r3{"Anything changed since<br/>the last catch-up?"}
+            r3 -->|yes| r4["3. Catch up: check recent circulars<br/>against their closest policies"]
+            r3 -->|no| r5
+            r4 --> r5{"4. Is a circular waiting?<br/>(status new or parsed)"}
+            r5 -->|yes| r6["Process it, newest first:<br/>OCR if needed, read, judge,<br/>check its closest policies"]
+            r6 --> r5
+        end
+        r5 -->|no| wait["Wait 60 seconds"]
+        wait --> r1
+    end
+
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    class boot start
+    class r1,r2,r4,r6 svc
+    class r3,r5 ask
+    class wait muted
+    style round fill:#0c1a24,stroke:#2dd4bf
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+Steps 1 to 3 look after the policy library; step 4 works through the waiting circulars.
+With several workers, steps 1 to 3 run in one worker at a time (see
+[Running several workers](#running-several-workers)).
+
+### One circular, from start to finish
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart LR
+    subgraph canvas[" "]
+        direction LR
+        s1["<b>1. Read the PDF</b><br/>OCR on the GPU<br/><i>saves the text</i>"] --> s2["<b>2. Summarise it</b><br/>Gemini: who it's for,<br/>what changes, what it requires<br/><i>saves the summary</i>"]
+        s2 --> s3{"<b>3. Does it<br/>apply to us?</b><br/>Gemini, using your<br/>company description"}
+        s3 -->|no| notus["Done: not for us.<br/>No policy is checked"]
+        s3 -->|yes| s4["<b>4. Check your policies</b><br/>score them (maths, no Gemini),<br/>then Gemini checks the 3 closest"]
+        s4 --> s5["Out of date?<br/>Open a gap for the owner,<br/>with a draft of the change"]
+    end
+
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    class s1 gpu
+    class s2,s4 ext
+    class s3 ask
+    class notus muted
+    class s5 bad
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+Each step saves its answer before the next one starts, and the circular's status moves from
+`new` to `parsed` (after step 1) and then `analyzed` (after step 4). If something breaks
+halfway, the next round carries on from the last saved step. Sections 5 to 8 go through each
+step in detail.
+
+### How it picks which policies to check
+
+Asking Gemini about every policy for every circular would be slow and costly. So the worker
+first gives each policy a quick **similarity score** against the circular, using arithmetic on
+saved embeddings with no Gemini call. Only the **3 highest scores** go to Gemini
+(`MATCH_TOP_K`). Only policies tagged with the circular's regulator are scored.
+
+For example, an RBI circular about reporting suspicious accounts:
+
+| Policy (all tagged RBI) | Score | Sent to Gemini? |
+|---|---|---|
+| POL-KYC, Know Your Customer and anti-money laundering | 0.82 | ✅ top 3 |
+| POL-DRP | 0.58 | ✅ top 3 |
+| POL-DLP, digital lending | 0.55 | ✅ top 3 |
+| POL-IT, IT security | 0.31 | no |
+| POL-HR, staff leave | 0.12 | no |
+
+With 3 or fewer policies for a regulator, all of them are checked. The scores are shown on each
+circular's page, under **Checked against your policies**.
+
+### It never does the same work twice
+
+Like a clerk who writes everything down, the worker saves every answer it pays for: the OCR
+text, the summary, whether the circular applies, the embeddings, and every policy verdict. A
+restart, a crash or a quiet minute never repeats a call that already succeeded. The full list
+is in [Work that's done once, and kept](#work-thats-done-once-and-kept).
+
+### When something breaks
+
+- **OCR or Gemini is down, or Gemini's quota is used up:** the worker waits and tries again
+  every minute, for as long as it takes. Nothing is lost.
+- **A hiccup** (a timeout, a server error, an answer in the wrong shape): the circular is
+  retried up to 3 times.
+- **Anything else:** the circular is marked `failed` and the error is saved on it. Open it in
+  the console to read why, then press **Reprocess**.
+
+Details: [When things go wrong](#13-when-things-go-wrong).
+
+### Running several workers
+
+Picture several clerks sharing one in-tray. Each puts a sticky note on the folder they take,
+only one can use the scanner (the GPU) at a time, and if a clerk walks out, their notes
+disappear. One worker is plenty for a handful of circulars a day. To get through a backlog faster, run
+more: set `WORKERS=3` in `.env`, or `docker compose up -d --scale worker=3`. The workers
+share the work through Postgres advisory locks, so nothing is ever done twice:
+
+| Lock | Held while | Meanwhile, the other workers |
+|---|---|---|
+| one per circular | a worker processes that circular | skip it and take the next one |
+| the GPU | a worker reads a PDF with OCR | take circulars that are already read and run their Gemini steps; if there are none, wait for the GPU |
+| the policy library | a worker embeds policies and runs the catch-up | skip that step this round |
+
+```mermaid
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+sequenceDiagram
+    box rgb(11, 16, 32)
+        participant A as worker 1
+        participant DB as Postgres
+        participant GPU as ocr (GPU)
+        participant G as Gemini
+        participant B as worker 2
+    end
+
+    rect rgb(13, 20, 36)
+        A->>DB: claim circular 1, take the GPU lock
+        B->>DB: claim circular 2
+        Note over B: the GPU is busy and no circular<br/>is already read: wait for the GPU
+        A->>GPU: read circular 1, page by page
+        A->>DB: save the text, release the GPU
+        B->>GPU: read circular 2
+        A->>G: summarise, judge, check its policies
+        Note over A,B: circular 1's Gemini steps run while circular 2 is on the GPU
+        B->>DB: save the text, release the GPU
+        B->>G: summarise, judge, check its policies
+    end
+```
+
+The GPU reads one page at a time, so OCR never runs in parallel. The speed-up comes from
+running one circular's Gemini steps while another is on the GPU, and from Gemini calls
+running side by side. In a test with 6 circulars, 3 workers finished in half the time of one.
+
+> 🔒 **Crash-safe.** Each lock lives on its own database connection. If a worker dies, its
+> connection closes, Postgres releases its locks, and another worker picks the circular up
+> on its next round.
+
+### Reading its log
+
+`docker compose logs -f worker` shows what the worker is doing. Each line means:
+
+| Log line | What happened |
+|---|---|
+| `using gemini-… and gemini-embedding-001` | the worker started, and Gemini accepted the key and model names |
+| `#98 RBI: Designation of …` | it claimed circular 98 and started on it |
+| `#98 same PDF as #97: reusing its OCR text` | the PDF was already read for another circular, so no OCR |
+| `#98 parsed: 12408 chars` | OCR is done and the text is saved |
+| `#98 vs POL-KYC v1 (similarity 0.74): GAP` | Gemini checked one policy: out of date, and a gap was opened (or `up to date`) |
+| `#98 analyzed: addressed to '…', applies to us: True, gaps opened: ['POL-KYC']` | the circular is finished |
+| `embedded 1 policies (1 chunks) with gemini-embedding-001` | a new or edited policy was turned into an embedding |
+| `caught up: 2 new checks against 5 recent circulars, gaps opened: none` | new policies were checked against recent circulars |
+| `skipped 99 circulars published before 2026-08-28` | circulars older than 30 days were set aside |
+| `OCR or Gemini unavailable (…); retrying in 60s` | a service is down or rate-limited; it will try again |
+| `#98 failed` | the circular was marked failed; the error is on its page |
+
+A round with nothing to do prints nothing.
+
+### Common questions
+
+**Does it call Gemini every 60 seconds?** No. It only calls Gemini for real work: a new
+circular, a new or edited policy, a changed company description, or **Reprocess**. Otherwise a
+round is a few quick database reads.
+
+**Do I need to restart it after adding a policy or changing the company?** No. It notices on
+its next round, within a minute.
+
+**Why wasn't my policy checked against a circular?** See
+[Why doesn't my new policy have a gap?](#why-doesnt-my-new-policy-have-a-gap).
+
+**How do I make it faster?** Run more workers: `WORKERS=3` in `.env`. See
+[Running several workers](#running-several-workers).
+
+---
+
+## 5. The life of one circular
 
 This is the whole journey of one circular, from the regulator's website to a ticket on
 someone's desk.
@@ -290,7 +512,7 @@ flowchart TB
 
 ---
 
-## 5. Step 1: the watcher finds new circulars
+## 6. Step 1: the watcher finds new circulars
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -346,7 +568,7 @@ Things worth knowing:
 
 ---
 
-## 6. Step 2: OCR turns the PDF into text
+## 7. Step 2: OCR turns the PDF into text
 
 The worker reads each PDF with **Baidu Unlimited-OCR**, a vision model that sees the page as
 an image. It handles scanned pages, tables and Hindi, not just a PDF's text layer.
@@ -399,7 +621,7 @@ flowchart LR
 
 ---
 
-## 7. Step 3: the worker decides what the circular means for us
+## 8. Step 3: the worker decides what the circular means for us
 
 This is where the thinking happens. The worker asks Gemini three kinds of question. Each
 answer comes back as **JSON matching a Pydantic model** (LangChain's
@@ -537,7 +759,7 @@ Each gap starts its history with one event: `agent` `opened` it.
 
 ---
 
-## 8. When you add or edit a policy
+## 9. When you add or edit a policy
 
 Circulars aren't the only trigger. When you add a policy, the worker checks it against the
 circulars of the **last 30 days** that apply to the company, so a library loaded today still
@@ -551,61 +773,16 @@ In short, for a new policy:
 
 1. The api saves it as version 1, with no embeddings yet.
 2. Within 60 seconds the worker embeds it (turns its text into vectors, see
-   [section 7](#how-the-closest-policies-are-found)).
+   [section 8](#how-the-closest-policies-are-found)).
 3. The worker lists the recent circulars that apply to the company and have obligations.
 4. For each one it ranks every policy by similarity. Where the new policy is among the 3
    closest, Gemini is asked whether the policy is now out of date.
 5. Each answer is saved. An out-of-date policy gets a gap ticket for its owner, with a draft
    of the new wording.
 
-### How the worker works: one round every 60 seconds
-
-The worker is a loop. Each round does the same four things, then waits 60 seconds
-(`POLL_SECONDS`) and starts again. The wait starts when a round finishes, so a round that
-reads a long circular simply takes longer.
-
-```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart TD
-    subgraph canvas[" "]
-        direction TB
-        boot(["Worker starts"]) --> init["Create any missing tables and columns.<br/>Check the Gemini key and model names"]
-        init --> r1
-        subgraph round["One round"]
-            r1["Step 1: embed policies that are<br/>new or edited"] --> r2{"Step 2: anything changed<br/>since the last catch-up?"}
-            r2 -->|yes| r3["Catch up: check recent circulars<br/>against their closest policies"]
-            r2 -->|no| r4
-            r3 --> r4["Step 3: mark new circulars older<br/>than 30 days as skipped"]
-            r4 --> r5{"Step 4: is a circular waiting?<br/>(status new or parsed)"}
-            r5 -->|yes| r6["Process it, newest first: OCR if needed,<br/>read, judge, check its closest policies"]
-            r6 --> r5
-        end
-        r5 -->|no| wait["Wait 60 seconds"]
-        wait --> r1
-    end
-
-    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
-    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
-    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
-    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
-    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
-    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
-    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
-    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
-    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    class boot start
-    class r1,r3,r4,r6 svc
-    class r2,r5 ask
-    class wait muted
-    style round fill:#0c1a24,stroke:#2dd4bf
-    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
-```
-
-Steps 1 and 2 are where a new policy is handled. "Anything changed" means the company
-description, any policy, or the set of recent circulars that apply to the company. In the
-catch-up, only pairs of circular and policy that were never judged are sent to Gemini. A
-round with nothing new costs a few database reads and no OCR or Gemini call, so running
-every minute is free.
+The worker handles a new policy in the first steps of its round (see
+[One round, every 60 seconds](#one-round-every-60-seconds)); the rest of this section
+follows that policy through.
 
 ### Step by step: what happens to a new policy
 
@@ -711,7 +888,7 @@ which keeps Gemini's work (and your bill) small without missing the policies tha
 ### How Gemini decides whether there's a gap
 
 For each pair that gets through, Gemini is asked question 3 from
-[section 7](#the-three-questions):
+[section 8](#the-three-questions):
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -795,7 +972,7 @@ as soon as it's analysed.
 
 The catch-up above only looks back. Going forward, the new policy is simply part of the
 library: each new circular that applies ranks all the policies (the new one included) and
-the 3 closest are judged, as in [section 7](#7-step-3-the-worker-decides-what-the-circular-means-for-us).
+the 3 closest are judged, as in [section 8](#8-step-3-the-worker-decides-what-the-circular-means-for-us).
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -892,7 +1069,7 @@ docker compose logs worker | grep -E "embedded|caught up| vs "
 
 ---
 
-## 9. The data
+## 10. The data
 
 Seven tables, all defined in `backend/common/common/models.py`:
 
@@ -948,7 +1125,7 @@ stops two services that start together from both changing the schema.
 
 ---
 
-## 10. Tracking a gap until it's closed
+## 11. Tracking a gap until it's closed
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1027,7 +1204,7 @@ flowchart LR
 
 ---
 
-## 11. The API and the console
+## 12. The API and the console
 
 The console is plain HTML and JavaScript. It talks to the API through nginx, so the browser
 only ever sees one address.
@@ -1071,7 +1248,7 @@ The interactive API docs are at http://localhost:8000/docs.
 
 ---
 
-## 12. When things go wrong
+## 13. When things go wrong
 
 > 🛡️ **The worker never loses work.** The question it asks about every error is: is the
 > circular to blame, or the service?
@@ -1118,13 +1295,18 @@ that does the worker's own retry take over. LangChain wraps Gemini's errors in i
 classes, so the worker reads the HTTP code from the original error underneath
 (`gemini_status` in `backend/worker/failures.py`, which holds all these rules).
 
+> 🔒 **Workers never step on each other.** However many run (several on purpose, a rolling
+> update, or one started by hand beside the container), each circular is claimed by one
+> worker through a Postgres lock, and a worker that dies releases its claims. See
+> [Running several workers](#running-several-workers).
+
 Checking new policies against recent circulars follows the same rules. An error there that
 isn't a service problem is logged, and that circular is left alone until the worker restarts,
 so the worker keeps processing everything else instead of stopping.
 
 ---
 
-## 13. Where settings come from
+## 14. Where settings come from
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1170,6 +1352,7 @@ Settings you're most likely to change:
 | `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | the model used for policy matching (changing it re-embeds every policy and circular) |
 | `LOOKBACK_DAYS` | 30 | older circulars are skipped; new policies are checked against this window |
 | `MATCH_TOP_K` | 3 | how many policies Gemini checks per circular |
+| `WORKERS` | 1 | how many workers run side by side ([how they share the work](#running-several-workers)) |
 | `OCR_MAX_PAGES` | 20 | how many pages of each PDF are read |
 | `WATCH_INTERVAL_MINUTES` | 60 | how often the regulator sites are checked |
 
@@ -1177,7 +1360,7 @@ Settings you're most likely to change:
 
 ---
 
-## 14. The code, file by file
+## 15. The code, file by file
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1241,7 +1424,7 @@ flowchart TB
 
 ---
 
-## 15. How do I…?
+## 16. How do I…?
 
 **…start everything?**
 
@@ -1313,7 +1496,7 @@ uv run python main.py --once         # one pass through the queue, then exit
 
 ---
 
-## 16. Glossary
+## 17. Glossary
 
 | Term | Meaning |
 |---|---|

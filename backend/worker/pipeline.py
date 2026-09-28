@@ -30,6 +30,7 @@ from sqlmodel import Session, col, func, select
 
 import failures
 import llm
+import locks
 import ocr
 import storage
 from common.models import Circular, Company, Control, Gap, GapEvent, Policy, PolicyCheck
@@ -57,12 +58,6 @@ class CatchUp:
 
 
 catch_up = CatchUp()
-
-
-def process(session: Session, c: Circular) -> None:
-    if c.status == "new":
-        parse(session, c)
-    analyze(session, c)
 
 
 def parse(session: Session, c: Circular) -> None:
@@ -358,7 +353,8 @@ def check_recent(session: Session) -> None:
     regulators), and after an interruption. Only pairs Gemini hasn't judged are sent,
     and nothing is done while the company, the library and the recent circulars are
     unchanged. A service that's down ends the round; a crash is retried next round,
-    up to MAX_TRIES times per circular."""
+    up to MAX_TRIES times per circular. A circular another worker is processing is
+    left to that worker, and checked next round."""
     state = library_state(session)
     if state == catch_up.finished:
         return
@@ -373,7 +369,11 @@ def check_recent(session: Session) -> None:
     before = len(done)
     for c in recent:
         try:
-            opened += match(session, c, policies, profile, done)
+            with locks.held(session.get_bind(), locks.CIRCULAR, c.id) as mine:
+                if not mine:
+                    unfinished = True
+                    continue
+                opened += match(session, c, policies, profile, done)
         except Exception as e:
             session.rollback()
             if failures.service_down(e):

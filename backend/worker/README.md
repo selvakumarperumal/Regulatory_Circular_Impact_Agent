@@ -1,5 +1,8 @@
 # worker
 
+> 📘 **New to the worker?** Start with [The worker in plain words](../../how_it_works.md#4-the-worker-in-plain-words):
+> what it does every minute, one circular from start to finish, and what its log lines mean.
+
 The agent. It takes each circular the watcher saved and works out which internal policies it
 makes out of date. For each one, it opens a gap ticket for the policy owner with a draft of
 the change.
@@ -47,6 +50,7 @@ makes no OCR or Gemini call.
 |---|---|
 | `main.py` | The loop |
 | `failures.py` | What counts as "wait", "try again" or "give up" |
+| `locks.py` | The Postgres locks several workers share the work with |
 | `pipeline.py` | The steps above: for one circular, and for new or edited policies |
 | `ocr.py` | PDF to text through Unlimited-OCR |
 | `llm.py` | Every Gemini call, through LangChain (`ChatGoogleGenerativeAI.with_structured_output`, `GoogleGenerativeAIEmbeddings`). Each prompt comes with the Pydantic model its reply must match |
@@ -59,6 +63,12 @@ makes no OCR or Gemini call.
 - **A 5xx, a timeout, a dropped connection or a reply not in the asked-for JSON:** the
   circular is retried up to 3 times, then marked `failed` with the error.
 - **A wrong API key or model name:** the worker stops at startup.
+- **Several workers at once** (`WORKERS=3` in `.env`, a rolling update, or one started by
+  hand beside the container): they share the work through Postgres advisory locks
+  (`locks.py`). Each circular is claimed by one worker; one worker at a time reads PDFs
+  on the GPU while the others run Gemini on circulars already read; one worker at a time
+  updates the policy library. Nothing is processed twice, and a worker that dies
+  releases its locks.
 
 LangChain first retries Gemini rate limits and server errors itself (`max_retries=3`), and
 raises its own error classes. The worker reads the HTTP code from the original Gemini

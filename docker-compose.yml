@@ -81,6 +81,8 @@ services:
       context: ./backend
       dockerfile: worker/Dockerfile
     restart: unless-stopped
+    deploy:
+      replicas: ${WORKERS:-1}         # workers share the work through Postgres locks
     depends_on:
       postgres:
         condition: service_healthy
