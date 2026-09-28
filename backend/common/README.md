@@ -22,7 +22,7 @@ companies  --<  users
 | `users` | api | who can sign in, each in one company (scrypt password hashes) |
 | `circulars` | watcher (new rows), worker (OCR text, summary, embedding, status) | one per regulator circular, **shared by every company** |
 | `assessments` | worker, api (Reprocess, a new description) | one per company and circular: pending, done or failed, and whether it applies |
-| `policies`, `controls` | api (the worker writes the embeddings) | each company's policy and control library |
+| `policies`, `controls` | api (the worker writes a policy's embeddings and `checked_at`) | each company's policy and control library |
 | `gaps` | worker (opens them), api (status, owner, due date) | a policy that a circular made out of date |
 | `gap_events` | worker, api | the history of each gap, never edited |
 | `policy_checks` | worker (api deletes "up to date" ones on Reprocess) | Gemini's verdict on each circular and policy version, so no pair is asked about twice |

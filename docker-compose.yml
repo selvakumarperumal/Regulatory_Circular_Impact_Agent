@@ -2,7 +2,7 @@
 #
 #   cp .env.example .env                        # then set GEMINI_API_KEY
 #   docker compose up -d --build
-#   open http://localhost:8080                  # the console: add your policies there
+#   open http://localhost:8080                  # the console: create an account, then add your policies
 #
 # One folder per service under backend/:
 #   watcher   new RBI / SEBI / IRDAI circulars -> PDF in S3 + a row in Postgres,
@@ -11,8 +11,8 @@
 #   worker    takes tasks off the stream: OCR -> Gemini -> gap tickets (scale freely)
 #   api       FastAPI on :8000; queues a task when a policy or a company changes
 # plus Postgres, Redis (the task stream), and frontend/ (a static console served by
-# nginx, which forwards /api to the api service). Floci (local S3) runs outside this file, on the host's port 4566,
-# and Gemini is Google's API, reached over the internet.
+# nginx, which forwards /api to the api service). Floci (local S3) runs outside this
+# file, on the host's port 4566, and Gemini is Google's API, reached over the internet.
 #
 # Settings come from .env beside this file; every one except GEMINI_API_KEY has a
 # default (in each service's config.py), so unset ones are passed as "" and ignored.

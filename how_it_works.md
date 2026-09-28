@@ -198,13 +198,13 @@ The worker is the agent: a Python program ([`backend/worker/main.py`](backend/wo
 that runs all the time, as many copies as you like. Picture a ticket machine: every piece of
 work arrives as a ticket (a **task**) in one queue, and each clerk takes the next ticket as
 soon as they're free. When the queue is empty, the clerks simply wait: **no OCR, no Gemini,
-not even a database query**.
+no database work** (apart from one quick look for missing work every 15 minutes).
 
 > 📖 **Two stories, step by step.** [how_the_worker_works.md](how_the_worker_works.md) follows
 > a new circular and a new policy through the worker, and shows exactly what goes through the
 > queue and what changes in the database at each step. For developers,
 > [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md) has every Redis command, SQL
-> statement, commit and lock.
+> statement and commit.
 
 ### What lands in the queue
 
@@ -361,16 +361,13 @@ and [No duplicates](how_the_worker_works.md#7-no-duplicates-each-task-is-queued-
 | Log line | What happened |
 |---|---|
 | `worker 4b2f…-1: using gemini-…, waiting for tasks` | the worker started, and Gemini accepted the key and model names |
-| `#98 same PDF as #97: reusing its OCR text` | the PDF was already read for another circular, so no OCR |
 | `#98 parsed: 12408 chars` | OCR is done and the text is saved |
 | `#98 read: addressed to '…'` | the summary is saved; each company's assessment is queued |
 | `#98 vs POL-KYC v1 (0.74): GAP` | Gemini checked one policy (similarity 0.74): out of date, and a gap was opened (or `up to date`) |
 | `#98 for company 1: applies: True, gaps opened: ['POL-KYC']` | the circular is done for company 1 |
 | `embedded POL-AML (1 chunks) with gemini-embedding-001` | a new or edited policy was turned into an embedding |
 | `POL-AML checked, gaps opened: none` | a saved policy was checked against the company's recent circulars (its page now says **Checked**) |
-| `#98 skipped: published before 2026-08-28` | an old circular was set aside |
 | `OCR or Gemini unavailable (…); retrying` | a service is down or rate-limited; the task waits and tries again |
-| `took over task … from a worker that stopped` | a dead worker's task was picked up |
 | `reconciler: 3 unfinished tasks checked` | unfinished work was queued again, unless it was still queued |
 | `… failed for good` | the circular or assessment was marked failed; the error is on its page |
 
@@ -378,9 +375,10 @@ A worker with nothing to do prints nothing.
 
 ### Common questions
 
-**Does it call Gemini every minute?** No. There's no timer at all: a worker only wakes up for
-a task, and only calls Gemini for real work: a new circular, a new or edited policy, a new
-company description, or **Reprocess**.
+**Does it call Gemini every minute?** No. There's no polling: a worker wakes up when a task
+arrives, and only calls Gemini for real work: a new circular, a new or edited policy, a new
+company description, or **Reprocess**. The one timer is the reconciler, which looks in
+Postgres every 15 minutes for work whose task went missing; it calls no one itself.
 
 **Do I need to restart it after adding a policy or changing the company?** No. Saving queues a
 task, and a worker starts on it straight away.
@@ -1035,7 +1033,7 @@ flowchart TD
 To see what the worker did, and when:
 
 ```bash
-docker compose logs worker | grep -E "embedded|checked against| vs "
+docker compose logs worker | grep -E "embedded| checked,| vs "
 ```
 
 ### Reliability
@@ -1067,7 +1065,7 @@ flowchart LR
         US["<b>users</b><br/>company_id · email · name<br/>password_hash (scrypt)"]
         CI["<b>circulars</b> (shared)<br/>source · source_key · title · pdf_url · s3_key<br/>published_at · status: new, parsed, read, failed, skipped<br/>text: the OCR output · addressed_to · summary<br/>requirements · embedding · error"]
         AS["<b>assessments</b><br/>company_id · circular_id<br/>status: pending, done, failed<br/>applicable · applies_reason · error"]
-        PO["<b>policies</b><br/>company_id · code, e.g. POL-KYC · title · owner<br/>regulators, e.g. RBI, SEBI · text<br/>version: +1 on every text change<br/>embeddings: one per 5,000-character chunk"]
+        PO["<b>policies</b><br/>company_id · code, e.g. POL-KYC · title · owner<br/>regulators, e.g. RBI, SEBI · text<br/>version: +1 on every text change<br/>embeddings: one per 5,000-character chunk<br/>checked_at: when the worker last checked it"]
         CT["<b>controls</b><br/>code, e.g. CTL-KYC-01 · policy_id<br/>description · owner · frequency"]
         PC["<b>policy_checks</b><br/>circular_id · policy_id · policy_version<br/>similarity · impacted: true = a gap was opened"]
         GA["<b>gaps</b><br/>company_id · circular_id · policy_id · policy_version<br/>title · impact · draft_change · affected_controls<br/>severity · owner · status · due_date · closed_at"]
@@ -1291,7 +1289,7 @@ flowchart TD
 | The OCR model is still loading (first start downloads 6.7 GB) | the worker logs "OCR or Gemini unavailable; retrying" every minute | nothing: it carries on by itself |
 | Gemini's quota ran out (429) | the same message | wait, or raise your quota |
 | Gemini or OCR returned a 5xx a few times | the circular shows `failed`, with the error | **Reprocess** it in the console |
-| A wrong API key or model name | the worker stops at startup: "Gemini rejected the configuration" | fix `.env`, then restart the worker |
+| A wrong API key or model name | the worker stops at startup: "Gemini rejected the key or model name" | fix `.env`, then restart the worker |
 | A PDF link is broken | the watcher logs "failed" for that one | nothing: it's tried again next round |
 | Redis restarted or was down | the worker logs "Redis unavailable; retrying" | nothing: tasks on disk survive, and the reconciler queues anything missed |
 | A worker died mid-task | nothing | nothing: its task is taken over (after a restart at once, otherwise after 30 minutes) |
@@ -1382,7 +1380,7 @@ flowchart TB
             wmain --> wstore["storage.py<br/>PDF to S3"]
         end
         subgraph worker["backend/worker"]
-            kmain["main.py<br/>the task loop"] --> pipeline["pipeline.py<br/>read_circular, assess,<br/>check_new_policy, refresh_company"]
+            kmain["main.py<br/>the task loop"] --> pipeline["pipeline.py<br/>read_circular, assess,<br/>check_policy, refresh_company"]
             kmain --> failures["failures.py<br/>wait, retry or give up"]
             pipeline --> ocrpy["ocr.py<br/>PDF to text"]
             pipeline --> llm["llm.py<br/>the Gemini prompts"]
@@ -1450,14 +1448,15 @@ docker compose logs -f worker        # watch the agent think
 
 Then open http://localhost:8080 and **create an account for your company**.
 
-**…sign in to the data from before logins existed?** It's company 1. Give it a login:
+**…give a company a login from the command line?** For example company 1, which holds the
+data from before logins existed:
 
 ```bash
 cd backend/api && uv run python manage.py add-user you@company.com "Your Name" --company 1
 ```
 
-It asks for a password (or reads `RCI_PASSWORD`); for an existing login it sets a new one.
-`manage.py companies` lists every company
+It asks for a password (or reads `RCI_PASSWORD`); for an existing login it sets a new one,
+so it's also how to reset a forgotten password. `manage.py companies` lists every company
 and its users.
 
 **…add a teammate?** On the **Company** page, under **Team**: their name, email and a first
@@ -1490,6 +1489,10 @@ circular that's been read, only **your company's** answer is redone: Gemini judg
 for you and re-checks the policies it had found up to date, with no new OCR. A failed one is
 read again (OCR only if no text was saved). Gaps already opened are kept and never
 duplicated.
+
+**…know when the worker has checked my policy?** Open the policy. It says **Waiting for the
+worker** from the moment you save it, and switches to **Checked** by itself when the worker
+is done (the page looks every 3 seconds). The policies list shows the same for each policy.
 
 **…find out why a new policy has no gap?** Follow the chart in
 [Why doesn't my new policy have a gap?](#why-doesnt-my-new-policy-have-a-gap). Most often
@@ -1551,6 +1554,7 @@ uv run python main.py --once               # work until the queue is empty, then
 | **Applicable** | Whether a circular applies to the company you described. Empty means "not checked", because no description exists yet |
 | **Task** | A small message on the Redis stream saying what to work on, e.g. `circular.read 98`. The data stays in Postgres |
 | **Stream, consumer group** | Redis's append-only list of tasks, and the group of workers reading it, which hands each task to one of them |
+| **Dedupe key** | A small Redis key set when a task is queued and deleted when it's done, so the same task is never queued twice |
 | **Login token** | A signed JWT the api gives you at sign-in, naming you and your company, sent with every call |
 | **Requirements** | The concrete obligations Gemini found in a circular |
 | **OCR** | Optical character recognition: reading text from an image of a page |

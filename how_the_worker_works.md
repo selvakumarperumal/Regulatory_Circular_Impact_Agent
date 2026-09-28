@@ -73,7 +73,8 @@ Four things to know before the stories:
   company described), the service that saw it adds a **task** to a Redis stream. A task is
   tiny: a type and some ids, like `circular.read 98`.
 - **No polling.** A worker waits on the stream and starts a task **the moment it's added**.
-  When there's nothing to do, it just waits: no database checks, no OCR, no Gemini.
+  When there's nothing to do, it just waits: no OCR, no Gemini, no database work (apart
+  from the reconciler's quick look for missing work every 15 minutes, section 5).
 - **Each task goes to exactly one worker**, however many run. Run 3 and they share the tasks.
 - **Postgres is the truth, Redis is the to-do list.** Every result is saved in Postgres after
   every step. A task only says *what to look at*; the worker reads the database to see what
@@ -190,7 +191,9 @@ a task to the stream:
 XADD rci:tasks * type circular.read circular_id 98
 ```
 
-A free worker picks it up straight away.
+(Just before, `enqueue` sets the task's dedupe key, so the same task can't be queued
+twice; see [section 7](#7-no-duplicates-each-task-is-queued-once).) A free worker picks it up
+straight away.
 
 ### Step 1: read the PDF
 
@@ -649,7 +652,7 @@ flowchart LR
 | `companies` | each company: name and description | reads the description for "does it apply?" |
 | `users` | who can sign in, each in one company | never touches it |
 | `assessments` | one row per company and circular: pending, done or failed, and "does it apply?" | writes the answer and the status |
-| `policies`, `controls` | each company's library | reads them, writes the policies' embeddings |
+| `policies`, `controls` | each company's library | reads them, writes a policy's embeddings and `checked_at` |
 | `policy_checks` | every Gemini answer "is this policy out of date?" | writes one row per answer |
 | `gaps`, `gap_events` | each company's tickets, and their history | opens a gap and its first history line |
 
@@ -911,7 +914,7 @@ flowchart LR
 |---|---|---|
 | `circular.read` | the PDF from S3 (or a twin's saved text) | `circulars`: `text`, summary fields, `embedding`, status `parsed` then `read`; an `assessments` row per company; queues `circular.assess` |
 | `circular.assess` | `companies.profile`, the company's `policies`, `controls`, `policy_checks` | `assessments`, `policy_checks`, `gaps`, `gap_events` |
-| `policy.check` | the policy, the company's recent circulars | `policies.embeddings`, `policy_checks`, `gaps`, `gap_events` |
+| `policy.check` | the policy, the company's recent circulars | `policies.embeddings` and `checked_at`, `policy_checks`, `gaps`, `gap_events` |
 | `company.refresh` | recent read `circulars` | `assessments` rows; queues `circular.assess` |
 
 **Settings you might change** (in `.env`):
@@ -923,11 +926,10 @@ flowchart LR
 | `LOOKBACK_DAYS` | 30 | new circulars older than this are skipped; new policies and new companies are checked against this many days |
 | `OCR_MAX_PAGES` | 20 | pages read per PDF |
 | `RECONCILE_MINUTES` | 15 | how often one worker looks for work whose task went missing |
-| `CLAIM_IDLE_SECONDS` | 1800 | how long a task can sit with a silent worker before another takes it |
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash` | the model that answers the questions |
 
 **Want more?**
 
 - [How it works](how_it_works.md), the main guide to the whole app.
-- [Worker internals](backend/worker/INTERNALS.md): every function, every SQL statement,
-  every Redis command, SQL statement and commit, for developers changing the code.
+- [Worker internals](backend/worker/INTERNALS.md): every function, Redis command, SQL
+  statement and commit, for developers changing the code.

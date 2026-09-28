@@ -10,8 +10,9 @@ Passwords are stored as scrypt hashes. Tokens are JWTs (HS256) signed with `JWT_
 with a key made on first start and kept in Postgres, and last `TOKEN_HOURS`.
 
 **Tasks.** The api never calls OCR or Gemini. When a change needs the agent, it saves the
-change, then adds a task to the Redis stream `rci:tasks` for the workers. If Redis is down
-the change is still saved, and the workers' reconciler queues the task later.
+change, then adds a task to the Redis stream `rci:tasks` for the workers (unless the same
+task is already queued). If Redis is down the change is still saved, and the workers'
+reconciler queues the task later.
 
 | Method & path | What it does | Task queued |
 |---|---|---|
@@ -38,7 +39,8 @@ the change is still saved, and the workers' reconciler queues the task later.
 
 A circular's status as a company sees it: the circular's own (`new`, `parsed`, `failed`,
 `skipped`) until it's read; then `parsed` while the company's assessment is pending,
-`analyzed` once it's done, `failed` if judging it failed for good.
+`analyzed` once it's done, `failed` if judging it failed for good, and `skipped` if it's
+older than `LOOKBACK_DAYS` and was never judged for the company.
 
 A gap moves `open → in_progress → closed | dismissed`, and can be reopened. Every change is
 added to `gap_events` under the signed-in user's email. Nothing there is ever edited.
@@ -56,7 +58,7 @@ curl -X PATCH localhost:8000/gaps/1 -H "Authorization: Bearer $TOKEN" -H 'conten
 | `main.py` | The app, `/health` and `/stats` |
 | `auth.py` | Password hashing, login tokens, and `CurrentUser` (who is calling) |
 | `routes/` | `auth.py` (sign-up, login, the team), `company.py`, `circulars.py`, `policies.py`, `gaps.py` |
-| `database.py` | The session each request gets, `owned_or_404`, and `enqueue` for tasks |
+| `database.py` | The session each request gets, `get_or_404` (another company's row is a 404 too), `save` (a clash with a unique constraint is a 409), and `enqueue` for tasks |
 | `manage.py` | Admin commands: `add-user` (a login, or a new password for one), `companies` |
 | `config.py` | Settings, from the environment or `.env` |
 

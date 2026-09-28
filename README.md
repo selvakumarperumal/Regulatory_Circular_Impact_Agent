@@ -87,7 +87,8 @@ tell it:
    summarised but nobody says which ones apply to you.
 2. **Policies**: add them one at a time, or **Import JSON** for a whole library. A new or
    edited policy is checked at once against your circulars of the last `LOOKBACK_DAYS` that
-   apply to you, so nothing waits for the next circular.
+   apply to you, so nothing waits for the next circular. Its page shows **Waiting for the
+   worker** until that's done, then **Checked**.
 
 > 🔑 **A login from the command line** (or a new password for one):
 > `cd backend/api && uv run python manage.py add-user you@company.com "Your Name" --company 1`
@@ -114,13 +115,13 @@ read, so a first start doesn't work through years of history.
   a new circular and a new policy, with what goes through the Redis task queue and what
   changes in the database at each step, and how several workers and companies share it.
 - [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md): the worker for developers:
-  every function, Redis command, SQL statement, commit and lock.
+  every function, Redis command, SQL statement and commit.
 - [backend/worker/README.md](backend/worker/README.md): how a circular moves through the
   pipeline, and what happens when OCR or Gemini fails.
 - [backend/api/README.md](backend/api/README.md): every endpoint, logins, and how gaps are tracked.
 - [frontend/README.md](frontend/README.md): the test console, and how to run it without Docker.
 - [backend/ocr/README.md](backend/ocr/README.md): why the vLLM flags are needed on an 8 GB GPU.
-- [backend/common/README.md](backend/common/README.md): the tables.
+- [backend/common/README.md](backend/common/README.md): the tables and the task queue.
 - [.env.example](.env.example): every setting.
 
 ## Develop one service on the host

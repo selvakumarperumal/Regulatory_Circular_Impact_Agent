@@ -200,7 +200,7 @@ sequenceDiagram
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        start(["main(): forever"]) --> join["join_group: XGROUP CREATE<br/>rci:tasks workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)"]
+        start(["main(): forever"]) --> join["XGROUP CREATE<br/>rci:tasks workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)"]
         join --> due{"A minute since<br/>the last try?"}
         due -->|"yes"| rec["reconcile(): does work only if<br/>SET rci:reconciled NX EX succeeds"]
         due -->|"no"| next
@@ -230,8 +230,9 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- `join_group` creates the group at id `0`, so tasks queued before any worker ever ran are
-  delivered. It runs every turn, which also recreates the group if Redis lost its data.
+- Each turn starts with `XGROUP CREATE rci:tasks workers 0 MKSTREAM` (a group that exists
+  already is fine). Starting at id `0` delivers tasks queued before any worker ever ran,
+  and running it every turn recreates the group if Redis lost its data.
 - There is **no polling interval**: `next_task` blocks on Redis for up to 5 seconds, and
   returns the moment a task arrives.
 - `--once` (used by tests) works until a 5-second wait finds nothing, then exits.
@@ -275,7 +276,7 @@ flowchart TD
 
 - **`0` reads this consumer's own pending list**: tasks it was given but never acknowledged,
   because the last attempt was to be retried. An entry whose fields are empty (trimmed from
-  the stream by `MAXLEN`) is acknowledged and skipped.
+  the stream, which keeps about 100,000 entries) is acknowledged and skipped.
 - **`XAUTOCLAIM`** moves a task that has been pending with *another* consumer for
   `CLAIM_IDLE_SECONDS` (1,800) to this one. That worker is presumed dead. If it was only
   slow, both may run the task once; every step checks the database first, so the second run
@@ -337,7 +338,7 @@ flowchart LR
         CO["<b>companies</b><br/>read: profile"]
         CI["<b>circulars</b> (shared)<br/>written: status, text, addressed_to,<br/>summary, requirements, embedding,<br/>embedding_model, error"]
         AS["<b>assessments</b><br/>inserted: one per company and circular<br/>written: status, applicable,<br/>applies_reason, error"]
-        PO["<b>policies</b> (per company)<br/>written: embeddings, embedding_model"]
+        PO["<b>policies</b> (per company)<br/>written: embeddings,<br/>embedding_model, checked_at"]
         CT["<b>controls</b><br/>read, for the prompt"]
         PC["<b>policy_checks</b><br/>inserted: one per verdict"]
         GA["<b>gaps</b> (per company)<br/>inserted: one per out-of-date policy"]
@@ -376,7 +377,7 @@ flowchart LR
 | `users` | nothing | nothing |
 | `circulars` | the task's circular; recent ones for `policy.check` and `company.refresh` | `status`, `text`, `addressed_to`, `summary`, `requirements`, `embedding`, `embedding_model`, `error` |
 | `assessments` | the task's (company, circular) | inserts one per company and circular; `status`, `applicable`, `applies_reason`, `error`, `updated_at` |
-| `policies` | the company's embedded policies | `embeddings`, `embedding_model` |
+| `policies` | the company's embedded policies | `embeddings`, `embedding_model`, `checked_at` |
 | `controls` | a policy's controls, for the prompt | nothing |
 | `policy_checks` | the circular's judged pairs | one row per verdict |
 | `gaps` | the circular's pairs that have a gap | one row per out-of-date policy, with `company_id` |
@@ -411,7 +412,7 @@ flowchart TB
             a_done -->|"api: Reprocess, or<br/>a new description"| a_pending
             a_failed -->|"api: Reprocess"| a_pending
         end
-        c_read -.->|"pending_companies()"| a_pending
+        c_read -.->|"add_assessments()"| a_pending
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -593,9 +594,9 @@ flowchart LR
   company, so no company's change ever repeats it.
 - **The embedding** is made from the title, summary and obligations
   (`RETRIEVAL_QUERY`), once, for every company's matching.
-- **Fan-out:** `pending_companies()` inserts a pending assessment for every company (`ON
-  CONFLICT DO NOTHING`) and returns a `circular.assess` task for each company still
-  pending.
+- **Fan-out:** `add_assessments()` inserts a pending assessment for every company, in one
+  statement (`ON CONFLICT DO NOTHING`), and `pending()` returns a `circular.assess` task
+  for each company still pending.
 
 Logs: `#98 parsed: 12408 chars`, `#98 read: addressed to '…'`.
 
@@ -640,12 +641,12 @@ sequenceDiagram
     end
 ```
 
-**Does it apply?** (`judge`) runs only when the company has a description and `applicable IS
-NULL`. The first 4,000 characters of the text are sent with the addressees: that's where a
+**Does it apply?** is asked only when the company has a description and `applicable IS
+NULL` (`llm.check_applicability`). The first 4,000 characters of the text are sent with the addressees: that's where a
 circular says who it's for. Without a description the assessment is marked `done` with
 `applicable` NULL ("Not checked"); a description saved later resets it to `pending`.
 
-**The closest policies** (`closest_policies`), with no Gemini call:
+**The closest policies** (`match`), with no Gemini call:
 
 1. The company's policies embedded with the current model that list the circular's
    regulator.
@@ -654,7 +655,7 @@ circular says who it's for. Without a description the assessment is marked `done
 3. Keep the top `MATCH_TOP_K` (3), and skip pairs already judged at this version, or that
    have a gap (the owner is on it).
 
-**What a verdict writes:**
+**What a verdict writes** (`judge_policy`):
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -695,8 +696,8 @@ Logs: `#98 vs POL-KYC v1 (0.74): GAP` (0.74 is the similarity), then
 
 ## 12. policy.check
 
-`check_new_policy(session, company_id, policy_id)`, queued by the api whenever a policy is
-added or saved, and by the reconciler for a policy that isn't embedded.
+`check_policy(session, company_id, policy_id)`, queued by the api whenever a policy is
+added or saved, and by the reconciler for a policy saved after its last check.
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -732,9 +733,9 @@ sequenceDiagram
   or text changed), or when `GEMINI_EMBEDDING_MODEL_NAME` changed. Its "title + text" is
   split into 5,000-character chunks, all embedded in as few requests as possible
   (`RETRIEVAL_DOCUMENT`).
-- **Which circulars:** `recent_applicable()`: the company's assessments that are `done` and
-  apply, of `read` circulars published in the last `LOOKBACK_DAYS` with obligations, from a
-  regulator the policy lists. Their OCR text isn't loaded.
+- **Which circulars:** the company's assessments that are `done` and apply, of circulars
+  published in the last `LOOKBACK_DAYS` with obligations, from a regulator the policy
+  lists. Their OCR text isn't loaded.
 - **`checked_at`.** At the end the policy's `checked_at` is set to when the check started.
   A policy saved after that (`updated_at > checked_at`) shows as "Waiting for the worker" in
   the console, and `check_policy` queues itself once more.
@@ -863,7 +864,7 @@ task is still pending in Redis, under the dead worker's name:
 | after ① | the text | summarises: no OCR |
 | after ② | the summary | embeds it |
 | after ④ or ⑤ | the circular is `read` | re-inserts nothing, queues the pending companies' tasks again |
-| before ⑥'s `XACK` | the tasks were queued | queues them again: the duplicates do nothing |
+| before ⑥'s `XACK` | the follow-up tasks were queued | runs again; its follow-ups are still queued, so their dedupe keys drop the copies |
 | after ⑦ | "does it apply?" | goes straight to the policies |
 | after ⑧ | the first verdict (and its gap) | asks only about the other policies |
 | after ⑨ | the assessment is `done` | nothing to do |
@@ -1036,7 +1037,8 @@ What each event costs in OCR and Gemini calls; everything else is database and R
 ## 21. Settings and constants
 
 Settings come from the environment or `.env` (`config.py`); an empty value keeps the
-default.
+default. In Docker, only the settings `docker-compose.yml` passes reach the worker; the rest
+keep their defaults unless you add them there.
 
 | Setting | Default | What it controls |
 |---|---|---|

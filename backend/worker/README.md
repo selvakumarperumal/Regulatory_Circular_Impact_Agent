@@ -4,7 +4,7 @@
 > the task queue, one circular from start to finish, and what its log lines mean. Then
 > [How the worker works](../../how_the_worker_works.md) follows a new circular and a new
 > policy step by step, queue and database included. Changing the code?
-> [INTERNALS.md](INTERNALS.md) has every Redis command, SQL statement, commit and lock.
+> [INTERNALS.md](INTERNALS.md) has every Redis command, SQL statement and commit.
 
 The agent. It reads each circular the watcher saved, and works out, for each company, which of
 its internal policies the circular makes out of date. For each one, it opens a gap ticket for
@@ -13,12 +13,14 @@ the policy owner with a draft of the change.
 **Tasks, not polling.** The worker reads the Redis stream `rci:tasks` as one consumer of the
 group `workers` (`XREADGROUP`), so each task goes to exactly one worker however many run, and
 it starts the moment a task is queued. It acknowledges a task (`XACK`) only when it's done.
+A task is queued at most once at a time (a dedupe key in Redis, deleted when the task is
+done), so workers need no locks to share the work.
 
 | Task | Queued by | What the worker does |
 |---|---|---|
 | `circular.read` | the watcher, Reprocess | steps 1 and 2 below, once for every company; then one `circular.assess` per company |
 | `circular.assess` | the worker, Reprocess | steps 3 to 6 for one company |
-| `policy.check` | the api (a policy saved) | embeds the policy, then steps 4 to 6 against the company's recent circulars |
+| `policy.check` | the api (a policy saved) | embeds the policy, then steps 4 to 6 against the company's recent circulars; stamps its `checked_at` (the console then shows it as **Checked**) |
 | `company.refresh` | the api (sign-up, a new description) | queues a `circular.assess` for each of the company's recent circulars |
 
 ```
@@ -55,7 +57,7 @@ a restart or an outage halfway through resumes where it stopped.
 | File | Job |
 |---|---|
 | `main.py` | The task loop: take the next task, run it, then acknowledge, retry or give up; the reconciler |
-| `pipeline.py` | What each task does: `read_circular`, `assess`, `check_new_policy`, `refresh_company` |
+| `pipeline.py` | What each task does: `read_circular`, `assess`, `check_policy`, `refresh_company` |
 | `failures.py` | What counts as "wait", "try again" or "give up" |
 | `ocr.py` | PDF to text through Unlimited-OCR |
 | `llm.py` | Every Gemini call, through LangChain (`ChatGoogleGenerativeAI.with_structured_output`, `GoogleGenerativeAIEmbeddings`). Each prompt comes with the Pydantic model its reply must match |
@@ -67,7 +69,8 @@ a restart or an outage halfway through resumes where it stopped.
   task stays unacknowledged; the worker waits `RETRY_SECONDS` and tries again, as long as it
   takes.
 - **A 5xx, a timeout, a dropped connection or a reply not in the asked-for JSON:** the task
-  is retried up to 3 times, then given up.
+  is retried up to 3 times, then given up. So is a clash with another task that saved the
+  same verdict first (`IntegrityError`): the retry skips it.
 - **Given up:** the circular (or the company's assessment) is marked `failed` with the error,
   and the task is copied to the stream `rci:dead`.
 - **A worker dies mid-task:** the task is still pending. The same container finds it on
