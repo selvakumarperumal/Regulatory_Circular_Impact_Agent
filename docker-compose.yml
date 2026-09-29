@@ -39,7 +39,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rci}
       POSTGRES_DB: ${POSTGRES_DB:-rci}
     ports:
-      - "5432:5432"          # so services run on the host with `uv run` can reach it too
+      - "${POSTGRES_PORT:-5432}:5432"       # so services run on the host with `uv run` can reach it too
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

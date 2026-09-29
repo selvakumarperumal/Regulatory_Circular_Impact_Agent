@@ -70,6 +70,10 @@ You need these first:
 
 - Docker with the NVIDIA runtime.
 - Floci (a local AWS emulator, used here for S3) on port 4566, with a bucket named `rci`.
+  Start it with `floci start --persist=~/.floci/aws-state`: without `--persist` it keeps
+  the PDFs in memory, and they are lost when it stops.
+- Host ports 5432 and 6379 free for Postgres and Redis, or other ones set in
+  `POSTGRES_PORT` and `REDIS_PORT` in `.env`.
 - A Gemini API key.
 
 ```bash
