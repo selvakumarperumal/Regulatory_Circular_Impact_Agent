@@ -921,7 +921,7 @@ flowchart TD
 |---|---|---|---|
 | **should wait** | can't connect to ocr (the model is loading); Gemini 429 (quota) | wait `RETRY_SECONDS`, retry, for as long as it takes | nothing, or raise your Gemini quota |
 | **should retry** | a 5xx; a timeout; a dropped connection; `BadReply` (not the asked-for JSON); `IntegrityError` (another task saved the same verdict first) | retried up to `MAX_TRIES` (3), then given up | usually nothing |
-| **anything else** | a 400 from Gemini; `OCR found no text in the PDF` | `give_up()`: `failed` with the error, the task copied to `rci:dead`, its key deleted, acknowledged | open the circular, read the error, press **Reprocess** |
+| **anything else** | a 400 from Gemini; `OCR found no text in the PDF`; S3 unreachable (Floci not running) or the PDF missing (`NoSuchKey`) | `give_up()`: `failed` with the error, the task copied to `rci:dead`, its key deleted, acknowledged | open the circular, read the error, press **Reprocess** |
 
 - LangChain retries Gemini rate limits and server errors itself first (`max_retries=3`).
   `gemini_status()` reads the HTTP code from the error underneath LangChain's.

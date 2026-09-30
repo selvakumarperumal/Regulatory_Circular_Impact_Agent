@@ -179,12 +179,14 @@ flowchart LR
 | `worker` | `backend/worker` | `python main.py`: waits for tasks on the stream and does them ([how it works](#4-the-worker-in-plain-words)). `WORKERS` replicas | none |
 | `api` | `backend/api` | `uvicorn main:app` | 8000 (docs at `/docs`) |
 | `frontend` | `frontend` | nginx serving static files | 8080 |
-| `postgres` | none (official image) | the database: every result | 5432 |
-| `redis` | none (official image) | the task stream (`rci:tasks`), kept on disk (`--appendonly yes`) | 6379 |
+| `postgres` | none (official image) | the database: every result | 5432 (`POSTGRES_PORT`) |
+| `redis` | none (official image) | the task stream (`rci:tasks`), kept on disk (`--appendonly yes`) | 6379 (`REDIS_PORT`) |
 
 Two things live outside Docker:
 
-- **Floci**, a local AWS emulator used for S3, where the PDFs are kept.
+- **Floci**, a local AWS emulator used for S3, where the PDFs are kept. Start it with
+  `floci start --persist="$HOME/.floci/aws-state"` and give it a bucket named `rci`. Without
+  `--persist` it keeps the PDFs in memory, and they're gone when it stops.
 - **Gemini**, Google's API, which the worker reaches over the internet.
 
 The database tables are defined once, in `backend/common`, and installed into the watcher,
@@ -1293,6 +1295,11 @@ flowchart TD
 | A PDF link is broken | the watcher logs "failed" for that one | nothing: it's tried again next round |
 | Redis restarted or was down | the worker logs "Redis unavailable; retrying" | nothing: tasks on disk survive, and the reconciler queues anything missed |
 | A worker died mid-task | nothing | nothing: its task is taken over (after a restart at once, otherwise after 30 minutes) |
+| Postgres or Redis isn't running | the console says **Bad Gateway** (on sign-up, or any page); `docker compose ps` shows the api, worker and watcher restarting, and their logs say `failed to resolve host 'postgres'` (or `'redis'`) | `docker compose up -d` |
+| Another project holds port 5432 or 6379 | `docker compose up` stops with "port is already allocated" | stop the other project's database, or set `POSTGRES_PORT` / `REDIS_PORT` in `.env` to free ports |
+| The api stays "Restarting" after Postgres is back | Docker is waiting before its next try, and `up -d` doesn't hurry it | `docker compose up -d --force-recreate api` |
+| Floci isn't running | the watcher logs `Could not connect to the endpoint URL: "http://host.docker.internal:4566/…"`; a circular a worker was reading shows `failed` with the same error | start Floci (see [What runs where](#3-what-runs-where)). The watcher's circular wasn't saved, so its next round tries it again; press **Reprocess** on a failed one |
+| Floci was restarted without `--persist` | the old PDFs are gone; a circular not read yet shows `failed` (`NoSuchKey`) | nothing for circulars already read: their text is in Postgres, and **Reprocess** doesn't need the PDF. Start Floci with `--persist` from now on |
 
 LangChain first retries Gemini's rate limits and server errors itself (3 times). Only after
 that does the worker's own retry take over. LangChain wraps Gemini's errors in its own
@@ -1357,6 +1364,7 @@ Settings you're most likely to change:
 | `TOKEN_HOURS` | 12 | how long a login lasts |
 | `OCR_MAX_PAGES` | 20 | how many pages of each PDF are read |
 | `WATCH_INTERVAL_MINUTES` | 60 | how often the regulator sites are checked |
+| `POSTGRES_PORT`, `REDIS_PORT` | 5432, 6379 | the ports Postgres and Redis get on your machine, when another project already uses these |
 
 `.env.example` in the repo root lists every setting.
 
@@ -1441,12 +1449,27 @@ flowchart TB
 **…start everything?**
 
 ```bash
+floci start --persist="$HOME/.floci/aws-state"   # S3 for the PDFs, kept on disk
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+  aws --endpoint-url http://localhost:4566 --region us-east-1 s3 mb s3://rci   # once: the bucket
 cp .env.example .env                 # set GEMINI_API_KEY
 docker compose up -d --build
 docker compose logs -f worker        # watch the agent think
 ```
 
-Then open http://localhost:8080 and **create an account for your company**.
+Then open http://localhost:8080 and **create an account for your company**. If it says
+**Bad Gateway**, the api isn't running: see [When things go wrong](#13-when-things-go-wrong).
+
+**…run it beside another project that uses ports 5432 and 6379?** Give this one other
+ports in `.env`:
+
+```bash
+POSTGRES_PORT=5433
+REDIS_PORT=6380
+```
+
+Only tools you run on your machine use these ports. The containers reach Postgres and
+Redis by name inside Docker, so nothing else changes.
 
 **…give a company a login from the command line?** For example company 1, which holds the
 data from before logins existed:

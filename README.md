@@ -70,8 +70,8 @@ You need these first:
 
 - Docker with the NVIDIA runtime.
 - Floci (a local AWS emulator, used here for S3) on port 4566, with a bucket named `rci`.
-  Start it with `floci start --persist=~/.floci/aws-state`: without `--persist` it keeps
-  the PDFs in memory, and they are lost when it stops.
+  Start it with `floci start --persist="$HOME/.floci/aws-state"`: without `--persist` it
+  keeps the PDFs in memory, and they are lost when it stops.
 - Host ports 5432 and 6379 free for Postgres and Redis, or other ones set in
   `POSTGRES_PORT` and `REDIS_PORT` in `.env`.
 - A Gemini API key.
@@ -111,6 +111,9 @@ Compose also takes settings from your shell, so a direnv `.envrc` that exports
 Circulars published more than `LOOKBACK_DAYS` ago are marked `skipped` instead of being
 read, so a first start doesn't work through years of history.
 
+> 🩺 **The console says Bad Gateway?** The api isn't running, most often because Postgres
+> or Redis isn't. See [When things go wrong](how_it_works.md#13-when-things-go-wrong).
+
 ## Where things are explained
 
 - **[how_it_works.md](how_it_works.md): start here.** The whole backend explained with diagrams:
@@ -133,7 +136,7 @@ read, so a first start doesn't work through years of history.
 ```bash
 docker compose up -d postgres redis ocr     # what the services need
 cd backend/worker
-cp .env.example .env                        # host values: localhost:5432, localhost:6379, localhost:4566, localhost:8001
+cp .env.example .env                        # host values: localhost:5432, localhost:6379 (or your POSTGRES_PORT, REDIS_PORT), localhost:4566, localhost:8001
 uv sync
 uv run python main.py --once
 ```

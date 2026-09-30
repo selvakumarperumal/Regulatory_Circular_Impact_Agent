@@ -55,7 +55,9 @@ shows whether the API answers.
 
 With the stack: `docker compose up -d frontend`, then open http://localhost:8080. nginx
 serves the page and forwards `/api/*` to the api service (see `nginx.conf`), so the browser
-only ever talks to one origin.
+only ever talks to one origin. When the api isn't running, nginx answers **502 Bad Gateway**
+(on sign-up, for example): see
+[When things go wrong](../how_it_works.md#13-when-things-go-wrong).
 
 By hand, against an API on http://localhost:8000:
 

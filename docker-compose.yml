@@ -12,7 +12,8 @@
 #   api       FastAPI on :8000; queues a task when a policy or a company changes
 # plus Postgres, Redis (the task stream), and frontend/ (a static console served by
 # nginx, which forwards /api to the api service). Floci (local S3) runs outside this
-# file, on the host's port 4566, and Gemini is Google's API, reached over the internet.
+# file, on the host's port 4566 (`floci start --persist="$HOME/.floci/aws-state"`, bucket
+# rci), and Gemini is Google's API, reached over the internet.
 #
 # Settings come from .env beside this file; every one except GEMINI_API_KEY has a
 # default (in each service's config.py), so unset ones are passed as "" and ignored.

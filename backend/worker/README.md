@@ -73,6 +73,8 @@ a restart or an outage halfway through resumes where it stopped.
   same verdict first (`IntegrityError`): the retry skips it.
 - **Given up:** the circular (or the company's assessment) is marked `failed` with the error,
   and the task is copied to the stream `rci:dead`.
+- **S3 unreachable (Floci not running) or the PDF missing:** this isn't waited out. The
+  circular is marked `failed` at once; start Floci, then press **Reprocess**.
 - **A worker dies mid-task:** the task is still pending. The same container finds it on
   restart; otherwise another worker takes it over after `CLAIM_IDLE_SECONDS` (`XAUTOCLAIM`).
 - **A task goes missing** (Redis down or wiped): every `RECONCILE_MINUTES`, one worker queues
