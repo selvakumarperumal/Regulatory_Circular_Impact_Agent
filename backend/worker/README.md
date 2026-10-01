@@ -4,7 +4,8 @@
 > the task queue, one circular from start to finish, and what its log lines mean. Then
 > [How the worker works](../../how_the_worker_works.md) follows a new circular and a new
 > policy step by step, queue and database included. Changing the code?
-> [INTERNALS.md](INTERNALS.md) has every Redis command, SQL statement and commit.
+> [INTERNALS.md](INTERNALS.md) walks through all of it in 18 steps, then has every Redis
+> command, SQL statement and commit.
 
 The agent. It reads each circular the watcher saved, and works out, for each company, which of
 its internal policies the circular makes out of date. For each one, it opens a gap ticket for

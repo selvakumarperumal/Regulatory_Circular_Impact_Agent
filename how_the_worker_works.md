@@ -949,5 +949,6 @@ flowchart LR
 **Want more?**
 
 - [How it works](how_it_works.md), the main guide to the whole app.
-- [Worker internals](backend/worker/INTERNALS.md): every function, Redis command, SQL
-  statement and commit, for developers changing the code.
+- [Worker internals](backend/worker/INTERNALS.md): everything the worker does in 18 steps,
+  then every function, Redis command, SQL statement and commit, for developers changing
+  the code.

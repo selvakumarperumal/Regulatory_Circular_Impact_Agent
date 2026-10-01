@@ -8,6 +8,10 @@ examples, read [How the worker works](../../how_the_worker_works.md) first; this
 all the way down. The code is in this folder, and the queue's names are in
 [`common/queue.py`](../common/common/queue.py).
 
+Start with [section 2](#2-step-by-step-everything-the-worker-does): it walks through
+everything the worker does, step 1 to step 18, with the database after each step. The
+sections after it are the reference for each piece.
+
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 
 ![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
@@ -15,26 +19,27 @@ all the way down. The code is in this folder, and the queue's names are in
 **Contents**
 
 1. [The worker at a glance](#1-the-worker-at-a-glance)
-2. [The files](#2-the-files)
-3. [Startup](#3-startup)
-4. [The task loop](#4-the-task-loop)
-5. [Taking the next task](#5-taking-the-next-task)
-6. [Doing a task](#6-doing-a-task)
-7. [The tables it uses](#7-the-tables-it-uses)
-8. [Two statuses](#8-two-statuses)
-9. [No duplicates: the dedupe key](#9-no-duplicates-the-dedupe-key)
-10. [circular.read](#10-circularread)
-11. [circular.assess](#11-circularassess)
-12. [policy.check](#12-policycheck)
-13. [company.refresh](#13-companyrefresh)
-14. [The reconciler](#14-the-reconciler)
-15. [Transactions, acknowledgements and crashes](#15-transactions-acknowledgements-and-crashes)
-16. [When something fails](#16-when-something-fails)
-17. [What the api and the watcher queue](#17-what-the-api-and-the-watcher-queue)
-18. [Every Redis command](#18-every-redis-command)
-19. [Every database operation](#19-every-database-operation)
-20. [Cost of each event](#20-cost-of-each-event)
-21. [Settings and constants](#21-settings-and-constants)
+2. [Step by step: everything the worker does](#2-step-by-step-everything-the-worker-does)
+3. [The files](#3-the-files)
+4. [Startup](#4-startup)
+5. [The task loop](#5-the-task-loop)
+6. [Taking the next task](#6-taking-the-next-task)
+7. [Doing a task](#7-doing-a-task)
+8. [The tables it uses](#8-the-tables-it-uses)
+9. [Two statuses](#9-two-statuses)
+10. [No duplicates: the dedupe key](#10-no-duplicates-the-dedupe-key)
+11. [circular.read](#11-circularread)
+12. [circular.assess](#12-circularassess)
+13. [policy.check](#13-policycheck)
+14. [company.refresh](#14-companyrefresh)
+15. [The reconciler](#15-the-reconciler)
+16. [Transactions, acknowledgements and crashes](#16-transactions-acknowledgements-and-crashes)
+17. [When something fails](#17-when-something-fails)
+18. [What the api and the watcher queue](#18-what-the-api-and-the-watcher-queue)
+19. [Every Redis command](#19-every-redis-command)
+20. [Every database operation](#20-every-database-operation)
+21. [Cost of each event](#21-cost-of-each-event)
+22. [Settings and constants](#22-settings-and-constants)
 
 ---
 
@@ -97,7 +102,505 @@ Two rules hold everything together:
 
 ---
 
-## 2. The files
+## 2. Step by step: everything the worker does
+
+This section follows the worker from the moment it starts, through one circular's whole
+journey to the gap tickets it opens, then the other tasks and what keeps it all right when
+something breaks. Each step names the code that runs, the Redis commands, what changes in
+Postgres (**bold** is new or changed) and the log line. The sections after this one explain
+each piece in depth.
+
+**The example.** RBI circular **98**, "Designation of terrorist organisation…": a 3-page PDF
+whose last page is blank. Two companies: **1** (A, an NBFC, with four RBI policies) and
+**2** (B, a stock broker).
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        subgraph loop["The worker itself"]
+            direction TB
+            s1(["1. Start up"]) --> s2["2. Wait for a task"]
+            s2 --> s3["3. Take it, keep it claimed"]
+        end
+        s3 --> kind{"Which task?"}
+        subgraph read["once for every company"]
+            direction TB
+            s4{"4. Skip it<br/>or read it?"} --> s5["5. Get the text:<br/>a twin's, or OCR<br/>page by page"]
+            s5 --> s6["6. Summarise it"]
+            s6 --> s7["7. Embed it:<br/>status read"]
+            s7 --> s8["8. An assessment<br/>for every company"]
+        end
+        subgraph judge["once per company"]
+            direction TB
+            s10["10. Does it apply<br/>to this company?"] --> s11["11. Find the<br/>closest policies"]
+            s11 --> s12["12. Is each policy<br/>out of date?<br/>verdict, maybe a gap"]
+            s12 --> s13["13. Mark the<br/>assessment done"]
+        end
+        subgraph other["the other tasks"]
+            direction TB
+            s14["14. policy.check:<br/>a policy saved"]
+            s15["15. company.refresh:<br/>a company described"]
+        end
+        kind -->|"circular.read"| s4
+        kind -->|"circular.assess"| s10
+        kind -->|"policy.check"| s14
+        kind -->|"company.refresh"| s15
+        s8 --> s9
+        s13 --> s9
+        s14 --> s9
+        s15 --> s9
+        s9[["9. Finish: DEL its key,<br/>queue the follow-ups, XACK,<br/>then back to step 2"]]
+        s16[["16. The reconciler,<br/>every minute"]]
+        s17["17. A step fails:<br/>wait, retry or give up"]
+        s18["18. A worker dies:<br/>taken over, resumed"]
+        s9 ~~~ s16
+        s9 ~~~ s17
+        s9 ~~~ s18
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class s1 start
+    class s2,s3,s11,s14,s15 svc
+    class kind,s4 ask
+    class s5 gpu
+    class s6,s7,s10,s12 ext
+    class s8 data
+    class s13 ok
+    class s9,s16 queue
+    class s17 bad
+    class s18 muted
+    style loop fill:#0f172a,stroke:#334155,color:#94a3b8
+    style read fill:#0f172a,stroke:#334155,color:#94a3b8
+    style judge fill:#0f172a,stroke:#334155,color:#94a3b8
+    style other fill:#0f172a,stroke:#334155,color:#94a3b8
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+| Step | What happens | Code | Costs |
+|---|---|---|---|
+| [1](#step-1-start-up) | start up, check Gemini, connect | `main()` | 1 chat + 1 embedding |
+| [2](#step-2-wait-for-a-task) | wait for a task: own, abandoned, new | `next_task()` | nothing |
+| [3](#step-3-take-the-task-and-keep-it-claimed) | take it, renew the claim every minute | `run_task()`, `keep_claimed()` | nothing |
+| [4](#step-4-skip-it-or-read-it) | skip an old circular, or read it | `read_circular()` | nothing |
+| [5](#step-5-get-the-text) | the text: a twin's, or OCR page by page | `twin()`, `ocr_text()`, `ocr.pages()` | 1 OCR per page, once per PDF |
+| [6](#step-6-summarise-it) | the summary: a twin's, or Gemini's | `llm.summarize()` | 1 chat, once per PDF |
+| [7](#step-7-embed-it) | embed the summary | `embed_circular()` | 1 embedding |
+| [8](#step-8-an-assessment-for-every-company) | a pending assessment per company | `add_assessments()`, `pending()` | nothing |
+| [9](#step-9-finish-the-task) | delete the key, queue the follow-ups, acknowledge | `run_task()` | nothing |
+| [10](#step-10-does-it-apply-to-this-company) | does it apply to this company? | `assess()`, `llm.check_applicability()` | 1 chat per company |
+| [11](#step-11-find-the-closest-policies) | the company's closest policies | `match()` | nothing |
+| [12](#step-12-is-each-policy-out-of-date) | a verdict per policy, maybe a gap | `judge_policy()`, `llm.assess()` | up to 3 chats |
+| [13](#step-13-mark-the-assessment-done) | the assessment is done | `assess()` | nothing |
+| [14](#step-14-a-policy-is-added-or-edited) | embed a saved policy, check it | `check_policy()` | 1 embedding + unjudged pairs |
+| [15](#step-15-a-company-signs-up-or-is-described) | judge recent circulars for a company | `refresh_company()` | via steps 10 to 13 |
+| [16](#step-16-the-reconciler-every-minute) | queue work whose task went missing | `reconcile()`, `missing_work()` | nothing |
+| [17](#step-17-a-step-fails) | wait, retry or give up | `run_task()`, `give_up()` | nothing |
+| [18](#step-18-a-worker-dies) | a dead worker's task is taken over | `next_task()` | only what wasn't saved |
+
+### Step 1: Start up
+
+`main()` in `main.py`, once per container.
+
+1. Load the settings (`config.py`). No `GEMINI_API_KEY`: stop.
+2. `init_db()`: take the transaction lock `pg_advisory_xact_lock(hashtext('rci-schema'))`,
+   create the missing tables (`ocr_pages` included), add any column a model gained,
+   `COMMIT`.
+3. `check_gemini()`: one chat call and one embedding. A 4xx (a wrong key or model name)
+   stops the worker with "Gemini rejected the key or model name"; a 429, a 5xx or no
+   network only warns, and tasks wait for Gemini themselves.
+4. Connect to Redis, and take the consumer name `<hostname>-<pid>`, e.g. `e02ff2af94f5-1`.
+
+Postgres: nothing changes, apart from tables created on the very first start.
+
+Log: `worker e02ff2af94f5-1: using gemini-3.5-flash, waiting for tasks`. Details:
+[section 4](#4-startup).
+
+### Step 2: Wait for a task
+
+The loop in `main()`, forever. Each turn:
+
+1. `XGROUP CREATE rci:tasks workers 0 MKSTREAM` joins the group (`BUSYGROUP` means it
+   exists: fine).
+2. Once a minute: `reconcile()` ([step 16](#step-16-the-reconciler-every-minute)).
+3. `next_task()` looks in three places, in order, and takes the first task it finds:
+   - `XREADGROUP GROUP workers <me> COUNT 1 STREAMS rci:tasks 0`: its **own** unacknowledged
+     task, one it left to retry;
+   - `XAUTOCLAIM rci:tasks workers <me> 300000 0-0 COUNT 1`: an **abandoned** task, one
+     whose claim nobody has renewed for 5 minutes ([step 18](#step-18-a-worker-dies));
+   - `XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS rci:tasks >`: a **new** task,
+     waiting up to 5 seconds for one.
+4. Nothing: back to 1. There is no polling interval: a new task is taken the moment it
+   arrives.
+
+In the example, the watcher has just saved circular 98 and queued its task:
+
+| circulars.id | source | title | status | text |
+|---|---|---|---|---|
+| **98** | **RBI** | **Designation of terrorist organisation…** | **new** | *(empty)* |
+
+```text
+SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400
+XADD rci:tasks * type circular.read circular_id 98
+```
+
+The worker's `XREADGROUP … >` returns it at once. Details: [section 5](#5-the-task-loop)
+and [section 6](#6-taking-the-next-task).
+
+### Step 3: Take the task and keep it claimed
+
+`run_task()` in `main.py`.
+
+1. Turn the task's fields into ids: `{"circular_id": 98}`.
+2. Open a database session, and start `keep_claimed()`: a background thread that sends
+   `XCLAIM rci:tasks workers <me> 0 <task id> JUSTID` every 60 seconds
+   (`HEARTBEAT_SECONDS`). A claim resets the task's idle time, so however long the OCR
+   takes, no other worker takes the task over and does it a second time.
+3. Call the task's function from `TASKS`: `circular.read` → `read_circular(session,
+   circular_id=98)`.
+4. It returns: [step 9](#step-9-finish-the-task). It raises:
+   [step 17](#step-17-a-step-fails).
+
+No locks: the consumer group gave this task to this worker only. Details:
+[section 7](#7-doing-a-task).
+
+### Step 4: Skip it or read it
+
+`read_circular()` in `pipeline.py`. This task runs **once per circular**, for every company.
+
+1. `SELECT … FROM circulars WHERE id = 98`.
+2. Missing, `skipped` or `failed`: nothing to do (**Reprocess** sets a failed one back to
+   `new` or `parsed` first).
+3. Still `new` but published before `LOOKBACK_DAYS` (30 days ago): `UPDATE circulars SET
+   status = 'skipped'`, `COMMIT`, stop. An old circular costs no OCR and no Gemini call.
+4. Otherwise carry on. Each step after this checks what's saved first: a circular already
+   `parsed` skips step 5, and one with a summary skips step 6.
+
+### Step 5: Get the text
+
+`twin()` and `ocr_text()` in `pipeline.py`, `ocr.pages()` in `ocr.py`.
+
+1. **A twin?** `SELECT … FROM circulars WHERE sha256 = '3f9a…' AND id <> 98 AND text IS NOT
+   NULL`. Another circular with the identical PDF already has its text: copy it (no S3, no
+   OCR) and go to 6.
+2. **Pages read before?** `SELECT page, text FROM ocr_pages WHERE sha256 = '3f9a…'`. None
+   the first time; after a crash or a restart, the pages read before it.
+3. **The PDF:** `GET rbi/3f9a….pdf` from S3.
+4. **Each of the first 20 pages** (`OCR_MAX_PAGES`) not read before, in order:
+   - a blank page (no text, images or drawings) gets an empty text, and nothing is sent to
+     the GPU;
+   - any other page is rendered at 200 DPI and sent to the ocr service (one chat request,
+     600 s timeout); `remove_det` strips the layout markers and drops image and footer
+     blocks;
+   - `INSERT INTO ocr_pages`, `COMMIT`, before the next page.
+
+   While it runs:
+
+   | sha256 | page | text |
+   |---|---|---|
+   | **3f9a…** | **0** | **"RESERVE BANK OF INDIA …"** |
+   | **3f9a…** | **1** | **"2. Regulated entities shall …"** |
+   | **3f9a…** | **2** | **""** (blank) |
+
+5. Join the pages that have text. No text at all: raise `OCR found no text in the PDF`
+   ([step 17](#step-17-a-step-fails)). The pages stay, so a **Reprocess** sends nothing
+   to the GPU again.
+6. `UPDATE circulars SET text = …, status = 'parsed'`, `DELETE FROM ocr_pages WHERE sha256
+   = '3f9a…'`, `COMMIT`: the text and the clean-up in one transaction.
+
+| circulars.id | status | text |
+|---|---|---|
+| 98 | **parsed** | **"RESERVE BANK OF INDIA … (12,408 characters)"** |
+
+`ocr_pages`: **its 3 rows deleted**.
+
+Log: `#98 parsed: 12408 chars`. After a restart halfway: `#98: 2 pages OCR'd before,
+carrying on`. Cost: one OCR request per non-blank page, once per PDF. Details:
+[section 11](#11-circularread).
+
+### Step 6: Summarise it
+
+Still `read_circular()`.
+
+1. Already summarised (a retry): skip.
+2. **A twin with a summary?** Copy its `addressed_to`, `summary` and `requirements`: no
+   Gemini call.
+3. Otherwise `llm.summarize()` sends `SUMMARY_PROMPT` with the regulator, the title and
+   the first 100,000 characters (`LLM_MAX_CHARS`). The reply must match
+   `CircularSummary`; anything else is a `BadReply`, retried
+   ([step 17](#step-17-a-step-fails)).
+4. `UPDATE circulars SET addressed_to, summary, requirements, embedding = NULL`, `COMMIT`.
+   The embedding is cleared because it's made from the summary.
+
+| id | addressed_to | summary | requirements |
+|---|---|---|---|
+| 98 | **All Regulated Entities… NBFCs…** | **RBI designates a new terrorist organisation…** | **["Report accounts … to FIU-IND", …]** |
+
+Log: `#98 read: addressed to 'All Regulated Entities…'`.
+
+### Step 7: Embed it
+
+`embed_circular()`.
+
+1. Already embedded with the current model: skip.
+2. Embed "title + summary + requirements" (up to 5,000 characters) with
+   `GEMINI_EMBEDDING_MODEL_NAME`, as a `RETRIEVAL_QUERY`: 768 numbers that capture its
+   meaning, used in step 11.
+3. `UPDATE circulars SET embedding, embedding_model`, `COMMIT`; then `UPDATE circulars SET
+   status = 'read', error = NULL`, `COMMIT`.
+
+| id | status | embedding | embedding_model |
+|---|---|---|---|
+| 98 | **read** | **[0.021, -0.013, …]** | **gemini-embedding-001** |
+
+`read` is as far as the circular itself goes. Everything after this depends on the company.
+
+### Step 8: An assessment for every company
+
+1. `SELECT id FROM companies`: 1 and 2.
+2. `add_assessments()`: one `INSERT INTO assessments … ON CONFLICT DO NOTHING` for all of
+   them, `COMMIT`.
+3. `pending()`: the pending assessments of this circular, as follow-up tasks.
+
+| company_id | circular_id | status | applicable |
+|---|---|---|---|
+| **1** | **98** | **pending** | *(empty)* |
+| **2** | **98** | **pending** | *(empty)* |
+
+`read_circular` returns two follow-ups: `circular.assess` for (company 1, circular 98) and
+for (company 2, circular 98).
+
+### Step 9: Finish the task
+
+Back in `run_task()`, the same for every task type, in this order:
+
+1. `keep_claimed()` stops renewing the claim.
+2. `DEL rci:queued:circular_id=98:type=circular.read`: from now on the same task may be
+   queued again.
+3. `enqueue` each follow-up, which sets its own key first and is dropped if that task is
+   already queued:
+
+   ```text
+   SET rci:queued:circular_id=98:company_id=1:type=circular.assess 1 NX EX 86400
+   XADD rci:tasks * type circular.assess company_id 1 circular_id 98
+   SET rci:queued:circular_id=98:company_id=2:type=circular.assess 1 NX EX 86400
+   XADD rci:tasks * type circular.assess company_id 2 circular_id 98
+   ```
+
+4. `XACK rci:tasks workers <task id>`: done.
+
+Deleting the key before queueing lets a task queue itself again
+([step 14](#step-14-a-policy-is-added-or-edited) does). A crash between these lines only
+means the task runs once more, and finds its work done. With two workers, companies 1 and
+2 are now judged **at the same time**, each by one worker.
+
+### Step 10: Does it apply to this company?
+
+`assess(session, company_id=1, circular_id=98)` in `pipeline.py`, once per company.
+
+1. `SELECT` the company and the circular. The circular isn't `read`: nothing to do.
+2. `INSERT` the assessment if it's missing (`ON CONFLICT DO NOTHING`), `COMMIT`, then
+   `SELECT` it. Already `done`: stop.
+3. The company has a description and `applicable IS NULL`: `llm.check_applicability()`
+   sends `APPLICABILITY_PROMPT` with the description, the title, the addressees and the
+   first 4,000 characters of the text (where a circular says who it's for).
+   `UPDATE assessments SET applicable, applies_reason`, `COMMIT`.
+
+| company_id | circular_id | applicable | applies_reason |
+|---|---|---|---|
+| 1 | 98 | **true** | **"Addressed to NBFCs, and the company is an NBFC."** |
+| 2 | 98 | **false** | **"Addressed to banks and NBFCs; the company is a stock broker."** |
+
+For company 2 it goes straight to [step 13](#step-13-mark-the-assessment-done): the circular
+doesn't apply, so none of its policies is checked. The same happens when the circular has
+no obligations. A company with no description yet keeps `applicable` NULL (the console says
+"Not checked") and is asked when the description is saved
+([step 15](#step-15-a-company-signs-up-or-is-described)).
+
+### Step 11: Find the closest policies
+
+`match()`, with no Gemini call.
+
+1. `embed_circular()`: done in step 7 already, so nothing.
+2. `SELECT … FROM policies WHERE company_id = 1`; keep those embedded with the current model
+   that list `RBI` in `regulators`.
+3. Score each one: the best cosine similarity between the circular's embedding and any of
+   the policy's 5,000-character chunks. Keep the top `MATCH_TOP_K` (3).
+4. `SELECT` the circular's judged pairs (`policy_checks`) and its gaps; skip a policy judged
+   at its current version, or that has a gap: the answer is known.
+
+| Policy | Score | Goes on to step 12? |
+|---|---|---|
+| POL-KYC | 0.82 | yes |
+| POL-DRP | 0.58 | yes |
+| POL-DLP | 0.55 | yes |
+| POL-IT | 0.31 | no: not in the top 3 |
+
+### Step 12: Is each policy out of date?
+
+`judge_policy()`, one policy at a time.
+
+1. `SELECT` the policy's controls.
+2. `llm.assess()` sends `ASSESS_PROMPT` with the company's description, the circular (date,
+   title, addressees, summary, obligations), the policy's text and its controls. The reply
+   (`Verdict`): what's missing from the policy, impacted or not, the severity, the affected
+   controls and a draft of the new wording.
+3. The policy is out of date only if `impacted` is true **and** `missing_from_policy` isn't
+   empty.
+4. In one transaction: `INSERT INTO policy_checks`; if out of date, also `INSERT INTO gaps`
+   (due in 7, 30 or 60 days by severity; only control codes that really exist) and
+   `INSERT INTO gap_events` ("agent opened"); `COMMIT`. Then the next policy.
+
+| circular_id | policy | policy_version | similarity | impacted |
+|---|---|---|---|---|
+| **98** | **POL-KYC** | **1** | **0.82** | **true** |
+| **98** | **POL-DRP** | **1** | **0.58** | **false** |
+| **98** | **POL-DLP** | **1** | **0.55** | **false** |
+
+| Table | New row |
+|---|---|
+| `gaps` | **company 1 · circular 98 · POL-KYC v1 · "Update POL-KYC for RBI circular: Designation of…" · severity high · owner Head of Compliance · open · due in 7 days · draft "Add clause 2A: …"** |
+| `gap_events` | **agent · opened · "The policy does not require reporting to FIU-IND…"** |
+
+Log: `#98 vs POL-KYC v1 (0.82): GAP`, then `#98 vs POL-DRP v1 (0.58): up to date`, and so on.
+Each verdict is committed before the next question, so a retry asks only about the
+policies left. Details: [section 12](#12-circularassess).
+
+### Step 13: Mark the assessment done
+
+`UPDATE assessments SET status = 'done', error = NULL, updated_at = now()`, `COMMIT`.
+`assess` returns no follow-ups, and [step 9](#step-9-finish-the-task) deletes its key and
+acknowledges it.
+
+| company_id | circular_id | status | applicable |
+|---|---|---|---|
+| 1 | 98 | **done** | true |
+| 2 | 98 | **done** | false |
+
+Log: `#98 for company 1: applies: True, gaps opened: ['POL-KYC']` and
+`#98 for company 2: applies: False, gaps opened: none`. The console now shows circular 98 as
+**analyzed** to both companies, and company 1's Gaps page has the new ticket.
+
+That's the whole journey of a circular: OCR once per page and 1 summary **in total**, then
+per company 1 "does it apply?" and, where it applies, up to 3 policy checks.
+
+### Step 14: A policy is added or edited
+
+Task `policy.check`, queued by the api after it saves the policy (here company 1 adds
+POL-AML, id 15). `check_policy()` in `pipeline.py`:
+
+1. Note `started = now()`. `SELECT` the policy and the company; a policy of another company
+   is ignored.
+2. `embed_policy()`: no embeddings (new, or the api cleared them because the title or text
+   changed) or another model's: split the text into 5,000-character chunks, each with the
+   title, embed them as `RETRIEVAL_DOCUMENT`, `UPDATE policies SET embeddings,
+   embedding_model`, `COMMIT`.
+3. `SELECT` the company's circulars whose assessment is `done` and applies, published in
+   the last 30 days (their OCR text isn't loaded).
+4. For each one with obligations, from a regulator the policy lists: `match()` and
+   `judge_policy()` (steps 11 and 12). The new policy now competes for the top 3, and only
+   pairs never judged cost a Gemini call.
+5. `UPDATE policies SET checked_at = started`, `COMMIT`. The console switches from "Waiting
+   for the worker" to "Checked".
+6. Saved again while this ran (`updated_at > started`): it returns itself as a follow-up,
+   and is checked once more.
+
+| code | version | embeddings | checked_at |
+|---|---|---|---|
+| POL-AML | 1 | **[[0.012, …], [0.031, …]]** | **2026-10-01 10:15** |
+
+Log: `embedded POL-AML (2 chunks) with gemini-embedding-001`, then
+`POL-AML checked, gaps opened: none`. Details: [section 13](#13-policycheck).
+
+### Step 15: A company signs up or is described
+
+Task `company.refresh`, queued at sign-up and when a company saves a new description. For a
+new description the api first sets that company's assessments of read circulars back to
+`pending`, with `applicable` cleared; the OCR text, the summaries and the policy verdicts
+are kept. `refresh_company()`:
+
+1. `SELECT id FROM circulars WHERE status = 'read' AND published_at >= cutoff` (30 days).
+2. `add_assessments()`: a pending assessment for each one the company lacks, `COMMIT`.
+3. Return a `circular.assess` task for each pending one: steps 10 to 13, for this company
+   only.
+
+Company 2 rewrites its description:
+
+| company_id | circular_id | status | applicable |
+|---|---|---|---|
+| 2 | 98 | **pending** | *(**cleared**)* |
+| 2 | 97 | **pending** | *(**cleared**)* |
+
+Only "does it apply?" is asked again; nothing is OCR'd or summarised again. Details:
+[section 14](#14-companyrefresh).
+
+### Step 16: The reconciler, every minute
+
+Postgres is the truth; the stream is only the to-do list. If Redis was down when a task was
+queued (`enqueue` only logs), or it lost its data, the work is still in Postgres.
+
+1. Once a minute each worker tries `SET rci:reconciled <me> NX EX 900`. It succeeds for one
+   worker per 15 minutes (`RECONCILE_MINUTES`).
+2. That worker runs `missing_work()`:
+
+   | Postgres shows | Task queued |
+   |---|---|
+   | a circular still `new` or `parsed` | `circular.read` |
+   | a pending assessment of a read circular | `circular.assess` |
+   | a policy never checked, saved after its check, or embedded with another model | `policy.check` |
+
+3. It `enqueue`s each one; work already queued or running is skipped by its key.
+
+Log: `reconciler: 3 unfinished tasks checked`. Details: [section 15](#15-the-reconciler).
+
+### Step 17: A step fails
+
+What a step committed stays committed. `run_task()` rolls back only the unfinished step,
+then decides with the rules in `failures.py`:
+
+| The error | What happens | Log |
+|---|---|---|
+| the ocr service can't be reached (the model is loading); Gemini 429 (quota) | wait 60 s (`RETRY_SECONDS`), no `XACK`: the same task is this worker's next one, for as long as it takes | `OCR or Gemini unavailable (…); retrying` |
+| a 5xx, a timeout, a dropped connection, a reply not in the asked-for JSON, an `IntegrityError` (another task saved the same verdict first) | no `XACK`: tried again at once, up to 3 tries (`MAX_TRIES`) | `… failed (…); trying again` |
+| anything else (a 400, "OCR found no text", S3 down or the PDF missing), or the third try | `give_up()`: a `circular.read` marks the circular `failed`, a `circular.assess` marks that company's assessment `failed`, both with the error; the task is copied to `rci:dead`; its key deleted; `XACK` | `… failed for good` |
+
+The console shows a failed circular's error. **Reprocess** queues it again, and it resumes
+from what was saved: the text, or the pages already OCR'd. Details:
+[section 17](#17-when-something-fails).
+
+### Step 18: A worker dies
+
+A worker that dies mid-task never acknowledges it, and stops renewing its claim.
+
+1. **Its container restarts** under the same name: [step 2](#step-2-wait-for-a-task) finds
+   the task on its own pending list at once.
+2. **It doesn't come back**, or `docker compose up --build` replaced it (a new container has
+   a new name): once the claim is 5 minutes old (`CLAIM_IDLE_SECONDS`), another worker's
+   `XAUTOCLAIM` takes the task over.
+3. Either way the task starts again at its first step and skips everything committed:
+
+| It died… | The rerun… |
+|---|---|
+| during OCR | OCRs only the pages not in `ocr_pages` (the one in flight is sent again) |
+| after `parsed` | starts at the summary |
+| after `read` | only adds the missing assessments and queues them |
+| between two policy verdicts | asks only about the policies not judged yet |
+| after `done` | has nothing to do |
+
+Details: [section 16](#16-transactions-acknowledgements-and-crashes).
+
+---
+
+## 3. The files
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -154,7 +657,7 @@ flowchart TB
 
 ---
 
-## 3. Startup
+## 4. Startup
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -194,7 +697,7 @@ sequenceDiagram
 
 ---
 
-## 4. The task loop
+## 5. The task loop
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -243,7 +746,7 @@ flowchart TD
 
 ---
 
-## 5. Taking the next task
+## 6. Taking the next task
 
 `next_task()` looks in three places, in order, and takes one task:
 
@@ -280,12 +783,12 @@ flowchart TD
   the stream, which keeps about 100,000 entries) is acknowledged and skipped.
 - **`XAUTOCLAIM`** moves a task that has been pending with *another* consumer for
   `CLAIM_IDLE_SECONDS` (300) to this one. A live worker renews its claim every minute
-  however slow the task (section 6), so a task idle that long belongs to a dead worker.
+  however slow the task (section 7), so a task idle that long belongs to a dead worker.
 - **`>`** asks for a task never delivered to anyone in the group.
 
 ---
 
-## 6. Doing a task
+## 7. Doing a task
 
 `run_task()` turns the task's fields into ids and calls its function from `TASKS`. There
 are no locks: the consumer group gave this task to this worker only.
@@ -299,7 +802,7 @@ flowchart TD
         fn -->|"returns follow-up tasks"| del["DEL its dedupe key"]
         del --> xadd[["enqueue each follow-up<br/>(circular.assess, or policy.check<br/>for a policy edited meanwhile)"]]
         xadd --> ack(["XACK"])
-        fn -.->|"raised"| fail["should_wait / should_retry /<br/>give_up (section 16)"]
+        fn -.->|"raised"| fail["should_wait / should_retry /<br/>give_up (section 17)"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -333,7 +836,7 @@ flowchart TD
 
 ---
 
-## 7. The tables it uses
+## 8. The tables it uses
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -397,7 +900,7 @@ so a (circular, policy) pair is always one company's.
 
 ---
 
-## 8. Two statuses
+## 9. Two statuses
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -459,7 +962,7 @@ sees:
 
 ---
 
-## 9. No duplicates: the dedupe key
+## 10. No duplicates: the dedupe key
 
 The consumer group gives each task to one worker, so workers need no locks to share the
 work. What's left is the same **work** queued twice (the reconciler, a double Reprocess, a
@@ -514,7 +1017,7 @@ worker's step-by-step commits. See
 
 ---
 
-## 10. circular.read
+## 11. circular.read
 
 `read_circular(session, circular_id)`, queued by the watcher for each new circular and by
 **Reprocess** for one that isn't read. It runs **once per circular**, whatever the number of
@@ -624,7 +1127,7 @@ Logs: `#98 parsed: 12408 chars`, `#98 read: addressed to '…'`.
 
 ---
 
-## 11. circular.assess
+## 12. circular.assess
 
 `assess(session, company_id, circular_id)`, queued by `circular.read`, by
 `company.refresh` and by **Reprocess**.
@@ -716,7 +1219,7 @@ Logs: `#98 vs POL-KYC v1 (0.74): GAP` (0.74 is the similarity), then
 
 ---
 
-## 12. policy.check
+## 13. policy.check
 
 `check_policy(session, company_id, policy_id)`, queued by the api whenever a policy is
 added or saved, and by the reconciler for a policy saved after its last check.
@@ -769,7 +1272,7 @@ Log: `POL-AML checked, gaps opened: ['POL-AML']`.
 
 ---
 
-## 13. company.refresh
+## 14. company.refresh
 
 `refresh_company(session, company_id)`, queued at sign-up and when a company's description
 changes (the api has already set that company's assessments of read circulars back to
@@ -798,7 +1301,7 @@ console shows them as skipped).
 
 ---
 
-## 14. The reconciler
+## 15. The reconciler
 
 Postgres is the truth; the stream is only the to-do list. A task can go missing: Redis was
 down when the api or watcher tried `XADD` (`enqueue` logs and carries on, never failing the
@@ -847,7 +1350,7 @@ flowchart TD
 
 ---
 
-## 15. Transactions, acknowledgements and crashes
+## 16. Transactions, acknowledgements and crashes
 
 The work session **commits after every step**, and the task is **acknowledged only when it
 is finished**. For one circular and one company:
@@ -903,7 +1406,7 @@ the api made meanwhile.
 
 ---
 
-## 16. When something fails
+## 17. When something fails
 
 Every error goes through `run_task()`, with the rules in `failures.py`:
 
@@ -956,7 +1459,7 @@ flowchart TD
 
 ---
 
-## 17. What the api and the watcher queue
+## 18. What the api and the watcher queue
 
 Every producer saves its change first, then adds the task, so a worker never receives a
 task whose change it can't see yet:
@@ -1002,7 +1505,7 @@ sequenceDiagram
 
 ---
 
-## 18. Every Redis command
+## 19. Every Redis command
 
 | Command | Who | When |
 |---|---|---|
@@ -1021,7 +1524,7 @@ To look inside: `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` (`l
 
 ---
 
-## 19. Every database operation
+## 20. Every database operation
 
 What each task sends, in order. `…` stands for the values.
 
@@ -1040,7 +1543,7 @@ moment.
 
 ---
 
-## 20. Cost of each event
+## 21. Cost of each event
 
 What each event costs in OCR and Gemini calls; everything else is database and Redis work.
 
@@ -1060,7 +1563,7 @@ What each event costs in OCR and Gemini calls; everything else is database and R
 
 ---
 
-## 21. Settings and constants
+## 22. Settings and constants
 
 Settings come from the environment or `.env` (`config.py`); an empty value keeps the
 default. In Docker, only the settings `docker-compose.yml` passes reach the worker; the rest

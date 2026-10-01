@@ -205,8 +205,8 @@ no database work** (apart from one quick look for missing work every 15 minutes)
 > 📖 **Two stories, step by step.** [how_the_worker_works.md](how_the_worker_works.md) follows
 > a new circular and a new policy through the worker, and shows exactly what goes through the
 > queue and what changes in the database at each step. For developers,
-> [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md) has every Redis command, SQL
-> statement and commit.
+> [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md) walks through everything the
+> worker does in 18 steps, then has every Redis command, SQL statement and commit.
 
 ### What lands in the queue
 

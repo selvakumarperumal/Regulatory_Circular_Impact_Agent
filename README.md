@@ -122,7 +122,8 @@ read, so a first start doesn't work through years of history.
   a new circular and a new policy, with what goes through the Redis task queue and what
   changes in the database at each step, and how several workers and companies share it.
 - [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md): the worker for developers:
-  every function, Redis command, SQL statement and commit.
+  everything it does in 18 steps, then every function, Redis command, SQL statement and
+  commit.
 - [backend/worker/README.md](backend/worker/README.md): how a circular moves through the
   pipeline, and what happens when OCR or Gemini fails.
 - [backend/api/README.md](backend/api/README.md): every endpoint, logins, and how gaps are tracked.
