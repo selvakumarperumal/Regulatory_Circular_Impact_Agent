@@ -3,7 +3,8 @@
 Takes tasks off the Redis stream as one consumer of the group "workers" (XREADGROUP),
 so each task goes to one worker however many run. When a task is done its dedupe key
 is deleted (so it can be queued again), its follow-up tasks are queued, and it's
-acknowledged (XACK).
+acknowledged (XACK). While it runs, the worker claims it again every minute, so
+however long the OCR takes no other worker takes it over.
 
 A failing task waits while OCR or Gemini is down, is retried after a hiccup (up to
 MAX_TRIES), and is otherwise given up: marked failed and copied to rci:dead. A dead
@@ -14,9 +15,11 @@ import argparse
 import logging
 import os
 import socket
+import threading
 import time
 from collections import Counter
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 
 import redis
 from sqlalchemy import update
@@ -33,6 +36,7 @@ from failures import MAX_TRIES, gemini_status, should_retry, should_wait
 log = logging.getLogger("worker")
 engine = make_engine(settings.DATABASE_URL)
 tries: Counter[str] = Counter()
+HEARTBEAT_SECONDS = 60
 
 TASKS = {
     "circular.read": pipeline.read_circular,
@@ -64,11 +68,29 @@ def next_task(r: redis.Redis, me: str) -> tuple[str, dict[str, str]] | None:
     return None
 
 
-def run_task(r: redis.Redis, task_id: str, task: dict[str, str]) -> None:
+@contextmanager
+def keep_claimed(r: redis.Redis, me: str, task_id: str) -> Iterator[None]:
+    """Claim the task again every HEARTBEAT_SECONDS (XCLAIM resets its idle time), so
+    only a dead worker's task is ever idle long enough to be taken over."""
+    stop = threading.Event()
+
+    def beat() -> None:
+        while not stop.wait(HEARTBEAT_SECONDS):
+            with suppress(redis.RedisError):
+                r.xclaim(queue.STREAM, queue.GROUP, me, 0, [task_id], justid=True)
+
+    threading.Thread(target=beat, daemon=True).start()
+    try:
+        yield
+    finally:
+        stop.set()
+
+
+def run_task(r: redis.Redis, me: str, task_id: str, task: dict[str, str]) -> None:
     """Do the task; then, unless it's to be retried, finish it."""
     ids = {name: int(value) for name, value in task.items() if name != "type"}
     follow_ups: pipeline.Tasks = []
-    with Session(engine) as session:
+    with Session(engine) as session, keep_claimed(r, me, task_id):
         try:
             follow_ups = TASKS[task["type"]](session, **ids)
         except Exception as e:
@@ -161,7 +183,7 @@ def main() -> None:
                 next_reconcile = time.monotonic() + 60
             task = next_task(r, me)
             if task:
-                run_task(r, *task)
+                run_task(r, me, *task)
             elif once:
                 break
         except (redis.ConnectionError, redis.TimeoutError) as e:

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     MATCH_TOP_K: int = 3
     LOOKBACK_DAYS: int = 30
-    CLAIM_IDLE_SECONDS: int = 1800
+    CLAIM_IDLE_SECONDS: int = 300
     RETRY_SECONDS: int = 60
     RECONCILE_MINUTES: int = 15
 
