@@ -1,7 +1,7 @@
 # worker
 
-> 📘 **New to the worker?** Start with [The worker in plain words](../../how_it_works.md#4-the-worker-in-plain-words):
-> the task queue, one circular from start to finish, and what its log lines mean. Then
+> 📘 **New to the worker?** Start with [The worker: doing the work](../../how_it_works.md#14-the-worker-doing-the-work):
+> the task queue, several workers, and what its log lines mean. Then
 > [How the worker works](../../how_the_worker_works.md) follows a new circular and a new
 > policy step by step, queue and database included. Changing the code?
 > [INTERNALS.md](INTERNALS.md) walks through all of it in 18 steps, then has every Redis

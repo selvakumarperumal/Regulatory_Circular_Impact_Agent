@@ -112,12 +112,16 @@ Circulars published more than `LOOKBACK_DAYS` ago are marked `skipped` instead o
 read, so a first start doesn't work through years of history.
 
 > 🩺 **The console says Bad Gateway?** The api isn't running, most often because Postgres
-> or Redis isn't. See [When things go wrong](how_it_works.md#13-when-things-go-wrong).
+> or Redis isn't. See [When things go wrong](how_it_works.md#19-when-things-go-wrong).
 
 ## Where things are explained
 
-- **[how_it_works.md](how_it_works.md): start here.** The whole backend explained with diagrams:
-  the life of a circular, each service, the data, gap tracking, failures and settings.
+- **[how_it_works.md](how_it_works.md): start here.** The whole app in plain words, with a
+  diagram for every step: the life of one circular from the regulator's website to a closed
+  gap, each service, the console page by page, the data, failures and settings.
+- **[how_the_watcher_works.md](how_the_watcher_works.md): how the watcher works.** One hourly
+  round step by step: reading RBI, SEBI and IRDAI, storing the PDF, saving the row, queueing
+  the task, and what happens when a site is down.
 - **[how_the_worker_works.md](how_the_worker_works.md): how the worker works.** Two stories,
   a new circular and a new policy, with what goes through the Redis task queue and what
   changes in the database at each step, and how several workers and companies share it.
