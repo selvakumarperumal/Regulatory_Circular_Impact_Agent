@@ -1,8 +1,9 @@
 """Watcher: python main.py [--only RBI]
 
 Saves each circular not seen before (the PDF in S3, a row with status new) and queues
-a circular.read task for the workers. A circular that fails to download is tried
-again next run, since nothing about it was saved."""
+a circular.read task for the workers. A circular is saved with its task or not at
+all: if the download, S3 or the queue fails, nothing about it is kept, and the next
+run tries it again."""
 
 import argparse
 import hashlib
@@ -47,7 +48,12 @@ def fetch_new(item: Item) -> None:
         )
         session.add(circular)
         session.commit()
-        queue.enqueue(tasks, "circular.read", circular_id=circular.id)
+        try:
+            queue.enqueue(tasks, "circular.read", circular_id=circular.id)
+        except Exception:
+            session.delete(circular)
+            session.commit()
+            raise
 
 
 def run_source(name: str) -> None:

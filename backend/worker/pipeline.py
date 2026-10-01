@@ -6,7 +6,7 @@ import logging
 import math
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import delete, or_
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import defer
 from sqlmodel import Session, col, select
@@ -186,16 +186,19 @@ def refresh_company(session: Session, company_id: int) -> Tasks:
 def match(session: Session, c: Circular, company: Company) -> list[str]:
     """Gemini checks the circular against the company's MATCH_TOP_K closest policies
     for its regulator (by embedding similarity; a policy scores its best chunk),
-    skipping pairs judged at this version or that have a gap. Returns the codes of
-    the policies that got a gap."""
+    skipping pairs judged at this version or that have a gap. A policy not embedded
+    with the current model (new, edited, or the model changed) is embedded first.
+    Returns the codes of the policies that got a gap."""
     embed_circular(session, c)
-    policies = session.exec(select(Policy).where(Policy.company_id == company.id))
+    policies = [
+        p
+        for p in session.exec(select(Policy).where(Policy.company_id == company.id))
+        if c.source in p.regulators
+    ]
+    for p in policies:
+        embed_policy(session, p)
     scored = sorted(
-        (
-            (max(cosine(c.embedding, v) for v in p.embeddings), p)
-            for p in policies
-            if p.embeddings and p.embedding_model == MODEL and c.source in p.regulators
-        ),
+        ((max(cosine(c.embedding, v) for v in p.embeddings), p) for p in policies),
         key=lambda pair: pair[0],
         reverse=True,
     )[: settings.MATCH_TOP_K]
@@ -285,27 +288,6 @@ def pending(session: Session, *where) -> Tasks:
         .where(Assessment.status == "pending", Circular.status == "read", *where)
     )
     return [("circular.assess", {"company_id": a, "circular_id": b}) for a, b in rows]
-
-
-def missing_work(session: Session) -> list[tuple[str, dict[str, int]]]:
-    """Every unfinished piece of work Postgres shows, as the task that does it."""
-    unread = session.exec(
-        select(Circular.id).where(col(Circular.status).in_(["new", "parsed"]))
-    )
-    unchecked = session.exec(
-        select(Policy.company_id, Policy.id).where(
-            or_(
-                col(Policy.checked_at).is_(None),
-                col(Policy.checked_at) < Policy.updated_at,
-                col(Policy.embedding_model).is_distinct_from(MODEL),
-            )
-        )
-    )
-    return (
-        [("circular.read", {"circular_id": i}) for i in unread]
-        + pending(session)
-        + [("policy.check", {"company_id": a, "policy_id": b}) for a, b in unchecked]
-    )
 
 
 def embed_circular(session: Session, c: Circular) -> None:

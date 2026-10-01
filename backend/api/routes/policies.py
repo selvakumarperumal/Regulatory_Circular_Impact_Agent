@@ -1,6 +1,7 @@
-"""The company's policy library and each policy's controls. Saving a policy queues a
-policy.check task: a worker embeds it and checks it against the company's recent
-circulars, then sets its checked_at."""
+"""The company's policy library and each policy's controls. Every save of a policy
+queues a policy.check task: a worker embeds it and checks it against the company's
+recent circulars, then sets its checked_at. A new control queues nothing: the worker
+reads a policy's controls each time it judges the policy."""
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -18,7 +19,7 @@ from common.models import (
     PolicyIn,
     now,
 )
-from database import SessionDep, enqueue, get_or_404, save
+from database import SessionDep, enqueue, enqueue_or_undo, get_or_404, save
 
 router = APIRouter(prefix="/policies", tags=["policies"])
 
@@ -48,7 +49,15 @@ def list_policies(user: CurrentUser, session: SessionDep) -> list[Policy]:
 @router.post("", status_code=201)
 def create_policy(body: PolicyIn, user: CurrentUser, session: SessionDep) -> Policy:
     policy = Policy.model_validate(body, update={"company_id": user.company_id})
-    return save_policy(session, policy)
+    saved = save(session, policy, f"policy {policy.code} already exists")
+    enqueue_or_undo(
+        session,
+        [saved],
+        "policy.check",
+        company_id=saved.company_id,
+        policy_id=saved.id,
+    )
+    return saved
 
 
 @router.get("/{policy_id}")

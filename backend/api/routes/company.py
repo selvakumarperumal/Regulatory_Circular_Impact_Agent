@@ -36,9 +36,10 @@ def get_company(user: CurrentUser, session: SessionDep) -> Company:
 def set_company(
     body: CompanyIn, user: CurrentUser, session: SessionDep
 ) -> CompanySaved:
-    """A new description sets the company's "does it apply?" answers back to pending
-    and queues them. Only that question is asked again: the OCR text, the summaries
-    and the policy verdicts are kept."""
+    """A new description sets the company's "does it apply?" answers back to pending.
+    Every save queues a company.refresh, which queues the pending ones (so saving
+    again after a 503 queues them again). Only that question is asked again: the OCR
+    text, the summaries and the policy verdicts are kept."""
     company = session.get(Company, user.company_id)
     company.name = (body.name or company.name).strip()
     profile = body.profile.strip()
@@ -56,6 +57,5 @@ def set_company(
             .values(status="pending", applicable=None, applies_reason=None, error=None)
         ).rowcount
     save(session, company)
-    if changed:
-        enqueue("company.refresh", company_id=company.id)
+    enqueue("company.refresh", company_id=company.id)
     return CompanySaved(company=company, requeued=requeued)

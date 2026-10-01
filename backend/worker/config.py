@@ -4,8 +4,7 @@ endpoint and keys mean real AWS.
 
 LOOKBACK_DAYS: newer circulars are read, and new policies and companies are checked
 against them. A task held CLAIM_IDLE_SECONDS by a silent worker is taken over; while a
-service is down tasks wait RETRY_SECONDS; every RECONCILE_MINUTES one worker re-queues
-work whose task went missing."""
+service is down tasks wait RETRY_SECONDS."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -36,7 +35,6 @@ class Settings(BaseSettings):
     LOOKBACK_DAYS: int = 30
     CLAIM_IDLE_SECONDS: int = 300
     RETRY_SECONDS: int = 60
-    RECONCILE_MINUTES: int = 15
 
 
 settings = Settings()

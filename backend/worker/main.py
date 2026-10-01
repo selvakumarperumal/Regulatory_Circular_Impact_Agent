@@ -6,10 +6,10 @@ is deleted (so it can be queued again), its follow-up tasks are queued, and it's
 acknowledged (XACK). While it runs, the worker claims it again every minute, so
 however long the OCR takes no other worker takes it over.
 
-A failing task waits while OCR or Gemini is down, is retried after a hiccup (up to
-MAX_TRIES), and is otherwise given up: marked failed and copied to rci:dead. A dead
-worker's task is taken over after CLAIM_IDLE_SECONDS, and every RECONCILE_MINUTES one
-worker queues any unfinished work Postgres shows, in case its task went missing."""
+The stream is the worker's only source of work: it never looks in Postgres for things
+to do. A failing task waits while OCR or Gemini is down, is retried after a hiccup (up
+to MAX_TRIES), and is otherwise given up: marked failed and copied to rci:dead. A dead
+worker's task is taken over after CLAIM_IDLE_SECONDS."""
 
 import argparse
 import logging
@@ -87,7 +87,9 @@ def keep_claimed(r: redis.Redis, me: str, task_id: str) -> Iterator[None]:
 
 
 def run_task(r: redis.Redis, me: str, task_id: str, task: dict[str, str]) -> None:
-    """Do the task; then, unless it's to be retried, finish it."""
+    """Do the task; then, unless it's to be retried, finish it. If Redis fails while
+    the next tasks are queued, the task isn't acknowledged, so it runs again and
+    none is lost."""
     ids = {name: int(value) for name, value in task.items() if name != "type"}
     follow_ups: pipeline.Tasks = []
     with Session(engine) as session, keep_claimed(r, me, task_id):
@@ -132,20 +134,6 @@ def give_up(
     r.xadd(queue.DEAD, {**task, "task_id": task_id, "error": error[:2000]})
 
 
-def reconcile(r: redis.Redis, me: str) -> None:
-    """Queue every unfinished piece of work Postgres shows (work already queued is
-    skipped by its dedupe key). Once per RECONCILE_MINUTES across all workers: the
-    first to set the key does it."""
-    if not r.set(queue.RECONCILED, me, nx=True, ex=settings.RECONCILE_MINUTES * 60):
-        return
-    with Session(engine) as session:
-        work = pipeline.missing_work(session)
-    for kind, ids in work:
-        queue.enqueue(r, kind, **ids)
-    if work:
-        log.info("reconciler: %d unfinished tasks checked", len(work))
-
-
 def check_gemini() -> None:
     """A 4xx at startup means a wrong key or model name: stop with a clear message.
     A 429, a 5xx or no network only warns: tasks wait for Gemini themselves."""
@@ -173,14 +161,10 @@ def main() -> None:
     r = queue.connect(settings.REDIS_URL)
     me = f"{socket.gethostname()}-{os.getpid()}"
     log.info("worker %s: using %s, waiting for tasks", me, settings.GEMINI_MODEL_NAME)
-    next_reconcile = 0.0
     while True:
         try:
             with suppress(redis.ResponseError):
                 r.xgroup_create(queue.STREAM, queue.GROUP, id="0", mkstream=True)
-            if time.monotonic() >= next_reconcile:
-                reconcile(r, me)
-                next_reconcile = time.monotonic() + 60
             task = next_task(r, me)
             if task:
                 run_task(r, me, *task)

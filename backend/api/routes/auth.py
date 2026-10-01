@@ -7,7 +7,7 @@ from sqlmodel import Field, Session, SQLModel, select
 
 from auth import CurrentUser, hash_password, issue_token, password_ok
 from common.models import Company, User
-from database import SessionDep, enqueue, save
+from database import SessionDep, enqueue_or_undo, save
 
 router = APIRouter(tags=["accounts"])
 
@@ -51,14 +51,14 @@ def add_user(session: Session, company_id: int, body: NewUser) -> User:
 
 @router.post("/auth/signup", status_code=201)
 def sign_up(body: SignUp, session: SessionDep) -> Account:
-    """The company and its user are saved together; its recent circulars are then
-    queued, to be judged once it's described."""
+    """The company and its user are saved together, then a company.refresh is queued
+    (its recent circulars, judged once it's described). No queue, no sign-up."""
     company = Company(name=body.company.strip())
     session.add(company)
     session.flush()
     user = add_user(session, company.id, body)
     session.refresh(company)
-    enqueue("company.refresh", company_id=company.id)
+    enqueue_or_undo(session, [user, company], "company.refresh", company_id=company.id)
     return Account(user=user, company=company, token=issue_token(user))
 
 

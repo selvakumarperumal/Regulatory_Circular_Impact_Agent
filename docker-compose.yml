@@ -118,7 +118,6 @@ services:
       OCR_MAX_PAGES: ${OCR_MAX_PAGES:-}
       MATCH_TOP_K: ${MATCH_TOP_K:-}
       LOOKBACK_DAYS: ${LOOKBACK_DAYS:-}
-      RECONCILE_MINUTES: ${RECONCILE_MINUTES:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+import redis
 from fastapi import Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
@@ -43,5 +44,26 @@ def save[T](session: Session, obj: T, taken: str = "it already exists") -> T:
 
 
 def enqueue(kind: str, **ids: int) -> None:
-    """Queue a task for the workers, after the change it's about is committed."""
-    queue.enqueue(tasks, kind, **ids)
+    """Queue a task for the workers, after the change it's about is committed. The
+    queue is their only source of work, so if Redis can't take the task the request
+    fails (503): saving again queues it again."""
+    try:
+        queue.enqueue(tasks, kind, **ids)
+    except redis.RedisError as e:
+        raise HTTPException(
+            503, "Saved, but the task queue is unavailable: try again in a moment"
+        ) from e
+
+
+def enqueue_or_undo(session: Session, created: list, kind: str, **ids: int) -> None:
+    """enqueue() for something just created. If the task can't be queued, what was
+    created is deleted (in the order given), so trying again starts clean."""
+    try:
+        enqueue(kind, **ids)
+    except HTTPException as e:
+        for obj in created:
+            session.delete(obj)
+            session.flush()
+        session.commit()
+        e.detail = "The task queue is unavailable, so nothing was saved: try again"
+        raise
