@@ -88,7 +88,7 @@ The four task types:
 | `circular.read` | circular id | the watcher (new circular), the api (Reprocess) | reads the PDF (OCR), summarises and embeds it: **once, for every company** |
 | `circular.assess` | company id, circular id | the worker (after reading), the api (Reprocess) | decides if the circular applies to **that company**, checks its closest policies |
 | `policy.check` | company id, policy id | the api (a policy added or edited) | embeds the policy, checks it against the company's recent circulars |
-| `company.refresh` | company id | the api (sign-up, a new description) | queues a `circular.assess` for each recent circular the company hasn't judged |
+| `company.refresh` | company id | the api (a description added or changed) | resets the company's answers given before the change, and queues a `circular.assess` for each one to judge again and each recent circular it hasn't judged |
 
 ---
 
@@ -455,9 +455,9 @@ what the change affects:
 | edit a policy's **text** | version + 1, embeddings cleared | `policy.check` | embeds it, checks the new version (skipping pairs that already have a gap) | 1 embedding + 1 per top-3 circular |
 | edit its **title** | embeddings cleared | `policy.check` | embeds it; checks only pairs never checked | 1 embedding |
 | edit its **regulators** or **owner** | `updated_at` changes | `policy.check` | checks it against any newly listed regulator's circulars | 1 per new top-3 circular |
-| sign up a new company | a company and its first user | `company.refresh` | gives it an assessment of each recent circular (they're judged once it's described) | none yet |
-| describe your company, or change the description | **your** assessments cleared back to `pending` | `company.refresh` | asks "does it apply?" again for each of your recent circulars, then checks pairs never checked | 1 per circular, plus new checks |
-| save the description again, unchanged | nothing | `company.refresh` (every save queues one) | finds nothing pending: nothing to ask | none |
+| sign up a new company | a company and its first user | none | nothing: with no description and no policies there's nothing to judge; its recent circulars show **Not checked** | none |
+| describe your company, or change the description | the description | `company.refresh` | sets **your** older answers back to `pending`, asks "does it apply?" again for each of your recent circulars, then checks pairs never checked | 1 per circular, plus new checks |
+| save the company page unchanged, or only a new name | the name, if any | none | nothing | none |
 | add a control, update a gap, add a teammate | that row | none | nothing: it reads a policy's controls each time it judges it | none |
 | press **Reprocess** on a circular that's read | **your** assessment back to `pending`, your "up to date" answers cleared | `circular.assess` | judges it for you again, **no OCR, no summary**; gaps are kept | 1 + its checks |
 | press **Reprocess** on a failed circular | its status back to `new` or `parsed` | `circular.read` | reads it again (OCR only if no text was saved), then judges it for every company | 2 + per company |
@@ -633,7 +633,7 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         w["watcher:<br/>a new circular"] --> q[["the stream<br/>rci:tasks"]]
-        a["api: a sign-up, a company<br/>description, a policy saved,<br/>Reprocess"] --> q
+        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q
         k["worker: the next steps<br/>of a task it finished"] --> q
         m["manage.py requeue:<br/>only after Redis<br/>lost its data"] -.-> q
         q --> x(["the workers"])
@@ -658,13 +658,14 @@ flowchart TD
 | You do (or something happens) | Task queued | By |
 |---|---|---|
 | a regulator publishes a circular | `circular.read` | the watcher |
-| a company signs up | `company.refresh` | the api |
-| you save the company description (**every save**, changed or not) | `company.refresh` | the api |
+| you add your company description, or change it | `company.refresh` | the api |
 | you add a policy, or save one again (**every save**) | `policy.check` | the api |
 | you press **Reprocess** | `circular.read`, or `circular.assess` for your company | the api |
 | a circular has been read | `circular.assess`, one per company | the worker |
 | a company refresh finds circulars to check | `circular.assess`, one per circular | the worker |
 | a policy was saved again while it was being checked | `policy.check` again | the worker |
+| a company signs up | nothing | (no description and no policies yet: nothing to judge) |
+| you save the company page with the same description, or only a new name | nothing | (nothing changed for the worker) |
 | you add a control, update a gap, add a teammate | nothing | (the worker reads a policy's controls each time it judges it) |
 
 ### If Redis can't take a task
@@ -679,8 +680,8 @@ flowchart TD
         direction TB
         e(["Redis can't take the task"]) --> who{"Who was adding it?"}
         who -->|"the watcher"| wa["Deletes the circular's row:<br/>the next round tries again"]
-        who -->|"the api, for something new<br/>(a sign-up, a new policy)"| ac["Deletes it, answers 'nothing<br/>was saved: try again'"]
-        who -->|"the api, for a change<br/>(description, policy,<br/>Reprocess)"| ae["Answers 'saved, try again':<br/>saving again queues it"]
+        who -->|"the api: a new policy,<br/>or a description change"| ac["Undoes it, answers<br/>'not saved: try again'"]
+        who -->|"the api: a policy saved,<br/>Reprocess"| ae["Answers 'saved, try again':<br/>saving again queues it"]
         who -->|"a worker, adding the<br/>next steps"| wo["Doesn't XACK: the task<br/>runs again and adds them"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -699,8 +700,8 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-Saving again always works, because the description, a policy and Reprocess queue their task
-on every save, not only when something changed.
+Saving again always works: an undone change is a change again, and a policy save or a
+Reprocess queues its task every time.
 
 ### If Redis loses its data
 
@@ -713,8 +714,9 @@ cd backend/api && uv run python manage.py requeue
 ```
 
 It puts back every piece of work Postgres shows unfinished: circulars still `new` or
-`parsed`, checks still `pending`, policies not checked since they were saved. The workers
-still only read the stream.
+`parsed`, checks still `pending`, policies not checked since they were saved, and a
+`company.refresh` for each company with a description (which resets nothing when nothing
+changed). The workers still only read the stream.
 
 ### Failed work, and running it again
 
@@ -1145,7 +1147,7 @@ flowchart LR
 | a service is down | OCR still loading, Gemini quota used up | leaves the task unacknowledged, waits a minute, tries again | nothing, or raise your quota |
 | a hiccup | a timeout, a server error, an answer in the wrong shape | retries the task up to 3 times | nothing |
 | anything else | the PDF has no text at all; the PDF is missing from S3; Gemini refuses the request | marks the circular (or your assessment) `failed` with the error, copies the task to `rci:dead` | open the circular, read **Why it failed**, fix the cause, press **Reprocess** ([how it runs again](#failed-work-and-running-it-again)) |
-| Redis is down | a restart | the api answers "try again" (a sign-up or a new policy isn't saved; an edit is, and saving again queues its task); the watcher tries its new circulars again next round; the worker waits for Redis | save again once Redis is back |
+| Redis is down | a restart | the api answers "try again" (a new policy or a description change isn't saved; a policy edit is, and saving again queues its task); the watcher tries its new circulars again next round; the worker waits for Redis | save again once Redis is back |
 | a worker dies | the machine restarts | its task is picked up again (section 5) | nothing |
 
 ---
@@ -1159,7 +1161,7 @@ flowchart LR
 | `circular.read` | the PDF from S3, pages already in `ocr_pages` (or a twin's saved text and summary) | `ocr_pages` while reading; `circulars`: `text`, summary fields, `embedding`, status `parsed` then `read`; an `assessments` row per company; queues `circular.assess` |
 | `circular.assess` | `companies.profile`, the company's `policies`, `controls`, `policy_checks` | `assessments`, `policy_checks`, `gaps`, `gap_events` |
 | `policy.check` | the policy, the company's recent circulars | `policies.embeddings` and `checked_at`, `policy_checks`, `gaps`, `gap_events` |
-| `company.refresh` | recent read `circulars` | `assessments` rows; queues `circular.assess` |
+| `company.refresh` | the company's `updated_at`, its `assessments`, recent read `circulars` | `assessments`: older answers back to `pending`, missing ones added; queues `circular.assess` |
 
 **Settings you might change** (in `.env`):
 

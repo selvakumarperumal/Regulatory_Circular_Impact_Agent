@@ -22,7 +22,7 @@ done), so workers need no locks to share the work.
 | `circular.read` | the watcher, Reprocess | steps 1 and 2 below, once for every company; then one `circular.assess` per company |
 | `circular.assess` | the worker, Reprocess | steps 3 to 6 for one company |
 | `policy.check` | the api (a policy saved) | embeds the policy, then steps 4 to 6 against the company's recent circulars; stamps its `checked_at` (the console then shows it as **Checked**) |
-| `company.refresh` | the api (sign-up, a new description) | queues a `circular.assess` for each of the company's recent circulars |
+| `company.refresh` | the api (a description added or changed) | sets the company's older answers back to pending, and queues a `circular.assess` for each of its recent circulars |
 
 ```
 new ──OCR──► parsed ──Gemini──► read ──► per company: pending ──► done   (failed: see `error`)

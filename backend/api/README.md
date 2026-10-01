@@ -12,21 +12,22 @@ with a key made on first start and kept in Postgres, and last `TOKEN_HOURS`.
 **Tasks.** The api never calls OCR or Gemini. When a change needs the agent, it saves the
 change, then adds a task to the Redis stream `rci:tasks` (unless the same task is already
 queued). That stream is the workers' only source of work, so a task is never dropped
-quietly: if Redis can't take it, the request fails with **503**. A sign-up or a new policy is
-deleted again first ("nothing was saved: try again"); an edit stays saved ("Saved, but the
-task queue is unavailable: try again"), and saving again queues its task, because the
-description, a policy and Reprocess queue one on every save.
+quietly: if Redis can't take it, the request fails with **503**. A new policy is deleted
+again and a changed description is put back ("nothing was saved: try again"); a policy edit
+or a Reprocess stays saved ("Saved, but the task queue is unavailable: try again"), and
+saving again queues its task, because those queue one every time. A sign-up queues nothing:
+a new company has no description and no policies, so there's nothing to judge yet.
 
 | Method & path | What it does | Task queued |
 |---|---|---|
 | `GET /health` | 200 when the database answers (no login) | |
-| `POST /auth/signup` | A new company and its first user; returns a token | `company.refresh` |
+| `POST /auth/signup` | A new company and its first user; returns a token | none: nothing to judge yet |
 | `POST /auth/login` | Email and password; returns a token | |
 | `GET /auth/me` | The signed-in user and their company | |
 | `PUT /auth/password` | Change your password (needs the current one) | |
 | `GET /users` · `POST /users` | The company's team; add a teammate with a first password | |
 | `GET /stats` | The company's counts of circulars and gaps by status, and overdue gaps | |
-| `GET /company` · `PUT /company` | The company's name and description. A changed description clears the company's "does it apply?" answers | `company.refresh`, on every save |
+| `GET /company` · `PUT /company` | The company's name and description. The answer says `checking: true` when the description was added or changed: a worker then asks "does it apply?" again for the company's circulars | `company.refresh`, only when the description is added or changed |
 | `GET /circulars?source=RBI&status=analyzed&limit=50` | Every circular, newest first, with this company's status and verdict | |
 | `GET /circulars/{id}` | One circular: summary, obligations, this company's gaps, and the policies of this company it was checked against | |
 | `GET /circulars/{id}/text` | The OCR text | |

@@ -144,7 +144,7 @@ flowchart TD
         subgraph other["the other tasks"]
             direction TB
             s14["14. A policy was<br/>added or edited"]
-            s15["15. A company joined<br/>or changed"]
+            s15["15. A description<br/>added or changed"]
         end
         kind -->|"read a circular"| s4
         kind -->|"check it for<br/>a company"| s10
@@ -205,7 +205,7 @@ flowchart TD
 | [12](#step-12-is-each-policy-out-of-date) | is each of those policies out of date? open a gap if so |
 | [13](#step-13-mark-it-done) | mark this company's check as done |
 | [14](#step-14-a-policy-is-added-or-edited) | a policy was added or edited: check it |
-| [15](#step-15-a-company-joins-or-changes-its-description) | a company joined or changed its description: check it |
+| [15](#step-15-a-company-adds-or-changes-its-description) | a company added or changed its description: which circulars apply now? |
 | [16](#step-16-every-change-queues-its-task) | every change queues its task: the worker's only source of work |
 | [17](#step-17-something-fails) | something failed: wait, retry or give up, and how to run it again |
 | [18](#step-18-a-worker-dies) | a worker died: another one carries on |
@@ -497,7 +497,7 @@ flowchart TD
   the window, the worker skips it again.
 - A company that joined later also sees older circulars as **Skipped** in the console, even
   read ones: it only gets to-dos for the last 30 days
-  ([step 15](#step-15-a-company-joins-or-changes-its-description)).
+  ([step 15](#step-15-a-company-adds-or-changes-its-description)).
 
 #### Where "failed" comes from
 
@@ -890,7 +890,7 @@ flowchart TD
   checks company 1's policies next.
 - **Company 2** is a stock broker: it doesn't apply, so company 2's check ends here.
 - A company that hasn't described itself yet isn't checked. It's asked when it writes a
-  description ([step 15](#step-15-a-company-joins-or-changes-its-description)).
+  description ([step 15](#step-15-a-company-adds-or-changes-its-description)).
 
 **Database after:**
 
@@ -1129,19 +1129,23 @@ worker** until someone saves it again: every save queues a new check
 
 **In the code:** `check_policy()` in `pipeline.py`. More: [section 13](#13-policycheck).
 
-### Step 15: A company joins or changes its description
+### Step 15: A company adds or changes its description
 
-When a company signs up, or saves a new description, the api puts a `company.refresh` task
-on the list. The worker gives the company a to-do for each recent circular.
+The description is how the worker knows which circulars apply to a company. So when it's
+**added for the first time, or changed**, the api queues a `company.refresh` task, and the
+worker asks "does it apply?" again for that company's circulars. Saving the page with the
+same description, or only a new name, queues nothing. **Signing up queues nothing either**:
+a new company has no description and no policies, so there's nothing to judge yet.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["A company signs up, or<br/>edits its description"]) --> c["Its 'does it apply?'<br/>answers are cleared"]
-        c --> t["A to-do for each circular<br/>read in the last 30 days"]
-        t --> s(["Steps 10 to 13,<br/>for this company only"])
+        a(["The description is added<br/>or changed, and saved"]) --> q[["company.refresh"]]
+        q --> r["Answers given before the<br/>change go back to pending"]
+        r --> t["A to-do for each circular read<br/>in the last 30 days it lacks"]
+        t --> s(["Steps 10 to 13, for each<br/>pending one, this company only"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1154,27 +1158,47 @@ flowchart TD
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class a start
-    class c,t data
+    class q queue
+    class r,t data
     class s ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- Only "does it apply?" is asked again. The text, the summaries and the earlier policy
-  answers are kept.
-- A new company gets a to-do for each circular read in the last 30 days.
+`refresh_company()` in `pipeline.py`:
 
-**Database after** (company 2 edited its description):
+1. Read the company: the time its description last changed is its `updated_at`.
+2. **Reset the old answers:** every assessment of this company that isn't pending and was
+   last updated before that time goes back to `pending`, with `applicable` and the reason
+   cleared. An answer given after the change (by a circular read since) is kept.
+3. **Fill the gaps:** `add_assessments()` gives the company a pending assessment for each
+   circular read in the last 30 days that it doesn't have yet. A company that signed up
+   after those circulars were read has none.
+4. Return a `circular.assess` task for each pending assessment: steps 10 to 13 run for this
+   company only.
+5. If the description changed again while this ran, return `company.refresh` too, so the
+   newest description is used for everything.
 
-| company_id | circular_id | status | applicable |
-|---|---|---|---|
-| 2 | 98 | **pending** | **(cleared)** |
-| 2 | 97 | **pending** | **(cleared)** |
+Only "does it apply?" is asked again. The OCR text, the summaries and the earlier policy
+answers are kept.
 
-**If it fails here:** saving the company description again queues a new refresh, which
-queues the to-dos still `pending` ([step 16](#step-16-every-change-queues-its-task)).
+**Before the description exists**, a company's recent circulars show **Analysed** and **Not
+checked** in the console: the api shows that for a read circular the company has no answer
+for, while it has no description.
 
-**In the code:** `refresh_company()` in `pipeline.py`. More:
-[section 14](#14-companyrefresh).
+**Database after** (company 2 changed its description):
+
+| company_id | circular_id | status | applicable | updated_at |
+|---|---|---|---|---|
+| 2 | 98 | **pending** | **(cleared)** | **now** |
+| 2 | 97 | **pending** | **(cleared)** | **now** |
+| 2 | 99 | done | true | after the change: kept |
+
+**If it fails here:** a company refresh has no "failed" status: the task is copied to
+`rci:dead`. Change the description again, or run `manage.py requeue`, which queues a refresh
+for every described company ([step 16](#step-16-every-change-queues-its-task)).
+
+**In the code:** `refresh_company()` in `pipeline.py`, `set_company()` in
+`backend/api/routes/company.py`. More: [section 14](#14-companyrefresh).
 
 **Keeping it all right** (steps 16 to 18)
 
@@ -1190,7 +1214,7 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         w["watcher: a new circular"] --> q[["Redis: rci:tasks,<br/>the only way in"]]
-        a["api: a sign-up, a company<br/>description, a policy saved,<br/>Reprocess"] --> q
+        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q
         k["worker: the next steps<br/>of a task it finished"] --> q
         m["manage.py requeue:<br/>only after Redis lost its data"] -.-> q
         q --> x(["the workers"])
@@ -1215,8 +1239,7 @@ flowchart TD
 | Something happens | Who queues | The task | What the worker does |
 |---|---|---|---|
 | the watcher finds a new circular | watcher | `circular.read` | steps 4 to 8 |
-| a company signs up | api | `company.refresh` | step 15 |
-| a company saves its description (**every save**, changed or not) | api | `company.refresh` | step 15 |
+| a company adds its description, or changes it | api | `company.refresh` | step 15 |
 | a policy is added | api | `policy.check` | step 14 |
 | a policy is saved again (**every save**) | api | `policy.check` | step 14 |
 | **Reprocess** on a circular that isn't read | api | `circular.read` | steps 4 to 8 |
@@ -1224,6 +1247,8 @@ flowchart TD
 | a circular is read | worker | `circular.assess`, one per company | steps 10 to 13 |
 | a company refresh finds pending checks | worker | `circular.assess`, one per circular | steps 10 to 13 |
 | a policy was saved again while its check ran | worker | `policy.check` again | step 14 |
+| a company signs up | nobody | none | nothing to judge yet: no description, no policies |
+| the description saved unchanged, or only the name | nobody | none | nothing changed for the worker |
 | a control is added, a gap updated, a teammate added | nobody | none | nothing to do: the worker reads a policy's controls each time it judges it |
 | the embedding model setting changes | nobody | none | the worker re-embeds each policy the next time it meets it (step 11) |
 
@@ -1243,8 +1268,8 @@ flowchart TD
         direction TB
         e(["Redis can't take the task"]) --> who{"Who was queueing it?"}
         who -->|"the watcher"| wa["Delete the circular's row:<br/>the next round tries again"]
-        who -->|"the api, creating<br/>(sign-up, new policy)"| ac["Delete what it created;<br/>503: nothing was saved,<br/>try again"]
-        who -->|"the api, changing<br/>(description, policy,<br/>Reprocess)"| ae["503: saved, try again.<br/>Saving again queues it"]
+        who -->|"the api: a new policy,<br/>or a description change"| ac["Undo it: delete the policy,<br/>or put the old description<br/>back. 503: try again"]
+        who -->|"the api: a policy<br/>saved, Reprocess"| ae["503: saved, try again.<br/>Saving again queues it"]
         who -->|"the worker, queueing<br/>its next tasks"| wo["No XACK: the task<br/>runs again, and queues<br/>them again"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -1263,8 +1288,8 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-Saving again always works because the description, a policy and Reprocess queue their task
-on **every** save, not only when something changed.
+Saving again always works: an undone change is a change again, and a policy save or a
+Reprocess queues its task every time.
 
 #### If Redis loses its data
 
@@ -1278,8 +1303,9 @@ cd backend/api && uv run python manage.py requeue
 ```
 
 It puts back every piece of work Postgres shows unfinished: circulars still `new` or
-`parsed`, checks still `pending`, policies not checked since they were saved. It's a
-producer, like the api: the worker still only reads the list.
+`parsed`, checks still `pending`, policies not checked since they were saved, and a
+`company.refresh` for each company with a description (it resets nothing when nothing
+changed). It's a producer, like the api: the worker still only reads the list.
 
 **In the code:** `enqueue()` in `backend/common/common/queue.py`; `enqueue()` and
 `enqueue_or_undo()` in `backend/api/database.py`; `fetch_new()` in `backend/watcher/main.py`;
@@ -1843,7 +1869,8 @@ sees:
 | `read` | `done` | `analyzed` |
 | `read` | `failed` | `failed` |
 | `read` | none, published before `LOOKBACK_DAYS` | `skipped` |
-| `read` | none, recent | `parsed` (a `company.refresh` is on its way) |
+| `read` | none, recent, the company not described | `analyzed`, applicable empty: **Not checked** |
+| `read` | none, recent, the company described | `parsed` (a `company.refresh` is on its way) |
 
 ---
 
@@ -2160,9 +2187,9 @@ Log: `POL-AML checked, gaps opened: ['POL-AML']`.
 
 ## 14. company.refresh
 
-`refresh_company(session, company_id)`, queued at sign-up and when a company's description
-changes (the api has already set that company's assessments of read circulars back to
-`pending`, with `applicable` cleared).
+`refresh_company(session, company_id)`, queued by `set_company()` when a company's
+description is added or changed (not at sign-up, and not for an unchanged description or a
+new name). The api only saves the description; the worker resets the old answers.
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -2174,16 +2201,28 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
+        K->>PG: SELECT the company (described_at = its updated_at)
+        K->>PG: UPDATE its assessments not pending and updated before described_at<br/>SET status 'pending', applicable and reason cleared, updated_at now
         K->>PG: SELECT id FROM circulars WHERE status = 'read' AND published_at >= cutoff
         K->>PG: INSERT INTO assessments … ON CONFLICT DO NOTHING (each), COMMIT
         K->>PG: SELECT the company's pending assessments of read circulars
+        Note right of K: updated_at newer than described_at?<br/>then company.refresh again too
         K->>R: DEL its key, XADD circular.assess per pending circular, XACK
     end
 ```
 
-A new company gets an assessment for each circular read in the last `LOOKBACK_DAYS`, and a
-`circular.assess` task for each pending one. Older circulars stay unjudged for it (the
-console shows them as skipped).
+- **Which answers are reset:** the company's assessments last updated before its
+  description changed (`updated_at` older than the company's), whatever their circular's
+  age. One judged after the change (a circular read since) is kept.
+- **Which are added:** an assessment for each circular read in the last `LOOKBACK_DAYS` that
+  the company lacks, which is all of them for a company that signed up after they were read.
+  Older circulars stay unjudged for it (the console shows them as skipped).
+- **Changed meanwhile:** the description's time is noted at the start; if it's newer at the
+  end, the task returns itself, like `policy.check`.
+- **Before any description**, there's no assessment to show for the circulars read before
+  the company signed up: the api shows them `analyzed` with `applicable` empty (**Not
+  checked**). Circulars read after the sign-up get an assessment from `read_circular` and
+  are marked done, not checked, by `assess`.
 
 ---
 
@@ -2223,8 +2262,7 @@ flowchart TD
 | Event | Code | Task | Queued when |
 |---|---|---|---|
 | a new circular | `fetch_new()`, `watcher/main.py` | `circular.read` | after its row is committed |
-| a sign-up | `sign_up()`, `api/routes/auth.py` | `company.refresh` | after the company and user are committed |
-| a company description saved | `set_company()`, `api/routes/company.py` | `company.refresh` | on **every** save, changed or not |
+| a company description added or changed | `set_company()`, `api/routes/company.py` | `company.refresh` | after it's committed |
 | a policy added | `create_policy()`, `api/routes/policies.py` | `policy.check` | after it's committed |
 | a policy saved again | `update_policy()`, `api/routes/policies.py` | `policy.check` | on **every** save |
 | Reprocess, circular not read | `reprocess_circular()`, `api/routes/circulars.py` | `circular.read` | after its status is set back |
@@ -2233,8 +2271,9 @@ flowchart TD
 | a company refresh | `refresh_company()` returns them | `circular.assess` per pending circular | when the task is finished |
 | a policy saved during its check | `check_policy()` returns it | `policy.check` | when the task is finished |
 
-Nothing is queued for a new control, a gap update, a teammate or a password: no worker work
-depends on them (`judge_policy()` reads the controls each time). A change of
+Nothing is queued for a sign-up (no description, no policies: nothing to judge), an
+unchanged description or a new name, a new control, a gap update, a teammate or a password:
+no worker work depends on them (`judge_policy()` reads the controls each time). A change of
 `GEMINI_EMBEDDING_MODEL_NAME` queues nothing either: `embed_circular()` and `match()` re-embed
 whatever they meet that another model made.
 
@@ -2244,14 +2283,17 @@ and each producer handles it so no task is ever lost quietly:
 | Producer | What it does | Why that's enough |
 |---|---|---|
 | watcher | deletes the circular's row and counts the circular as failed | the next round finds it unknown, and saves it with its task |
-| api, creating (`enqueue_or_undo()`: sign-up, new policy) | deletes what it created; 503 "nothing was saved: try again" | trying again starts clean |
-| api, changing (`enqueue()`: description, policy save, Reprocess) | keeps the change; 503 "Saved, but the task queue is unavailable: try again" | each of these queues its task on every save |
+| api, new policy (`enqueue_or_undo()`) | deletes the policy; 503 "nothing was saved: try again" | trying again starts clean |
+| api, description (`set_company()`) | puts the old description back; 503 "the description wasn't saved" | saving it again is a change again |
+| api, policy save or Reprocess (`enqueue()`) | keeps the change; 503 "Saved, but the task queue is unavailable: try again" | each of these queues its task on every save |
 | worker (`run_task()`, queueing follow-ups) | the error reaches the main loop: no `XACK`, wait `RETRY_SECONDS` | the task stays pending, runs again, finds its work saved, and queues its follow-ups |
 
 **When Redis loses its data** (its volume deleted; a restart loses nothing, the stream is on
 disk), `manage.py requeue` in `backend/api` queues every unfinished piece of work Postgres
 shows: circulars `new` or `parsed`, assessments `pending` of read circulars, policies never
-checked or saved after their check. A task still queued is skipped by its key; it prints
+checked or saved after their check, and a `company.refresh` for each described company (a
+lost refresh can't be seen in Postgres; a refresh with nothing to reset only queues what's
+pending). A task still queued is skipped by its key; it prints
 `N unfinished: X queued, Y already queued`.
 
 ---
@@ -2371,7 +2413,7 @@ flowchart TD
 Every producer saves its change first, then adds the task, so a worker never receives a
 task whose change it can't see yet. If Redis can't take the task, nothing is left half done
 ([section 15](#15-where-tasks-come-from)): the watcher deletes the row, and the api answers
-503, deleting a sign-up or a new policy it just created:
+503, deleting a new policy it just created or putting a description back:
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -2387,10 +2429,10 @@ sequenceDiagram
         W->>PG: INSERT circulars (status new), COMMIT
         W->>R: enqueue circular.read
         A->>PG: POST /auth/signup: INSERT companies, users (one transaction)
-        A->>R: enqueue company.refresh
+        Note right of A: no task: nothing to judge yet
         A->>PG: POST or PUT /policies: INSERT or UPDATE policies
         A->>R: enqueue policy.check
-        A->>PG: PUT /company (every save): UPDATE companies, and if the<br/>description changed, its assessments of read circulars back to pending
+        A->>PG: PUT /company, description added or changed:<br/>UPDATE companies SET profile, updated_at
         A->>R: enqueue company.refresh
         A->>PG: POST /circulars/{id}/reprocess (read): upsert its assessment pending,<br/>DELETE its "up to date" policy_checks
         A->>R: enqueue circular.assess
@@ -2403,11 +2445,12 @@ sequenceDiagram
 | You do (or the watcher does) | The database change | The task |
 |---|---|---|
 | a regulator publishes a circular | watcher: `INSERT INTO circulars`, status `new` | `circular.read` |
-| sign up a company | `INSERT` the company and its first user | `company.refresh` |
+| sign up a company | `INSERT` the company and its first user | none: nothing to judge yet |
 | add a policy | `INSERT INTO policies`, version 1, no embeddings | `policy.check` |
 | edit a policy | text: `version + 1`, embeddings cleared, `policy_updated` on its open gaps; title: embeddings cleared; always `updated_at` | `policy.check` |
 | add a control | `INSERT INTO controls` | none: `judge_policy` reads the controls each time |
-| save the company description (every save) | if it changed: the company's assessments of read circulars → `pending`, `applicable` cleared | `company.refresh` |
+| add or change the company description | `profile` and `updated_at`; the worker's refresh resets the older answers | `company.refresh` |
+| save the company page unchanged, or only a new name | the name, if any | none |
 | **Reprocess** a read circular | the company's assessment → `pending` (upsert); its "up to date" verdicts on it deleted | `circular.assess` |
 | **Reprocess** any other circular | status `parsed` if it has text, else `new`; `error` cleared | `circular.read` |
 | add a teammate, change a password | `users` | none |
@@ -2442,8 +2485,8 @@ What each task sends, in order. `…` stands for the values.
 | `circular.read` | `SELECT … FROM circulars WHERE id = …`; if new: the twin's text (`SELECT … WHERE sha256 = … AND id <> … AND text IS NOT NULL`), or `SELECT page, text FROM ocr_pages WHERE sha256 = …` and per page OCR'd `INSERT INTO ocr_pages`, `COMMIT`; `UPDATE circulars SET text, status = 'parsed'`, `DELETE FROM ocr_pages WHERE sha256 = …`, `COMMIT`; if no summary: the twin's (`… AND summary IS NOT NULL`) or Gemini's, `UPDATE … SET addressed_to, summary, requirements, embedding = NULL`, `COMMIT`; `UPDATE … SET embedding, embedding_model`, `COMMIT`; `UPDATE … SET status = 'read', error = NULL`, `COMMIT`; `SELECT id FROM companies`; `INSERT INTO assessments … ON CONFLICT DO NOTHING` (one statement for all), `COMMIT`; `SELECT company_id, circular_id FROM assessments JOIN circulars … WHERE pending` |
 | `circular.assess` | `SELECT` the company and the circular; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT` the assessment; maybe `UPDATE assessments SET applicable, applies_reason`, `COMMIT`; `SELECT … FROM policies WHERE company_id = …`; `SELECT policy_id, policy_version FROM policy_checks WHERE circular_id = …`; `SELECT policy_id FROM gaps WHERE circular_id = …`; per policy asked: `SELECT … FROM controls`, `INSERT INTO policy_checks`, maybe `INSERT INTO gaps … RETURNING id` and `INSERT INTO gap_events`, `COMMIT`; `UPDATE assessments SET status = 'done', error = NULL, updated_at`, `COMMIT` |
 | `policy.check` | `SELECT` the policy and the company; maybe `UPDATE policies SET embeddings, embedding_model`, `COMMIT`; `SELECT circulars … JOIN assessments …` (no `text`); per circular, the matching statements of `circular.assess`; `UPDATE policies SET checked_at`, `COMMIT` |
-| `company.refresh` | `SELECT id FROM circulars WHERE status = 'read' AND published_at >= …`; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT … WHERE pending` |
-| `manage.py requeue` (a person, after Redis lost its data) | `SELECT id FROM circulars WHERE status IN ('new', 'parsed')`; the pending assessments of read circulars; `SELECT company_id, id FROM policies WHERE checked_at IS NULL OR checked_at < updated_at` |
+| `company.refresh` | `SELECT` the company; `UPDATE assessments SET status = 'pending', applicable = NULL, applies_reason = NULL, error = NULL, updated_at = … WHERE company_id = … AND status <> 'pending' AND updated_at < …`; `SELECT id FROM circulars WHERE status = 'read' AND published_at >= …`; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT … WHERE pending` |
+| `manage.py requeue` (a person, after Redis lost its data) | `SELECT id FROM circulars WHERE status IN ('new', 'parsed')`; `SELECT id FROM companies WHERE profile <> ''`; the pending assessments of read circulars; `SELECT company_id, id FROM policies WHERE checked_at IS NULL OR checked_at < updated_at` |
 | giving up | `ROLLBACK`; `UPDATE circulars` or `UPDATE assessments SET status = 'failed', error = …`; `COMMIT` |
 
 To watch them yourself, run a worker on the host with `echo=True` in `make_engine` for a

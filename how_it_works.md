@@ -1663,12 +1663,14 @@ docker compose logs worker | grep -E "embedded| checked,| vs "
 ## 13. When a company signs up or describes itself
 
 The company's **description** is how the agent knows which circulars are for you. It's
-written on the console's **Company** page, and there's no default.
+written on the console's **Company** page, and there's no default. Signing up gives the
+worker nothing to do; **adding or changing the description** is what starts the work.
 
 ### Step 1: a company signs up
 
 On **Set up your company**, someone enters the company's name and their own name, email and
-password. That creates the company and its first user, and queues a `company.refresh` task.
+password. That creates the company and its first user, and **queues nothing**: with no
+description and no policies yet, there's nothing for a worker to judge.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1678,7 +1680,7 @@ flowchart TD
         u(["Set up your company"]) --> a["api"]
         a --> co[("A new company<br/>(no description yet)")]
         a --> us[("Its first user")]
-        a --> q[["Note: refresh<br/>this company"]]
+        a --> n["No task:<br/>nothing to judge yet"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1693,15 +1695,57 @@ flowchart TD
     class u start
     class a svc
     class co,us data
-    class q queue
+    class n muted
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-### Step 2: it gets a to-do for each recent circular
+**In the console:** recent circulars show **Analysed** but **Not checked**, with a link to
+describe the company. The overview's **Apply to us** tile says "Describe your company to find
+out". New circulars that arrive meanwhile are read as usual, and also marked **Not checked**
+for this company.
 
-A worker gives the new company an assessment for every circular read in the last 30 days,
-and checks each one. With no description there's nothing to judge against, so each is marked
-done, **Not checked**.
+### Step 2: you add the description
+
+Saving a description for the first time, or a changed one, queues a `company.refresh` task.
+Saving the page with the same description, or only a new name, queues nothing.
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        u(["You save the Company page"]) --> c{"Is the description<br/>new or changed?"}
+        c -->|"yes"| p[("companies.profile:<br/>the new description")]
+        p --> q[["Note: refresh<br/>this company"]]
+        c -->|"no: same text,<br/>or only the name"| n["Saved, nothing<br/>queued"]
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class u start
+    class c ask
+    class a svc
+    class p data
+    class q queue
+    class n muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+If the task can't be queued (Redis is down), the old description is put back and the page
+says **try again**: a description is never saved without the check it needs.
+
+### Step 3: the worker finds which circulars apply now
+
+The worker sets **your** answers given before the change back to pending, gives you a to-do
+for each circular read in the last 30 days that you don't have yet, and queues a check for
+each one. Other companies' answers are never touched.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1709,8 +1753,10 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         q[["refresh this company"]] --> k["A worker"]
-        k --> a["An assessment for each circular<br/>read in the last 30 days"]
-        a --> n["No description yet:<br/>each one Not checked"]
+        k --> r["Your older answers:<br/>back to pending"]
+        k --> t["A to-do for each recent<br/>circular you lack"]
+        r --> s(["A check queued<br/>for each one"])
+        t --> s
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1724,51 +1770,14 @@ flowchart TD
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class q queue
     class k svc
-    class a data
-    class n muted
+    class r,t data
+    class s ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-**In the console:** circulars show **Analysed** but **Not checked**, with a link to describe
-the company. The overview's **Apply to us** tile says "Describe your company to find out".
+### Step 4: every recent circular is judged, for you only
 
-### Step 3: you write the description
-
-Every save of the description queues `company.refresh`; a changed description first clears
-**your** "does it apply?" answers (your assessments go back to pending). Other companies'
-answers are never touched.
-
-```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart TD
-    subgraph canvas[" "]
-        direction TB
-        u(["You save the description"]) --> a["api"]
-        a --> c[("companies.profile:<br/>the new description")]
-        a --> r["Your 'does it apply?'<br/>answers cleared"]
-        a --> q[["Note: refresh<br/>this company"]]
-    end
-    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
-    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
-    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
-    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
-    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
-    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
-    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
-    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
-    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
-    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class u start
-    class a svc
-    class c data
-    class r muted
-    class q queue
-    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
-```
-
-### Step 4: every recent circular is judged again, for you only
-
-Each recent circular goes through steps 7 to 9 of [section 6](#6-the-life-of-one-circular-step-by-step)
+Each one goes through steps 7 to 9 of [section 6](#6-the-life-of-one-circular-step-by-step)
 for your company: does it apply, and if so, are any of your policies out of date?
 
 ```mermaid
@@ -1776,7 +1785,7 @@ for your company: does it apply, and if so, are any of your policies out of date
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        q[["refresh: 25 recent<br/>circulars"]] --> g["Gemini, for each:<br/>does it apply to us?"]
+        q[["25 checks for<br/>your company"]] --> g["Gemini, for each:<br/>does it apply to us?"]
         g -->|"23: no"| n["Not for us"]
         g -->|"2: yes"| p["Check your 3<br/>closest policies"]
         p --> gap["Gaps, where a policy<br/>is out of date"]
@@ -1838,7 +1847,7 @@ no database work**. The queue is their only source of work.
 | `circular.read` | the watcher, for each new circular; the api, when you **Reprocess** a failed one | reads the PDF, summarises it, embeds it: **once, for every company** | OCR once, 1 question, 1 embedding |
 | `circular.assess` | the worker, one per company after reading a circular; the api, when you **Reprocess** | decides whether it applies to that company, checks that company's closest policies, opens gaps | 1 question, plus up to 3 policy checks |
 | `policy.check` | the api, when you add or edit a policy | embeds it, checks it against your recent circulars that apply | 1 embedding, plus 1 check per circular where it's among the 3 closest |
-| `company.refresh` | the api, at sign-up and when you change your description | queues a `circular.assess` for each of your recent circulars | none itself |
+| `company.refresh` | the api, when you add or change your description | sets your older answers back to pending, queues a `circular.assess` for each of your recent circulars | none itself |
 
 ### Every change queues its task
 
@@ -1852,7 +1861,7 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         w["watcher:<br/>a new circular"] --> q[["the queue<br/>rci:tasks"]]
-        a["you, in the console: sign up,<br/>save the description or a<br/>policy, press Reprocess"] --> q
+        a["you, in the console: add or<br/>change the description, save<br/>a policy, press Reprocess"] --> q
         k["a worker: the next steps<br/>of a task it finished"] --> q
         m["manage.py requeue:<br/>only after Redis<br/>lost its data"] -.-> q
         q --> x(["the workers"])
@@ -1877,16 +1886,18 @@ flowchart TD
 | What happens | The task |
 |---|---|
 | a regulator publishes a circular (the watcher finds it) | `circular.read` |
-| a company signs up | `company.refresh` |
-| you save your company description: **every save**, changed or not | `company.refresh` |
+| you add your company description, or change it | `company.refresh` |
 | you add a policy, or save one again: **every save** | `policy.check` |
 | you press **Reprocess** | `circular.read`, or `circular.assess` for your company |
 | a circular has been read (the worker queues it) | `circular.assess`, one per company |
+| a company signs up | none: no description and no policies yet, so nothing to judge |
+| you save the Company page with the same description, or only a new name | none: nothing changed for the worker |
 | you add a control, update a gap, add a teammate | none: the worker reads a policy's controls each time it judges it |
 
 **If the queue is down** when something is saved, nothing is left half done: the watcher
 drops the circular and tries it again next round; the console says **try again** (a new
-sign-up or policy isn't saved at all; an edit is saved, and saving it again queues its task);
+policy or a description change isn't saved at all; a policy edit is saved, and saving it
+again queues its task);
 a worker that can't queue its next steps runs its task again. **If Redis loses its data**
 (its volume deleted: a restart loses nothing), run `cd backend/api && uv run python manage.py
 requeue` once: it puts back every piece of unfinished work Postgres shows.
@@ -2316,7 +2327,8 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-Saving a new description judges your recent circulars again
+Adding or changing the description judges your recent circulars again (the same text, or a
+new name, queues nothing)
 ([section 13](#13-when-a-company-signs-up-or-describes-itself)). A teammate you add sees
 everything your company sees, and can change their own password here.
 
@@ -2550,9 +2562,10 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-If Redis can't take the task, the api answers 503 "try again": a new sign-up or policy is
-deleted again (nothing was saved), and an edit stays saved, so saving it again queues its
-task. Lists
+If Redis can't take the task, the api answers 503 "try again": a new policy is deleted
+again and a changed description is put back (nothing was saved), while a policy edit stays
+saved, so saving it again queues its task. A sign-up queues nothing, so it never fails this
+way. Lists
 never read the heavy columns (the OCR text, the embeddings); the OCR text has its own
 endpoint. The interactive API docs are at http://localhost:8000/docs.
 
