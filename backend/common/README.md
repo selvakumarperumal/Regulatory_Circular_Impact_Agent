@@ -14,6 +14,8 @@ companies  --<  users
              |      +--<  gap_events
              |
              +--<  policy_checks  >--  circulars
+
+ocr_pages                                    a PDF's pages OCR'd so far (by its sha256)
 ```
 
 | Table | Written by | What it holds |
@@ -26,6 +28,7 @@ companies  --<  users
 | `gaps` | worker (opens them), api (status, owner, due date) | a policy that a circular made out of date |
 | `gap_events` | worker, api | the history of each gap, never edited |
 | `policy_checks` | worker (api deletes "up to date" ones on Reprocess) | Gemini's verdict on each circular and policy version, so no pair is asked about twice |
+| `ocr_pages` | worker | each page of a PDF being OCR'd, saved as it's read so no page is OCR'd twice; deleted once the circular has its text |
 | `app_secrets` | api | secrets made on first start, such as the login-token key |
 
 `db.py`:

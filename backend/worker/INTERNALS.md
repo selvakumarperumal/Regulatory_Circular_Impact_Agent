@@ -91,8 +91,9 @@ Two rules hold everything together:
 - **A task is only a pointer.** It carries a type and ids, never data. The worker reads the
   current state from Postgres and does what is left, so a task delivered twice, late or
   after a crash is harmless.
-- **Nothing slow or paid for is done twice.** The OCR text, the summary, the embeddings,
-  every "does it apply?" and every policy verdict are committed the moment they exist.
+- **Nothing slow or paid for is done twice.** Each OCR'd page, the summary, the embeddings,
+  every "does it apply?" and every policy verdict are committed the moment they exist, and
+  a running task is never handed to a second worker.
 
 ---
 
@@ -142,11 +143,11 @@ flowchart TB
 
 | File | What's in it |
 |---|---|
-| `main.py` | `main()` (the loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `give_up`, `reconcile`, `check_gemini` |
-| `pipeline.py` | one function per task type: `read_circular`, `assess`, `check_policy`, `refresh_company`; `match` and `judge_policy`; the embeddings; `missing_work` for the reconciler. Each returns the tasks to queue next |
+| `main.py` | `main()` (the loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `keep_claimed` (renews the claim while a task runs), `give_up`, `reconcile`, `check_gemini` |
+| `pipeline.py` | one function per task type: `read_circular`, `assess`, `check_policy`, `refresh_company`; `ocr_text` (OCR page by page, each saved) and `twin`; `match` and `judge_policy`; the embeddings; `missing_work` for the reconciler. Each returns the tasks to queue next |
 | `../common/common/queue.py` | the Redis names, `connect()`, `key()` (a task's dedupe key) and `enqueue()` (shared with the watcher and the api) |
 | `llm.py` | the Gemini client, the three prompts with their Pydantic reply models, `embed()` |
-| `ocr.py` | PDF to text: rendering pages, the OCR request, cleaning the output |
+| `ocr.py` | PDF pages to text, one at a time (`pages()`): rendering, the OCR request, cleaning the output |
 | `failures.py` | `should_wait`, `should_retry`, `gemini_status` |
 | `storage.py` | `get_pdf()` from S3 |
 | `config.py` | every setting, from the environment or `.env` |
@@ -252,8 +253,8 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         a["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 STREAMS rci:tasks <b>0</b>"] -->|"one of mine,<br/>never acknowledged"| r1(["retry it"])
-        a -->|"none"| b["XAUTOCLAIM rci:tasks workers &lt;me&gt;<br/><b>1800000</b> 0-0 COUNT 1"]
-        b -->|"one idle 30 min<br/>(its worker died)"| r2(["take it over"])
+        a -->|"none"| b["XAUTOCLAIM rci:tasks workers &lt;me&gt;<br/><b>300000</b> 0-0 COUNT 1"]
+        b -->|"one idle 5 min<br/>(its worker died)"| r2(["take it over"])
         b -->|"none"| c["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 BLOCK 5000 STREAMS rci:tasks <b>&gt;</b>"]
         c -->|"a new one"| r3(["do it"])
         c -->|"5 s, nothing"| r4(["None"])
@@ -278,9 +279,8 @@ flowchart TD
   because the last attempt was to be retried. An entry whose fields are empty (trimmed from
   the stream, which keeps about 100,000 entries) is acknowledged and skipped.
 - **`XAUTOCLAIM`** moves a task that has been pending with *another* consumer for
-  `CLAIM_IDLE_SECONDS` (1,800) to this one. That worker is presumed dead. If it was only
-  slow, both may run the task once; every step checks the database first, so the second run
-  mostly finds the work done.
+  `CLAIM_IDLE_SECONDS` (300) to this one. A live worker renews its claim every minute
+  however slow the task (section 6), so a task idle that long belongs to a dead worker.
 - **`>`** asks for a task never delivered to anyone in the group.
 
 ---
@@ -325,6 +325,11 @@ flowchart TD
 - **The order at the end** is: delete the task's dedupe key, queue the follow-ups,
   acknowledge. Deleting the key first lets a task queue itself again; a crash between the
   steps only means the task runs once more.
+- **Keeping the claim.** While the function runs, `keep_claimed()` sends
+  `XCLAIM rci:tasks workers <me> 0 <id> JUSTID` every `HEARTBEAT_SECONDS` (60) from a
+  background thread. Claiming resets the task's idle time, so however long a task takes (a
+  20-page PDF waiting its turn on the GPU), it never looks abandoned, and no second worker
+  starts the same OCR. The thread stops when the function returns or raises.
 
 ---
 
@@ -343,6 +348,8 @@ flowchart LR
         PC["<b>policy_checks</b><br/>inserted: one per verdict"]
         GA["<b>gaps</b> (per company)<br/>inserted: one per out-of-date policy"]
         GE["<b>gap_events</b><br/>inserted: 'agent opened'"]
+        OP["<b>ocr_pages</b><br/>inserted: one per page OCR'd<br/>deleted: once the text is saved"]
+        CI -.->|"same sha256"| OP
         CO --> AS
         CI --> AS
         CO --> PO
@@ -367,7 +374,7 @@ flowchart LR
     class AS svc
     class PC ok
     class GA bad
-    class GE muted
+    class GE,OP muted
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -382,6 +389,7 @@ flowchart LR
 | `policy_checks` | the circular's judged pairs | one row per verdict |
 | `gaps` | the circular's pairs that have a gap | one row per out-of-date policy, with `company_id` |
 | `gap_events` | nothing | the first event of each gap: `agent`, `opened` |
+| `ocr_pages` | the pages of the circular's PDF already OCR'd | one row per page as it's read; deletes them once the circular is `parsed` |
 
 Unique constraints back the worker up: `assessments` (company, circular), `policy_checks`
 (circular, policy, version) and `gaps` (circular, policy). Policy ids belong to one company,
@@ -528,11 +536,17 @@ sequenceDiagram
             K->>PG: UPDATE status = 'skipped', COMMIT
         else status new
             K->>PG: a twin with the same sha256 and text?
-            K->>X: else GET the PDF, OCR each page
-            K->>PG: UPDATE text, status = 'parsed', COMMIT ①
+            K->>PG: else SELECT the pages already in ocr_pages
+            K->>X: GET the PDF
+            loop each page not saved yet
+                K->>X: OCR the page
+                K->>PG: INSERT INTO ocr_pages, COMMIT
+            end
+            K->>PG: UPDATE text, status = 'parsed', DELETE its ocr_pages, COMMIT ①
         end
         opt summary IS NULL
-            K->>X: SUMMARY_PROMPT + up to 100,000 characters
+            K->>PG: a twin with the same sha256 and a summary?
+            K->>X: else SUMMARY_PROMPT + up to 100,000 characters
             K->>PG: UPDATE addressed_to, summary, requirements, COMMIT ②
         end
         K->>X: embed title + summary + requirements (RETRIEVAL_QUERY)
@@ -544,22 +558,24 @@ sequenceDiagram
     end
 ```
 
-Inside `ocr.pdf_to_text()`:
+Inside `ocr_text()` and `ocr.pages()`:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
+        direction TB
         pdf["PDF bytes"] --> pages["First 20 pages<br/>(OCR_MAX_PAGES)"]
-        pages --> blank{"Blank page?<br/>no text layer, images<br/>or drawings"}
-        blank -->|"yes"| drop["skip it"]
+        pages --> saved{"In ocr_pages already?<br/>(same sha256, same page)"}
+        saved -->|"yes: read before a retry,<br/>a restart or a takeover"| reuse["use the saved text,<br/>no OCR"]
+        saved -->|"no"| blank{"Blank page?<br/>no text layer, images<br/>or drawings"}
+        blank -->|"yes"| drop["text is empty,<br/>nothing sent"]
         blank -->|"no"| png["Render a PNG<br/>at 200 DPI"]
-        png --> cache{"Read already?<br/>(sha256 of the PNG,<br/>in memory)"}
-        cache -->|"yes: a retry"| reuse["use the saved text"]
-        cache -->|"no"| post["One chat request to the<br/>ocr service (600 s timeout)"]
+        png --> post["One chat request to the<br/>ocr service (600 s timeout)"]
         post --> clean["remove_det: strip markers,<br/>drop images, footers, '[No text]'"]
-        clean --> join["Join the pages:<br/>circulars.text"]
+        clean --> save["INSERT INTO ocr_pages,<br/>COMMIT"]
+        drop --> save
+        save --> join["Join the pages:<br/>circulars.text"]
         reuse --> join
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -572,8 +588,8 @@ flowchart LR
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class pdf data
-    class blank,cache ask
+    class pdf,save data
+    class blank,saved ask
     class drop,reuse muted
     class png,post gpu
     class clean svc
@@ -584,12 +600,18 @@ flowchart LR
 - **Skipped, failed:** a circular already `skipped` or `failed` is left alone (Reprocess sets
   it back to `new` or `parsed` first). A `new` one published before `LOOKBACK_DAYS` becomes
   `skipped`.
-- **One PDF, one OCR.** A circular whose PDF has the same `sha256` as one already read copies
-  that text: no S3, no OCR.
-- **The page cache** keeps pages already read in memory until the document is done, so a
-  retry after a timeout on page 15 starts at page 15.
+- **One PDF, one OCR, one summary.** A circular whose PDF has the same `sha256` as one
+  already read (a twin) copies its text: no S3, no OCR. It copies the twin's summary too:
+  no Gemini call.
+- **Every page is saved as it's read.** `ocr_text()` inserts each page's text into
+  `ocr_pages` (keyed by the PDF's `sha256` and the page number) and commits before asking
+  for the next. A retry after a timeout on page 15, a worker restarted by Docker, or one
+  that takes the task over starts at page 15, and logs
+  `#98: 14 pages OCR'd before, carrying on`. Only a page in flight when the worker died is
+  sent again. The pages are deleted in the commit that saves the circular's text.
 - **Empty result:** no text on any page raises `OCR found no text in the PDF`, and the
-  circular is marked failed.
+  circular is marked failed. Its pages stay in `ocr_pages`, so **Reprocess** doesn't send
+  them to the GPU again.
 - **The summary** is forced into JSON matching `CircularSummary`. It doesn't depend on any
   company, so no company's change ever repeats it.
 - **The embedding** is made from the title, summary and obligations
@@ -860,7 +882,7 @@ task is still pending in Redis, under the dead worker's name:
 
 | The crash happens… | What's saved | When the task comes back |
 |---|---|---|
-| during OCR, before ① | nothing | reads the PDF again (the page cache died with the process) |
+| during OCR, before ① | each page read so far, in `ocr_pages` | OCRs only the pages not saved (the one in flight is sent again) |
 | after ① | the text | summarises: no OCR |
 | after ② | the summary | embeds it |
 | after ④ or ⑤ | the circular is `read` | re-inserts nothing, queues the pending companies' tasks again |
@@ -870,8 +892,10 @@ task is still pending in Redis, under the dead worker's name:
 | after ⑨ | the assessment is `done` | nothing to do |
 
 **Who picks it up.** The same container, restarted by Docker, reads its own pending list
-first. Otherwise another worker takes the task over after `CLAIM_IDLE_SECONDS`, and the
-reconciler may queue the unfinished work sooner.
+first. Otherwise another worker takes the task over once it has gone `CLAIM_IDLE_SECONDS`
+(5 minutes) without its claim being renewed, and the reconciler may queue the unfinished
+work sooner. A container recreated by `docker compose up --build` comes back with a new
+name, so its old task waits those 5 minutes.
 
 **Reloading after a commit.** SQLAlchemy expires a session's objects when it commits, so the
 next use reads the row again: the worker always sees the latest values, including changes
@@ -985,7 +1009,8 @@ sequenceDiagram
 | `SET rci:queued:<task> 1 NX EX 86400`, then `XADD rci:tasks MAXLEN ~ 100000 * type … ids …` | watcher, api, worker | a task is queued (`enqueue`); skipped if the key exists |
 | `XGROUP CREATE rci:tasks workers 0 MKSTREAM` | worker | every turn of the loop; `BUSYGROUP` means it exists |
 | `XREADGROUP GROUP workers <me> COUNT 1 STREAMS rci:tasks 0` | worker | its own unfinished task |
-| `XAUTOCLAIM rci:tasks workers <me> 1800000 0-0 COUNT 1` | worker | a dead worker's task |
+| `XAUTOCLAIM rci:tasks workers <me> 300000 0-0 COUNT 1` | worker | a dead worker's task |
+| `XCLAIM rci:tasks workers <me> 0 <id> JUSTID` | worker | every minute while it runs a task: renews its claim |
 | `XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS rci:tasks >` | worker | a new task |
 | `DEL rci:queued:<task>`, then `XACK rci:tasks workers <id>` | worker | a task finished or given up |
 | `XADD rci:dead * type … ids … task_id … error …` | worker | a task given up |
@@ -1003,7 +1028,7 @@ What each task sends, in order. `…` stands for the values.
 | Task | Statements |
 |---|---|
 | startup | `SELECT pg_advisory_xact_lock(hashtext('rci-schema'))`; `CREATE TABLE …`; `ALTER TABLE … ADD COLUMN …` for new columns; `COMMIT` |
-| `circular.read` | `SELECT … FROM circulars WHERE id = …`; if new: `SELECT text … WHERE sha256 = … AND id <> … AND text IS NOT NULL`, `UPDATE circulars SET text, status = 'parsed'`, `COMMIT`; `UPDATE … SET addressed_to, summary, requirements, embedding = NULL`, `COMMIT`; `UPDATE … SET embedding, embedding_model`, `COMMIT`; `UPDATE … SET status = 'read', error = NULL`, `COMMIT`; `SELECT id FROM companies`; `INSERT INTO assessments … ON CONFLICT DO NOTHING` (one statement for all), `COMMIT`; `SELECT company_id, circular_id FROM assessments JOIN circulars … WHERE pending` |
+| `circular.read` | `SELECT … FROM circulars WHERE id = …`; if new: the twin's text (`SELECT … WHERE sha256 = … AND id <> … AND text IS NOT NULL`), or `SELECT page, text FROM ocr_pages WHERE sha256 = …` and per page OCR'd `INSERT INTO ocr_pages`, `COMMIT`; `UPDATE circulars SET text, status = 'parsed'`, `DELETE FROM ocr_pages WHERE sha256 = …`, `COMMIT`; if no summary: the twin's (`… AND summary IS NOT NULL`) or Gemini's, `UPDATE … SET addressed_to, summary, requirements, embedding = NULL`, `COMMIT`; `UPDATE … SET embedding, embedding_model`, `COMMIT`; `UPDATE … SET status = 'read', error = NULL`, `COMMIT`; `SELECT id FROM companies`; `INSERT INTO assessments … ON CONFLICT DO NOTHING` (one statement for all), `COMMIT`; `SELECT company_id, circular_id FROM assessments JOIN circulars … WHERE pending` |
 | `circular.assess` | `SELECT` the company and the circular; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT` the assessment; maybe `UPDATE assessments SET applicable, applies_reason`, `COMMIT`; `SELECT … FROM policies WHERE company_id = …`; `SELECT policy_id, policy_version FROM policy_checks WHERE circular_id = …`; `SELECT policy_id FROM gaps WHERE circular_id = …`; per policy asked: `SELECT … FROM controls`, `INSERT INTO policy_checks`, maybe `INSERT INTO gaps … RETURNING id` and `INSERT INTO gap_events`, `COMMIT`; `UPDATE assessments SET status = 'done', error = NULL, updated_at`, `COMMIT` |
 | `policy.check` | `SELECT` the policy and the company; maybe `UPDATE policies SET embeddings, embedding_model`, `COMMIT`; `SELECT circulars … JOIN assessments …` (no `text`); per circular, the matching statements of `circular.assess`; `UPDATE policies SET checked_at`, `COMMIT` |
 | `company.refresh` | `SELECT id FROM circulars WHERE status = 'read' AND published_at >= …`; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT … WHERE pending` |
@@ -1024,7 +1049,8 @@ What each event costs in OCR and Gemini calls; everything else is database and R
 | worker starts | none | 1 (the configuration check) | 1 |
 | nothing to do | none | none | none |
 | a new circular | 1 per page, **once** | 1 summary, **once**; then per described company: 1 "applies?", plus 1 per top-3 policy where it applies | 1, once |
-| the same PDF under a second circular | none | as above | as above |
+| the same PDF under a second circular | none | no summary; per company as above | 1 |
+| a worker restarted or replaced mid-PDF | only the pages not saved yet | none extra | none extra |
 | a new company signs up | none | none until it's described | none |
 | a company describes itself (or changes it) | none | 1 per recent read circular, plus checks for pairs never judged | none |
 | a new policy | none | 1 per recent circular where it ranks in the company's top 3 | 1 request for all its chunks |
@@ -1053,7 +1079,7 @@ keep their defaults unless you add them there.
 | `LLM_MAX_CHARS` | 100000 | characters of text sent for the summary |
 | `MATCH_TOP_K` | 3 | policies Gemini checks per circular and company |
 | `LOOKBACK_DAYS` | 30 | older new circulars are skipped; how far back new policies and companies look |
-| `CLAIM_IDLE_SECONDS` | 1800 | how long a task can sit with a silent worker before another takes it |
+| `CLAIM_IDLE_SECONDS` | 300 | how long a task can go without its claim renewed before another worker takes it |
 | `RETRY_SECONDS` | 60 | the wait while OCR, Gemini or Redis is down |
 | `RECONCILE_MINUTES` | 15 | how often one worker looks for missing tasks |
 | `WORKERS` (compose) | 1 | how many workers run side by side |
@@ -1067,6 +1093,7 @@ Constants in the code:
 | stream length | 100000 (approximate) | `common/queue.py` | the stream is trimmed beyond this |
 | blocking read | 5000 ms | `main.py` | how long a worker waits for a new task per read |
 | `MAX_TRIES` | 3 | `failures.py` | tries before a crashing task is given up |
+| `HEARTBEAT_SECONDS` | 60 | `main.py` | how often a worker renews its claim on the task it's running |
 | `DUE_DAYS` | high 7, medium 30, low 60 | `pipeline.py` | days a gap's owner gets, by severity |
 | `EMBED_CHARS` | 5000 | `pipeline.py` | the chunk size for embeddings |
 | embedding size | 768 | `llm.py` | numbers per embedding |

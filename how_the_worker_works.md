@@ -198,15 +198,25 @@ straight away.
 ### Step 1: read the PDF
 
 The worker downloads the PDF and sends each page to the **OCR** model on the GPU, which
-turns the page image into text. It saves the text.
+turns the page image into text. Each page is saved the moment it's read, in `ocr_pages`:
+
+| sha256 (the PDF) | page | text |
+|---|---|---|
+| 3f9a… | 0 | **"RESERVE BANK OF INDIA …"** |
+| 3f9a… | 1 | **"2. Banks shall report …"** |
+
+So if the worker is stopped on page 3 (a restart, a crash, a timeout), it comes back to
+page 3, not page 1: a page already read is never sent to the GPU again. When the last page
+is in, the worker joins them into the circular's text, and in the same commit deletes those
+rows:
 
 | id | status | text |
 |---|---|---|
 | 98 | **parsed** | **"RESERVE BANK OF INDIA … (12,408 characters)"** |
 
 From now on the PDF is never read again: every later step, for every company, uses this
-saved text. If another circular ever has the exact same PDF, it copies this text instead of
-running OCR.
+saved text. If another circular ever has the exact same PDF, it copies this text (and, in
+step 2, the summary) instead of running OCR or asking Gemini.
 
 ### Step 2: summarise and embed it
 
@@ -517,7 +527,7 @@ flowchart TD
         direction TB
         get(["A worker looks for a task"]) --> own{"1. Do I have an<br/>unfinished task?<br/>XREADGROUP 0"}
         own -->|"yes"| retry["Retry it<br/>(a hiccup last time)"]
-        own -->|"no"| claim{"2. Has a task sat<br/>unfinished for 30 min?<br/>XAUTOCLAIM"}
+        own -->|"no"| claim{"2. Has a task gone<br/>5 min unclaimed?<br/>XAUTOCLAIM"}
         claim -->|"yes"| take["Take it over:<br/>its worker died"]
         claim -->|"no"| new{"3. A new task?<br/>XREADGROUP &gt;<br/>wait up to 5 s"}
         new -->|"yes"| run["Do it"]
@@ -546,17 +556,22 @@ flowchart TD
 
 1. **Its own unfinished tasks.** If the last attempt hit a hiccup (a timeout, a bad answer),
    the task was left unacknowledged on purpose: it's retried, up to 3 times.
-2. **Tasks abandoned by a dead worker.** A task that has sat on another worker's pending
-   list for **30 minutes** (`CLAIM_IDLE_SECONDS`) is taken over with `XAUTOCLAIM`.
+2. **Tasks abandoned by a dead worker.** While a worker runs a task, it renews its claim on
+   it every minute (`XCLAIM`), however long the task takes. A task on another worker's
+   pending list that has gone **5 minutes** (`CLAIM_IDLE_SECONDS`) without that is
+   abandoned, and is taken over with `XAUTOCLAIM`. A slow task is never taken: no two
+   workers OCR the same PDF.
 3. **A new task**, waiting up to 5 seconds for one to arrive, then looking again.
 
 ### If a worker dies
 
 A worker that crashes mid-task never acknowledges it, so the task stays on the pending list.
 If Docker restarts the same container, the worker finds the task under its own name and
-carries on. If it doesn't come back, another worker takes the task over after 30 minutes
-(and the reconciler, below, may queue the unfinished work again sooner). Either way the work
-continues from the **last saved step** in Postgres: nothing done is lost or paid for twice.
+carries on. If it doesn't come back (or `docker compose up --build` replaced it with a new
+container, which has a new name), another worker takes the task over after 5 minutes (and
+the reconciler, below, may queue the unfinished work again sooner). Either way the work
+continues from the **last saved step** in Postgres, down to the last OCR'd page: nothing
+done is lost or paid for twice.
 
 ### The reconciler: Postgres stays the truth
 
@@ -655,6 +670,7 @@ flowchart LR
 | `policies`, `controls` | each company's library | reads them, writes a policy's embeddings and `checked_at` |
 | `policy_checks` | every Gemini answer "is this policy out of date?" | writes one row per answer |
 | `gaps`, `gap_events` | each company's tickets, and their history | opens a gap and its first history line |
+| `ocr_pages` | the pages of a PDF OCR'd so far | saves each page as it's read, deletes them once the circular has its text |
 
 ### Two kinds of status
 
@@ -732,7 +748,7 @@ already done is lost or paid for twice:
 
 | It stops… | When the task comes back, it… |
 |---|---|
-| while reading the PDF | reads the PDF again (the only step that restarts) |
+| while reading the PDF | OCRs only the pages not saved yet (the page it was on is read again) |
 | after the text is saved | starts at the summary |
 | after the circular is `read` | only queues the companies' assessments again |
 | after some policy answers | asks only about the policies not answered yet |
@@ -809,7 +825,9 @@ Nothing is marked failed, and no gap is opened twice.
 
 The OCR server takes one page at a time (`--max-num-seqs 1`) and queues the rest, so the
 workers don't need to take turns themselves: they all send pages, and the server works
-through them in order. Meanwhile the other steps, which need no GPU, keep running:
+through them in order. A PDF waiting its turn can take a while, but its worker keeps renewing
+its claim, so no other worker starts the same PDF. Meanwhile the other steps, which need no
+GPU, keep running:
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -840,7 +858,7 @@ the consumer group already does that job:
 | | Redis consumer group (used here) | `SELECT … FOR UPDATE SKIP LOCKED` |
 |---|---|---|
 | What it hands out | each **task** to one worker | each **row** to one transaction |
-| Held until | `XACK` (or taken over after 30 minutes idle) | the next COMMIT or ROLLBACK |
+| Held until | `XACK` (renewed every minute; taken over after 5 minutes without renewal) | the next COMMIT or ROLLBACK |
 | Survives the step-by-step commits? | yes | **no**: the first COMMIT releases the row |
 | If the worker dies | the task stays pending and is taken over | the lock is released; the row is picked again |
 
@@ -912,7 +930,7 @@ flowchart LR
 
 | Task | Reads | Writes |
 |---|---|---|
-| `circular.read` | the PDF from S3 (or a twin's saved text) | `circulars`: `text`, summary fields, `embedding`, status `parsed` then `read`; an `assessments` row per company; queues `circular.assess` |
+| `circular.read` | the PDF from S3, pages already in `ocr_pages` (or a twin's saved text and summary) | `ocr_pages` while reading; `circulars`: `text`, summary fields, `embedding`, status `parsed` then `read`; an `assessments` row per company; queues `circular.assess` |
 | `circular.assess` | `companies.profile`, the company's `policies`, `controls`, `policy_checks` | `assessments`, `policy_checks`, `gaps`, `gap_events` |
 | `policy.check` | the policy, the company's recent circulars | `policies.embeddings` and `checked_at`, `policy_checks`, `gaps`, `gap_events` |
 | `company.refresh` | recent read `circulars` | `assessments` rows; queues `circular.assess` |

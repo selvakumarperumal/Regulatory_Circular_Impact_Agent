@@ -28,14 +28,16 @@ new ──OCR──► parsed ──Gemini──► read ──► per company: 
  └── published before LOOKBACK_DAYS ──► skipped
 ```
 
-1. **OCR** (once per circular): each page is rendered at 200 DPI and sent to Unlimited-OCR
-   (the `ocr` service), up to `OCR_MAX_PAGES` pages. The text is saved, and nothing ever OCRs
-   that circular again. A circular whose PDF is identical to one already read (same SHA-256)
-   copies its text; blank pages are skipped; if a page times out, the retry resumes at that
-   page.
-2. **Summary** (once per circular): Gemini finds who it's addressed to, sums up what it
-   changes, and lists every obligation, keeping the numbers and deadlines as written. The
-   summary is embedded with `GEMINI_EMBEDDING_MODEL_NAME` for step 4.
+1. **OCR** (once per PDF): each page is rendered at 200 DPI and sent to Unlimited-OCR
+   (the `ocr` service), up to `OCR_MAX_PAGES` pages. Each page's text is saved in
+   `ocr_pages` the moment it's read, so a retry, a timeout or a restarted worker carries on
+   from the next page; once the whole text is on the circular, those rows are deleted.
+   Blank pages are never sent. A circular whose PDF is identical to one already read (same
+   SHA-256) copies its text: no OCR at all.
+2. **Summary** (once per PDF): Gemini finds who it's addressed to, sums up what it
+   changes, and lists every obligation, keeping the numbers and deadlines as written. A
+   circular with the same PDF copies it. The summary is embedded with
+   `GEMINI_EMBEDDING_MODEL_NAME` for step 4.
 3. **Is it for this company?** Only once the company has described itself on the console's
    Company page (there's no default). Gemini compares the addressees with that description
    and gives a one-line reason, saved in the company's `assessments` row. With no
@@ -50,9 +52,11 @@ new ──OCR──► parsed ──Gemini──► read ──► per company: 
 6. **Gap**: if the policy is out of date, a gap is opened for its owner. The due date
    depends on severity: high 7 days, medium 30, low 60.
 
-**Nothing slow or paid for is done twice.** The OCR text, the summary, the embeddings, each
-company's "does it apply?" and every verdict are saved as they come. A task delivered twice,
-a restart or an outage halfway through resumes where it stopped.
+**Nothing slow or paid for is done twice.** Each OCR'd page, the summary, the embeddings,
+each company's "does it apply?" and every verdict are saved as they come. A task delivered
+twice, a restart or an outage halfway through resumes where it stopped. While a task runs,
+its worker claims it again every minute, so however long a PDF takes, no other worker
+starts on it too.
 
 | File | Job |
 |---|---|
@@ -76,7 +80,9 @@ a restart or an outage halfway through resumes where it stopped.
 - **S3 unreachable (Floci not running) or the PDF missing:** this isn't waited out. The
   circular is marked `failed` at once; start Floci, then press **Reprocess**.
 - **A worker dies mid-task:** the task is still pending. The same container finds it on
-  restart; otherwise another worker takes it over after `CLAIM_IDLE_SECONDS` (`XAUTOCLAIM`).
+  restart; otherwise another worker takes it over once it has gone `CLAIM_IDLE_SECONDS` (5
+  minutes) without its claim being renewed (`XAUTOCLAIM`). Either way, OCR carries on from
+  the next unsaved page.
 - **A task goes missing** (Redis down or wiped): every `RECONCILE_MINUTES`, one worker queues
   again whatever Postgres shows as unfinished.
 - **A wrong API key or model name:** the worker stops at startup.

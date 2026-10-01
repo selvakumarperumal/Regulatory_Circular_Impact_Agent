@@ -351,7 +351,9 @@ work with no setup:
   and queues the rest, so extra workers mainly speed up the Gemini steps and the
   companies' assessments.
 - **A worker that dies** leaves its task unacknowledged. It's picked up again: at once if
-  its container restarts, otherwise by another worker after 30 minutes.
+  its container restarts, otherwise by another worker after 5 minutes. A worker that's
+  alive renews its claim every minute, so a slow task (a long PDF) is never taken over and
+  run twice.
 
 How the queue works, with diagrams: [The task queue](how_the_worker_works.md#5-the-task-queue-redis-streams)
 and [No duplicates](how_the_worker_works.md#7-no-duplicates-each-task-is-queued-once).
@@ -603,10 +605,12 @@ flowchart LR
 - **Once per PDF.** OCR is the slow step (tens of seconds a page on a laptop GPU), so its
   output is kept in `circulars.text` and everything else reads that. When a regulator lists
   the same PDF under a second circular, the worker spots the identical file (same SHA-256)
-  and copies the saved text instead of reading it again.
-- **No page read twice.** If page 15 of 20 times out, the retry starts at page 15: pages
-  already read are kept in memory until the document is done. Blank pages are skipped, and
-  all pages go over one reused connection.
+  and copies the saved text, and the summary, instead of reading it again.
+- **No page read twice.** Each page's text is saved in `ocr_pages` the moment it's read. If
+  page 15 of 20 times out, or the worker is restarted or replaced on page 15, the task
+  starts again at page 15 and the log says `14 pages OCR'd before, carrying on`. The rows
+  are deleted once the whole text is saved. Blank pages are never sent, and all pages go
+  over one reused connection.
 
 ---
 
@@ -683,8 +687,8 @@ Everything slow or paid for is saved the first time and reused after that:
 
 | Work | Saved in | Done again only when |
 |---|---|---|
-| OCR of the PDF (the slowest step) | `circulars.text` | never. A second circular with the same PDF copies it |
-| Question 1: what does it say? | `circulars.addressed_to`, `summary`, `requirements` | you press **Reprocess** |
+| OCR of the PDF (the slowest step) | `ocr_pages` page by page while it runs, then `circulars.text` | never. A second circular with the same PDF copies it |
+| Question 1: what does it say? | `circulars.addressed_to`, `summary`, `requirements` | you press **Reprocess**. A second circular with the same PDF copies it |
 | Question 2: does it apply to us? | `assessments.applicable`, `applies_reason` (per company) | you change your company description, or press **Reprocess** |
 | The circular's embedding | `circulars.embedding` | its summary changes, or you change the embedding model |
 | A policy's embeddings | `policies.embeddings` | its title or text is edited, or you change the embedding model |
@@ -1056,7 +1060,7 @@ docker compose logs worker | grep -E "embedded| checked,| vs "
 
 ## 10. The data
 
-Ten tables, all defined in `backend/common/common/models.py`:
+Eleven tables, all defined in `backend/common/common/models.py`:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1102,8 +1106,10 @@ flowchart LR
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-The tenth, `app_secrets`, holds secrets the services make for themselves, such as the key
-that signs login tokens when `JWT_SECRET` isn't set.
+Two more stand apart. `app_secrets` holds secrets the services make for themselves, such as
+the key that signs login tokens when `JWT_SECRET` isn't set. `ocr_pages` holds each page of a
+PDF the moment it's OCR'd, so a restarted worker carries on from the next page; its rows are
+deleted once the circular has its text, so it's empty when nothing is being read.
 
 Rules the database enforces:
 
@@ -1294,7 +1300,7 @@ flowchart TD
 | A wrong API key or model name | the worker stops at startup: "Gemini rejected the key or model name" | fix `.env`, then restart the worker |
 | A PDF link is broken | the watcher logs "failed" for that one | nothing: it's tried again next round |
 | Redis restarted or was down | the worker logs "Redis unavailable; retrying" | nothing: tasks on disk survive, and the reconciler queues anything missed |
-| A worker died mid-task | nothing | nothing: its task is taken over (after a restart at once, otherwise after 30 minutes) |
+| A worker died mid-task | nothing | nothing: its task is taken over (after a restart at once, otherwise after 5 minutes), and OCR carries on from the next unsaved page |
 | Postgres or Redis isn't running | the console says **Bad Gateway** (on sign-up, or any page); `docker compose ps` shows the api, worker and watcher restarting, and their logs say `failed to resolve host 'postgres'` (or `'redis'`) | `docker compose up -d` |
 | Another project holds port 5432 or 6379 | `docker compose up` stops with "port is already allocated" | stop the other project's database, or set `POSTGRES_PORT` / `REDIS_PORT` in `.env` to free ports |
 | The api stays "Restarting" after Postgres is back | Docker is waiting before its next try, and `up -d` doesn't hurry it | `docker compose up -d --force-recreate api` |
@@ -1378,7 +1384,7 @@ flowchart TB
     subgraph canvas[" "]
         direction TB
         subgraph common["backend/common (shared)"]
-            models["models.py<br/>the 10 tables"]
+            models["models.py<br/>the 11 tables"]
             dbpy["db.py<br/>make_engine, init_db"]
             queuepy["queue.py<br/>the task stream"]
         end
