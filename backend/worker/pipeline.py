@@ -6,7 +6,7 @@ import logging
 import math
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import or_
+from sqlalchemy import delete, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import defer
 from sqlmodel import Session, col, select
@@ -21,6 +21,7 @@ from common.models import (
     Control,
     Gap,
     GapEvent,
+    OcrPage,
     Policy,
     PolicyCheck,
     now,
@@ -41,9 +42,9 @@ def cutoff() -> datetime:
 
 
 def read_circular(session: Session, circular_id: int) -> Tasks:
-    """circular.read: OCR the PDF (once: a twin PDF reuses the text), summarise and
-    embed it, the same for every company. Then each company gets a pending
-    assessment and a circular.assess task."""
+    """circular.read: OCR the PDF, summarise and embed it, the same for every company.
+    A twin (another circular with the same PDF) reuses its text and summary. Then
+    each company gets a pending assessment and a circular.assess task."""
     c = session.get(Circular, circular_id)
     if c is None or c.status in ("skipped", "failed"):
         return []
@@ -52,21 +53,16 @@ def read_circular(session: Session, circular_id: int) -> Tasks:
         session.commit()
         return []
     if c.status == "new":
-        twin = select(Circular.text).where(
-            Circular.sha256 == c.sha256,
-            Circular.id != c.id,
-            col(Circular.text).is_not(None),
-        )
-        c.text = session.exec(twin).first() or ocr.pdf_to_text(
-            storage.get_pdf(c.s3_key)
-        )
-        if not c.text.strip():
+        t = twin(session, c, Circular.text)
+        c.text = t.text if t else ocr_text(session, c)
+        if not c.text:
             raise ValueError("OCR found no text in the PDF")
         c.status = "parsed"
+        session.execute(delete(OcrPage).where(OcrPage.sha256 == c.sha256))
         session.commit()
         log.info("#%d parsed: %d chars", c.id, len(c.text))
     if c.summary is None:
-        s = llm.summarize(c)
+        s = twin(session, c, Circular.summary) or llm.summarize(c)
         c.addressed_to, c.summary, c.requirements = (
             s.addressed_to,
             s.summary,
@@ -81,6 +77,30 @@ def read_circular(session: Session, circular_id: int) -> Tasks:
     companies = session.exec(select(Company.id)).all()
     add_assessments(session, [(company, c.id) for company in companies])
     return pending(session, Assessment.circular_id == c.id)
+
+
+def ocr_text(session: Session, c: Circular) -> str:
+    """OCR the PDF a page at a time, saving each page in ocr_pages the moment it's
+    read, so a retry or a restarted worker carries on from the next page."""
+    sha = c.sha256
+    saved = select(OcrPage.page, OcrPage.text).where(OcrPage.sha256 == sha)
+    done = dict(session.exec(saved).all())
+    if done:
+        log.info("#%d: %d pages OCR'd before, carrying on", c.id, len(done))
+    for n, text in ocr.pages(storage.get_pdf(c.s3_key), skip=done):
+        session.add(OcrPage(sha256=sha, page=n, text=text))
+        session.commit()
+        done[n] = text
+    return "\n\n".join(done[n] for n in sorted(done) if done[n]).strip()
+
+
+def twin(session: Session, c: Circular, has) -> Circular | None:
+    """Another circular with the same PDF that already has `has` (text or summary)."""
+    return session.exec(
+        select(Circular).where(
+            Circular.sha256 == c.sha256, Circular.id != c.id, col(has).is_not(None)
+        )
+    ).first()
 
 
 def assess(session: Session, company_id: int, circular_id: int) -> Tasks:

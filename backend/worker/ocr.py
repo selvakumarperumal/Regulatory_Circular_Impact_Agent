@@ -1,10 +1,10 @@
-"""PDF -> text with Baidu Unlimited-OCR, served by vLLM in the ocr service. Each page
-is rendered at 200 DPI (an A4 page is ~6 crops; 300 DPI is too many for an 8 GB GPU)
-and sent as one chat request, following the model's vLLM recipe."""
+"""PDF pages -> text with Baidu Unlimited-OCR, served by vLLM in the ocr service. Each
+page is rendered at 200 DPI (an A4 page is ~6 crops; 300 DPI is too many for an 8 GB
+GPU) and sent as one chat request, following the model's vLLM recipe."""
 
 import base64
-import hashlib
 import re
+from collections.abc import Container, Iterator
 
 import httpx
 import pymupdf
@@ -16,26 +16,18 @@ DET_RE = re.compile(r"<\|det\|>([^<\s]+)(?:\s*\[[^\]]*\])?\s*<\|/det\|>(.*)", re
 SKIP = {"image", "footer"}
 
 client = httpx.Client(timeout=600)
-done_pages: dict[str, str] = {}
 
 
-def pdf_to_text(pdf: bytes) -> str:
-    """The text of the first OCR_MAX_PAGES non-blank pages. Pages already read are
-    kept until the document is done, so a retry after a timeout resumes there."""
+def pages(pdf: bytes, skip: Container[int] = ()) -> Iterator[tuple[int, str]]:
+    """(page number, text) for each of the first OCR_MAX_PAGES pages not in `skip`,
+    the moment it's read. A blank page isn't sent: its text is ""."""
     doc = pymupdf.open(stream=pdf, filetype="pdf")
-    keys, texts = [], []
-    for page in doc.pages(0, min(settings.OCR_MAX_PAGES, doc.page_count)):
-        if blank(page):
+    for n in range(min(settings.OCR_MAX_PAGES, doc.page_count)):
+        if n in skip:
             continue
-        png = page.get_pixmap(dpi=DPI).tobytes("png")
-        key = hashlib.sha256(png).hexdigest()
-        if key not in done_pages:
-            done_pages[key] = ocr_page(png)
-        keys.append(key)
-        texts.append(done_pages[key])
-    for key in keys:
-        done_pages.pop(key, None)
-    return "\n\n".join(t for t in texts if t).strip()
+        page = doc[n]
+        png = None if blank(page) else page.get_pixmap(dpi=DPI).tobytes("png")
+        yield n, ocr_page(png) if png else ""
 
 
 def blank(page: pymupdf.Page) -> bool:

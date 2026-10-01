@@ -5,7 +5,8 @@ companies --< users
 companies --< assessments >-- circulars
 companies --< policies --< controls
 policies  --< policy_checks >-- circulars
-policies  --< gaps >-- circulars,  gaps --< gap_events"""
+policies  --< gaps >-- circulars,  gaps --< gap_events
+ocr_pages: a PDF's pages OCR'd so far, until its text is saved on the circular"""
 
 from datetime import UTC, date, datetime
 from typing import Literal
@@ -71,6 +72,18 @@ class Circular(CircularBase, table=True):
     text: str | None = Field(default=None, sa_type=Text, exclude=True)
     embedding: list[float] | None = Field(default=None, sa_type=JSON, exclude=True)
     embedding_model: str | None = Field(default=None, exclude=True)
+
+
+class OcrPage(SQLModel, table=True):
+    """One page of a PDF (by its sha256), saved the moment it's OCR'd, so a retry or
+    a restarted worker never OCRs it again. Deleted once the circular has its text.
+    A blank page's text is ""."""
+
+    __tablename__ = "ocr_pages"
+
+    sha256: str = Field(primary_key=True)
+    page: int = Field(primary_key=True)
+    text: str = Field(sa_type=Text)
 
 
 class Assessment(SQLModel, table=True):
