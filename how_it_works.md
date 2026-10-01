@@ -420,8 +420,12 @@ How the watcher reads each regulator's site, and what it does when a site is dow
 
 ### Step 2: A worker picks up the task
 
-A free worker takes the note "read circular 98" off the to-do list within moments. While it
-works, it keeps its name on the note, so no other worker starts the same circular.
+A free worker asks Redis for the next note (`XREADGROUP`). Redis hands over "read circular
+98" and, in the same moment, writes the worker's name next to it on its **pending list**: the
+list of notes handed out but not finished yet. That's what makes it this worker's note: no
+other worker will be given it. While it works, the worker touches the note every minute, so
+Redis knows it's still alive; a note nobody touches for 5 minutes belongs to a worker that
+died, and another worker takes it over.
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -433,16 +437,24 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
+        K->>Q: the next note, please
         Q-->>K: read circular 98
+        Note right of Q: pending list: this note belongs to this worker
         K->>DB: what do we know about circular 98?
         DB-->>K: status new, the PDF is rbi/3f9a….pdf
         Note right of K: published today, so it's worth reading
     end
 ```
 
-- A circular published more than 30 days ago would stop here, marked **Skipped**: no OCR,
-  no Gemini, no cost.
-- If there's no free worker, the note simply waits its turn.
+Before reading anything, the worker looks at the circular's status:
+
+- **Too old?** A circular published more than 30 days ago (`LOOKBACK_DAYS`) is marked
+  **Skipped** right here: no OCR, no Gemini, no cost. The watcher saves every circular it
+  finds, old ones too (on its first round, months of them), so this is where old ones stop.
+  Nothing retries a skipped circular.
+- **Failed before?** A circular marked **Failed** is left alone. It only runs again when
+  someone presses **Reprocess** ([section 19](#running-failed-work-again)).
+- If there's no free worker, the note simply waits its turn on the list.
 
 ### Step 3: OCR reads the PDF
 
@@ -880,9 +892,33 @@ flowchart TD
 | `failed` (or your assessment `failed`) | **Failed** | something went wrong that retrying didn't fix; the page says why, and **Reprocess** tries again |
 | `skipped` | **Skipped** | older than 30 days when first seen: never read, costs nothing |
 
-- **Reprocess** on a failed circular carries on from what was saved: if the OCR text was
-  saved, it isn't read again.
-- `skipped` stops a first start from working through years of old circulars.
+#### Where "Skipped" comes from
+
+A worker sets it, the first time it picks up a `new` circular, when the circular was
+published more than 30 days ago (`LOOKBACK_DAYS`). The watcher saves everything on the
+regulators' lists, including old circulars, so `skipped` stops a first start from paying to
+read months of them. A circular with no publication date is never skipped.
+
+- Nothing retries a skipped circular: the worker's 15-minute check for lost work only looks
+  at `new` and `parsed` ones.
+- **To read one anyway:** raise `LOOKBACK_DAYS` in `.env`, restart the workers, then press
+  **Reprocess** on it. Reprocess alone sets it back to `new`, but while it's still older than
+  the window it's skipped again.
+- A company that joined later also sees older circulars as **Skipped**, even ones that were
+  read: it only gets checks for the last 30 days.
+
+#### Where "Failed" comes from
+
+A worker sets it when reading a circular (or checking it for your company) fails in a way
+that waiting or retrying can't fix: for example the PDF has no text at all, the PDF is
+missing from S3, or Gemini refuses the request. The error is saved on the circular and shown
+on its page under **Why it failed**.
+
+- A failed circular stays failed: nothing retries it by itself, because the same error would
+  just happen again.
+- **To run it again:** fix the cause, then press **Reprocess**. It carries on from what was
+  saved: if the OCR text was saved, the PDF isn't read again.
+- The details, for every kind of failure: [Running failed work again](#running-failed-work-again).
 
 ---
 ## 8. The watcher: finding circulars
@@ -1835,6 +1871,43 @@ to exactly one worker. A task is only marked finished when the work is done, so 
 dies mid-task doesn't lose it: it's picked up again. And every 15 minutes one worker checks
 Postgres for unfinished work whose task went missing, and queues it again.
 
+### How a worker takes a task
+
+```mermaid
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+sequenceDiagram
+    box rgb(11, 16, 32)
+        participant K as a worker
+        participant R as Redis: the group workers
+    end
+
+    rect rgb(13, 20, 36)
+        K->>R: XREADGROUP: a task nobody has had
+        R-->>K: task: read circular 98
+        Note left of R: pending list: the task belongs to this worker
+        loop every minute while it works
+            K->>R: XCLAIM: still mine
+        end
+        K->>R: XACK: finished
+        Note left of R: off the pending list, for good
+    end
+```
+
+1. **Redis hands the task over and writes the worker's name on it**, on the group's **pending
+   list** (tasks handed out but not finished). That's what makes the task this worker's own.
+2. **While it works, the worker touches the task every minute.** Redis keeps each pending
+   task's idle time (how long since its owner touched it); touching it sets that back to 0.
+3. **When the work is done, the worker says "finished"** (`XACK`), and the task leaves the
+   pending list for good.
+4. **If the work fails for a moment** (a service is down, a hiccup), the worker doesn't say
+   "finished": the task stays on its pending list, and it's the first thing the worker picks
+   up again.
+5. **If the worker dies**, its task stays on the pending list with its idle time growing.
+   After 5 minutes, another worker takes it over (`XAUTOCLAIM`), and carries on from the last
+   saved step.
+
+The whole queue, with diagrams for every part: [The task queue](how_the_worker_works.md#5-the-task-queue-redis-streams).
+
 ### Running several workers
 
 One worker is plenty for a handful of circulars a day. To get through a backlog faster, run
@@ -2484,6 +2557,96 @@ flowchart TD
 LangChain first retries Gemini's rate limits and server errors itself (3 times); only after
 that does the worker's own retry take over. The rules are all in
 `backend/worker/failures.py`.
+
+### Running failed work again
+
+When a task fails for good, the worker **gives up** on it. What that writes depends on the
+task:
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        g(["The worker gives up"]) --> t{"Which task?"}
+        t -->|"reading a circular"| c["The circular: Failed,<br/>the error saved (every<br/>company sees it)"]
+        t -->|"checking it for<br/>a company"| a["That company's check:<br/>Failed, the error saved"]
+        t -->|"checking a policy,<br/>refreshing a company"| n["Nothing marked<br/>failed"]
+        c --> d[["A copy of the task and the<br/>error in Redis: rci:dead"]]
+        a --> d
+        n --> d
+        d --> f(["The task is finished:<br/>off the pending list"])
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class g start
+    class t ask
+    class c,a bad
+    class n muted
+    class d queue
+    class f ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+**Where you see it:** the circular says **Failed** in the console, and its page has a **Why it
+failed** panel with the error (`ValueError: OCR found no text in the PDF`, say). The worker's
+log says `… failed for good`. `docker compose exec redis redis-cli XRANGE rci:dead - +` lists
+every task given up.
+
+**How each one runs again:**
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        f1["A failed circular"] -->|"fix the cause,<br/>press Reprocess"| a1["Back to In progress,<br/>the error cleared"]
+        a1 --> t1(["Read again, from<br/>what was saved"])
+        f2["Your company's check<br/>failed"] -->|"press Reprocess"| a2["Your check back<br/>to pending"]
+        a2 --> t2(["Judged again<br/>for your company"])
+        f3["A policy check failed"] -->|"nothing to do"| a3["Within 15 minutes, the<br/>worker sees it isn't<br/>checked"]
+        a3 --> t3(["Checked again"])
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class f1,f2,f3 bad
+    class a1,a2,a3 svc
+    class t1,t2,t3 ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+| What failed | Retried by itself? | How to run it again | It carries on from |
+|---|---|---|---|
+| reading a circular | no | fix the cause (start Floci, say), then **Reprocess** | the pages already read, the text, the summary |
+| your company's check of a circular | no | **Reprocess** on the circular | your gaps and "out of date" answers; "does it apply?" and the "up to date" answers are asked again |
+| checking a policy | yes, every 15 minutes, while the policy says **Waiting for the worker** | nothing, or save the policy again | its embeddings and every saved answer |
+
+**What the 15-minute check for lost work picks up**, and what it leaves alone on purpose:
+
+| Postgres shows | Run again by itself? | Why |
+|---|---|---|
+| a circular **New** or **In progress** that has no task | ✅ | the task was lost (Redis was down) |
+| a company's check still pending | ✅ | the same |
+| a policy saved after its last check | ✅ | the same, or its check failed |
+| a circular **Failed** | no | the same error would happen again: fix the cause and **Reprocess** |
+| a circular **Skipped** | no | too old, on purpose: see [Where "Skipped" comes from](#where-skipped-comes-from) |
+| a task a worker is still holding | no | it isn't lost: its worker, or another one after 5 minutes, carries on |
 
 > 🔒 **Workers never step on each other.** However many run, each task goes to one worker,
 > and a task is never queued twice. See [Running several workers](#running-several-workers).

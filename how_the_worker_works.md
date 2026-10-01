@@ -516,6 +516,47 @@ flowchart TD
 A task handed out but not yet acknowledged sits on the group's **pending list**, under the
 worker that has it. That list is what makes the queue safe.
 
+### How a task becomes a worker's own
+
+Each worker has a name in the group: its container's hostname and process number, such as
+`e02ff2af94f5-1`. When Redis hands a task to a worker, **it writes that name next to the task
+on the pending list, in the same moment**. Nothing else is needed to make the task the
+worker's own: from then on, no other worker gets it from `XREADGROUP`.
+
+```mermaid
+%%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
+sequenceDiagram
+    box rgb(11, 16, 32)
+        participant K as worker e02f…-1
+        participant R as Redis: the group workers
+    end
+
+    rect rgb(13, 20, 36)
+        K->>R: XREADGROUP: a task nobody has had, please
+        R-->>K: task 1790…-0: read circular 98
+        Note left of R: pending list: task 1790…-0 belongs to e02f…-1
+        K->>R: every minute while it works: XCLAIM, still mine
+        Note left of R: idle time back to 0 s
+        K->>R: XACK 1790…-0: finished
+        Note left of R: off the pending list, for good
+    end
+```
+
+The pending list keeps three things about each task:
+
+| task id | owner | idle time | times handed out |
+|---|---|---|---|
+| 1790831159691-0 | e02ff2af94f5-1 | 12 s | 1 |
+
+- **The owner** is the worker that has it.
+- **The idle time** is how long since the owner last touched it. Redis can't tell a busy
+  worker from a dead one, so the worker touches its task every minute (`XCLAIM … JUSTID`),
+  which sets the idle time back to 0. A task idle for 5 minutes belongs to a dead worker, and
+  another worker takes it over (below).
+- **Times handed out** goes up each time the task is read again: a retry, or a takeover.
+
+To look at it yourself: `docker compose exec redis redis-cli XPENDING rci:tasks workers - + 10`.
+
 ### How a worker picks its next task
 
 Each time a worker is free, it looks in three places, in this order:
@@ -554,14 +595,18 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-1. **Its own unfinished tasks.** If the last attempt hit a hiccup (a timeout, a bad answer),
-   the task was left unacknowledged on purpose: it's retried, up to 3 times.
+1. **Its own pending list** (`XREADGROUP … 0`). If the last attempt hit a hiccup (a timeout,
+   a bad answer, up to 3 tries) or a service was down (as long as it takes), the task was left
+   unacknowledged on purpose, so it's still there, and it's tried again. A worker whose
+   container restarted finds its unfinished task here too: it comes back with the same name.
 2. **Tasks abandoned by a dead worker.** While a worker runs a task, it renews its claim on
    it every minute (`XCLAIM`), however long the task takes. A task on another worker's
    pending list that has gone **5 minutes** (`CLAIM_IDLE_SECONDS`) without that is
    abandoned, and is taken over with `XAUTOCLAIM`. A slow task is never taken: no two
    workers OCR the same PDF.
-3. **A new task**, waiting up to 5 seconds for one to arrive, then looking again.
+3. **A new task** (`XREADGROUP … >`, where `>` means "one nobody has had"), waiting up to 5
+   seconds for one to arrive, then looking again. Redis writes the worker's name on it as it
+   hands it over.
 
 ### If a worker dies
 
@@ -575,20 +620,22 @@ done is lost or paid for twice.
 
 ### The reconciler: Postgres stays the truth
 
-A task can still go missing: Redis was down when the api tried to add it, or Redis lost its
-data. So every **15 minutes** (`RECONCILE_MINUTES`) one worker looks in Postgres for
-unfinished work and queues it again:
+A task can still go missing: Redis was down when the api or the watcher tried to add it (they
+only log it and carry on), or Redis lost its data. So every **15 minutes**
+(`RECONCILE_MINUTES`) one worker looks in Postgres for unfinished work and queues it again:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
-        tick(["Every 15 min, one worker<br/>(SET rci:reconciled NX)"]) --> look["Look in Postgres for<br/>unfinished work"]
+        direction TB
+        tick(["Once a minute,<br/>each worker"]) --> m{"SET rci:reconciled<br/>NX EX 900:<br/>am I first?"}
+        m -->|"no: someone did it in<br/>the last 15 minutes"| skip(["Nothing"])
+        m -->|"yes"| look["Look in Postgres for<br/>unfinished work"]
         look --> c1["circulars still<br/>new or parsed"]
-        look --> c2["assessments<br/>still pending"]
-        look --> c3["policies with<br/>no embedding"]
-        c1 --> q[["XADD the missing<br/>tasks again"]]
+        look --> c2["checks still pending,<br/>of read circulars"]
+        look --> c3["policies not checked<br/>since they were saved"]
+        c1 --> q[["Queue the task again:<br/>dropped if it's still<br/>on the list"]]
         c2 --> q
         c3 --> q
     end
@@ -603,6 +650,8 @@ flowchart LR
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class tick start
+    class m ask
+    class skip muted
     class look svc
     class c1,c2,c3 data
     class q queue
@@ -610,19 +659,115 @@ flowchart LR
 ```
 
 Only one worker does this per interval: the first to set the key `rci:reconciled` (with
-`SET … NX EX 900`) wins, and the others skip it. Work that's already queued isn't queued
-again (see [section 7](#7-no-duplicates-each-task-is-queued-once)).
+`SET … NX EX 900`: "only if it doesn't exist, and delete it after 15 minutes") wins, and the
+others skip it. Work that's already queued isn't queued again (see
+[section 7](#7-no-duplicates-each-task-is-queued-once)).
 
-### The dead-letter stream
+What it picks up, and what it leaves alone on purpose:
 
-A task that fails for good (anything that isn't a service being down or a hiccup) is not
-retried forever. The worker marks the circular or the assessment `failed`, saves the error
-on it (you see it in the console), acknowledges the task, and copies it to a second stream,
-`rci:dead`, for a developer to look at.
+| Postgres shows | Queued again? | Why |
+|---|---|---|
+| a circular `new` or `parsed` | ✅ `circular.read` | it was never finished |
+| an assessment `pending`, of a read circular | ✅ `circular.assess` | the same |
+| a policy never checked, saved after its last check, or embedded with another model | ✅ `policy.check` | the same |
+| a circular `failed` | no | it was given up for good: retrying "no text in the PDF" every 15 minutes would just fail again. **Reprocess** it once the cause is fixed |
+| an assessment `failed` | no | the same: **Reprocess** the circular |
+| a circular `skipped` | no | too old (published more than 30 days before it was first read), on purpose |
+| a task still on someone's pending list | no | it isn't lost: its owner, or another worker after 5 minutes, picks it up |
+
+### Failed work, and running it again
+
+A task that fails for good (anything that isn't a service being down or a hiccup, or the
+same hiccup 3 times) is not retried forever. `give_up()` in the worker does four things:
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        g(["give_up()"]) --> t{"Which task?"}
+        t -->|"circular.read"| c["the circular: status failed,<br/>the error saved (every<br/>company sees it)"]
+        t -->|"circular.assess"| a["that company's assessment:<br/>status failed, the error saved"]
+        t -->|"policy.check or<br/>company.refresh"| n["nothing in Postgres"]
+        c --> d[["a copy in rci:dead:<br/>the task, its id, the error"]]
+        a --> d
+        n --> d
+        d --> f(["its dedupe key deleted, XACK:<br/>off the pending list"])
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class g start
+    class t ask
+    class c,a bad
+    class n muted
+    class d queue
+    class f ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+**What makes a circular `failed`**, for example:
+
+- the PDF has no text at all: `ValueError: OCR found no text in the PDF`;
+- the PDF is missing from S3 (`NoSuchKey`: Floci was restarted without `--persist`), or S3
+  can't be reached (Floci isn't running);
+- Gemini refused the request (a 400);
+- the same hiccup three times in a row: an OCR page over 10 minutes, a server error, an answer
+  not in the asked-for shape.
+
+**Where you see it:** in the console, the circular says **Failed**, and its page has a **Why
+it failed** panel with the error. The worker's log says `… failed for good`, with the full
+error. And `docker compose exec redis redis-cli XRANGE rci:dead - +` lists every task given up
+(nothing reads `rci:dead` back: it's a record for whoever investigates).
+
+**How it runs again:**
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        f1["A failed circular"] -->|"fix the cause,<br/>press Reprocess"| a1["status parsed (text kept)<br/>or new; error cleared"]
+        a1 --> t1[["circular.read"]]
+        f2["A failed company check"] -->|"press Reprocess<br/>on the circular"| a2["assessment pending;<br/>its 'up to date'<br/>answers cleared"]
+        a2 --> t2[["circular.assess"]]
+        f3["A failed policy check"] -->|"nothing to do"| a3["the reconciler sees it<br/>isn't checked, within<br/>15 minutes"]
+        a3 --> t3[["policy.check"]]
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class f1,f2,f3 bad
+    class a1,a2,a3 svc
+    class t1,t2,t3 queue
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+| What failed | Retried by itself? | How to run it again | It carries on from |
+|---|---|---|---|
+| reading a circular | no | fix the cause (start Floci, say), then **Reprocess** | the pages already OCR'd, the text, the summary |
+| one company's check | no | **Reprocess** on the circular, signed in as that company | its gaps and "out of date" answers; "does it apply?" and the "up to date" answers are asked again |
+| a policy check | yes: the reconciler, every 15 minutes, while the policy says **Waiting for the worker** | nothing, or save the policy again to queue it at once | its embeddings and every saved answer |
+| a company refresh | its to-dos already saved, yes (the reconciler) | nothing | the saved to-dos |
 
 > 🔍 **See the queue live:**
 > `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` shows how many tasks are
-> waiting (`lag`) and being worked on (`pending`); `XRANGE rci:dead - +` lists the failures.
+> waiting (`lag`) and being worked on (`pending`); `XPENDING rci:tasks workers - + 10` lists
+> the pending ones with their owners; `XRANGE rci:dead - +` lists the failures.
 
 ---
 
@@ -677,22 +822,20 @@ flowchart LR
 The **circular's** status says how far the shared reading has got. Each **assessment's**
 status says how far one company has got with it:
 
+**The circular's status** (shared by every company):
+
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
+        direction TB
         c_new(["new"]) -->|"text saved"| c_parsed(["parsed"])
-        c_parsed -->|"summary and<br/>embedding saved"| c_read(["read"])
-        c_new -->|"older than 30 days"| c_skipped(["skipped"])
-        c_new -->|"failed for good"| c_failed(["failed"])
-        c_parsed -->|"failed for good"| c_failed
-        c_failed -->|"Reprocess"| c_parsed
-        c_read -.->|"then, per company"| a_pending(["assessment<br/>pending"])
-        a_pending -->|"judged, policies checked"| a_done(["assessment<br/>done"])
-        a_pending -->|"failed for good"| a_failed(["assessment<br/>failed"])
-        a_done -->|"Reprocess, or a new<br/>company description"| a_pending
-        a_failed -->|"Reprocess"| a_pending
+        c_parsed -->|"summary saved"| c_read(["read"])
+        c_new -->|"too old"| c_skipped(["skipped"])
+        c_new -->|"gave up"| c_failed(["failed"])
+        c_parsed -->|"gave up"| c_failed
+        c_failed -.->|"Reprocess:<br/>no text yet"| c_new
+        c_failed -.->|"Reprocess:<br/>text kept"| c_parsed
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -704,18 +847,60 @@ flowchart LR
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class c_new queued
+    class c_new queue
     class c_parsed,c_read data
-    class c_failed,a_failed bad
+    class c_failed bad
     class c_skipped muted
-    class a_pending svc
-    class a_done ok
-    classDef queued fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-What the console shows you combines the two: a circular is **Analysed** for you once your
+**Each company's assessment** (once the circular is `read`):
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        r(["the circular is read"]) --> a_pending(["pending"])
+        a_pending -->|"checked"| a_done(["done"])
+        a_pending -->|"gave up"| a_failed(["failed"])
+        a_done -.-> rp["Reprocess, or a new<br/>company description"]
+        rp -.-> a_pending
+        a_failed -.->|"Reprocess"| a_pending
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class a_pending svc
+    class a_done ok
+    class a_failed bad
+    class r start
+    class rp muted
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+"Too old" means published more than 30 days ago; "gave up" means failed for good; the dotted
+arrows are what **Reprocess** (or a new company description) does. What the console shows you
+combines the two: a circular is **Analysed** for you once your
 assessment is `done`, and **In progress** while it's still `pending`.
+
+**Where `skipped` is set:** by the worker, the first time it picks a `new` circular up, if it
+was published more than 30 days ago (`LOOKBACK_DAYS`). The watcher saves every circular on the
+regulators' lists, old ones too; reading those would cost OCR and Gemini for nothing. A
+circular with no date is never skipped. Nothing retries a skipped circular. To read one
+anyway, raise `LOOKBACK_DAYS`, restart the workers, and press **Reprocess** (Reprocess alone
+sets it back to `new`, but it's skipped again while it's still too old).
+
+**Where `failed` is set:** by `give_up()`, when a task fails for good: see
+[Failed work, and running it again](#failed-work-and-running-it-again). A failed circular
+stays failed until someone presses **Reprocess**.
 
 ### It saves after every step
 
@@ -918,7 +1103,7 @@ flowchart LR
 |---|---|---|---|
 | a service is down | OCR still loading, Gemini quota used up | leaves the task unacknowledged, waits a minute, tries again | nothing, or raise your quota |
 | a hiccup | a timeout, a server error, an answer in the wrong shape | retries the task up to 3 times | nothing |
-| anything else | the PDF has no text at all | marks the circular (or your assessment) `failed` with the error, copies the task to `rci:dead` | open the circular, read the error, press **Reprocess** |
+| anything else | the PDF has no text at all; the PDF is missing from S3; Gemini refuses the request | marks the circular (or your assessment) `failed` with the error, copies the task to `rci:dead` | open the circular, read **Why it failed**, fix the cause, press **Reprocess** ([how it runs again](#failed-work-and-running-it-again)) |
 | Redis is down | a restart | the api still saves your change; the worker waits for Redis; the reconciler queues what was missed | nothing |
 | a worker dies | the machine restarts | its task is picked up again (section 5) | nothing |
 
