@@ -40,8 +40,10 @@ ocr_pages                                    a PDF's pages OCR'd so far (by its 
 `queue.py`: the task stream. `STREAM` (`rci:tasks`), `GROUP` (`workers`), `DEAD`
 (`rci:dead`), `connect(url)`, and `enqueue(client, kind, **ids)`, which adds a task after the
 caller has committed its change, unless the same task is already queued or running (its
-dedupe key, `key(task)`, exists). If Redis is down it only logs. The task types are listed in
-its docstring.
+dedupe key, `key(task)`, exists); it returns whether it added it. If Redis can't take the
+task it raises, so the caller undoes its change or fails: the stream is the workers' only
+source of work, and a task is never dropped quietly. The task types are listed in its
+docstring.
 
 This isn't a service. Each service installs it from `../common` as a path dependency (see
 `[tool.uv.sources]` in its `pyproject.toml`), so every service keeps its own `.venv`.

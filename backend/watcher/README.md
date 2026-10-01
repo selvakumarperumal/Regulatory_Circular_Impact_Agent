@@ -18,10 +18,11 @@ which a worker picks up at once.
 | `storage.py` | Writes the PDFs to S3 |
 | `config.py` | Settings, from the environment or `.env` |
 
-A circular that fails (for example, its PDF link is broken, or S3 can't be reached because
-Floci isn't running) is not saved, so the next round tries it again. The task is queued only
-after the row is committed; if Redis is down at that moment, the workers' reconciler queues
-it later.
+A circular is saved with its task, or not at all. If it fails (its PDF link is broken, S3
+can't be reached because Floci isn't running, or Redis can't take the task), nothing about it
+is kept: the row is deleted again if it was already saved, and the next round tries it
+again. The task is queued only after the row is committed, so a worker always finds it; the
+task stream is the workers' only source of work.
 
 Run **one** watcher (compose pins `replicas: 1`): two would both find the same new circular.
 

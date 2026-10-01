@@ -899,8 +899,8 @@ published more than 30 days ago (`LOOKBACK_DAYS`). The watcher saves everything 
 regulators' lists, including old circulars, so `skipped` stops a first start from paying to
 read months of them. A circular with no publication date is never skipped.
 
-- Nothing retries a skipped circular: the worker's 15-minute check for lost work only looks
-  at `new` and `parsed` ones.
+- Nothing retries a skipped circular: no task is queued for it again, unless someone presses
+  **Reprocess**.
 - **To read one anyway:** raise `LOOKBACK_DAYS` in `.env`, restart the workers, then press
   **Reprocess** on it. Reprocess alone sets it back to `new`, but while it's still older than
   the window it's skipped again.
@@ -1655,7 +1655,8 @@ docker compose logs worker | grep -E "embedded| checked,| vs "
   running, the worker checks it once more when it finishes.
 - **One ticket per pair.** An edit never opens a second gap for the same circular and policy.
 - **Changing `GEMINI_EMBEDDING_MODEL_NAME`** turns every policy and circular into numbers again,
-  automatically: positions from two different models can't be compared.
+  automatically, the next time the worker uses it: positions from two different models can't
+  be compared.
 
 ---
 
@@ -1733,8 +1734,9 @@ the company. The overview's **Apply to us** tile says "Describe your company to 
 
 ### Step 3: you write the description
 
-Saving a new description clears **your** "does it apply?" answers (your assessments go back
-to pending) and queues `company.refresh` again. Other companies' answers are never touched.
+Every save of the description queues `company.refresh`; a changed description first clears
+**your** "does it apply?" answers (your assessments go back to pending). Other companies'
+answers are never touched.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1821,7 +1823,7 @@ The worker is the agent: a Python program ([`backend/worker/main.py`](backend/wo
 that runs all the time, as many copies as you like. Picture a ticket machine: every piece of
 work arrives as a ticket (a **task**) in one queue, and each clerk takes the next ticket as
 soon as they're free. When the queue is empty, the clerks simply wait: **no OCR, no Gemini,
-no database work** (apart from one quick look for missing work every 15 minutes).
+no database work**. The queue is their only source of work.
 
 > 📖 **More on the worker.** [how_the_worker_works.md](how_the_worker_works.md) follows a new
 > circular and a new policy through the worker, with exactly what goes through the queue and
@@ -1837,6 +1839,57 @@ no database work** (apart from one quick look for missing work every 15 minutes)
 | `circular.assess` | the worker, one per company after reading a circular; the api, when you **Reprocess** | decides whether it applies to that company, checks that company's closest policies, opens gaps | 1 question, plus up to 3 policy checks |
 | `policy.check` | the api, when you add or edit a policy | embeds it, checks it against your recent circulars that apply | 1 embedding, plus 1 check per circular where it's among the 3 closest |
 | `company.refresh` | the api, at sign-up and when you change your description | queues a `circular.assess` for each of your recent circulars | none itself |
+
+### Every change queues its task
+
+The queue is the workers' **only** source of work: a worker never looks in Postgres for
+something to do. So everything that needs a worker puts its task on the queue, right after
+the change is saved:
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        w["watcher:<br/>a new circular"] --> q[["the queue<br/>rci:tasks"]]
+        a["you, in the console: sign up,<br/>save the description or a<br/>policy, press Reprocess"] --> q
+        k["a worker: the next steps<br/>of a task it finished"] --> q
+        m["manage.py requeue:<br/>only after Redis<br/>lost its data"] -.-> q
+        q --> x(["the workers"])
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class w,a,k svc
+    class m muted
+    class q queue
+    class x ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+| What happens | The task |
+|---|---|
+| a regulator publishes a circular (the watcher finds it) | `circular.read` |
+| a company signs up | `company.refresh` |
+| you save your company description: **every save**, changed or not | `company.refresh` |
+| you add a policy, or save one again: **every save** | `policy.check` |
+| you press **Reprocess** | `circular.read`, or `circular.assess` for your company |
+| a circular has been read (the worker queues it) | `circular.assess`, one per company |
+| you add a control, update a gap, add a teammate | none: the worker reads a policy's controls each time it judges it |
+
+**If the queue is down** when something is saved, nothing is left half done: the watcher
+drops the circular and tries it again next round; the console says **try again** (a new
+sign-up or policy isn't saved at all; an edit is saved, and saving it again queues its task);
+a worker that can't queue its next steps runs its task again. **If Redis loses its data**
+(its volume deleted: a restart loses nothing), run `cd backend/api && uv run python manage.py
+requeue` once: it puts back every piece of unfinished work Postgres shows.
 
 ### Where tasks come from
 
@@ -1868,8 +1921,7 @@ flowchart TD
 
 The queue is a **Redis stream**, read by the workers as one **consumer group**: each task goes
 to exactly one worker. A task is only marked finished when the work is done, so a worker that
-dies mid-task doesn't lose it: it's picked up again. And every 15 minutes one worker checks
-Postgres for unfinished work whose task went missing, and queues it again.
+dies mid-task doesn't lose it: it's picked up again.
 
 ### How a worker takes a task
 
@@ -1965,8 +2017,9 @@ and [No duplicates](how_the_worker_works.md#7-no-duplicates-each-task-is-queued-
   up to 3 times.
 - **Anything else:** the circular (or your company's check of it) is marked **Failed** and the
   error is saved on it. Open it in the console to read why, then press **Reprocess**.
-- **Redis is down:** your changes are still saved; the workers wait for Redis, and the
-  reconciler queues whatever was missed.
+- **Redis is down:** the workers wait for it. The console says **try again** for anything
+  that needs a worker, and the watcher tries its new circulars again next round
+  ([Every change queues its task](#every-change-queues-its-task)).
 
 Details: [When things go wrong](#19-when-things-go-wrong).
 
@@ -1985,7 +2038,6 @@ Details: [When things go wrong](#19-when-things-go-wrong).
 | `embedded POL-AML (1 chunks) with gemini-embedding-001` | a new or edited policy was turned into numbers |
 | `POL-AML checked, gaps opened: none` | a saved policy was checked against the company's recent circulars (its page now says **Checked**) |
 | `OCR or Gemini unavailable (…); retrying` | a service is down or rate-limited; the task waits and tries again |
-| `reconciler: 3 unfinished tasks checked` | unfinished work was queued again, unless it was still queued |
 | `… failed for good` | the circular or check was marked failed; the error is on its page |
 
 A worker with nothing to do prints nothing.
@@ -1994,8 +2046,7 @@ A worker with nothing to do prints nothing.
 
 **Does it call Gemini every minute?** No. There's no polling: a worker wakes up when a task
 arrives, and only calls Gemini for real work: a new circular, a new or edited policy, a new
-company description, or **Reprocess**. The one timer is the reconciler, which looks in
-Postgres every 15 minutes for work whose task went missing; it calls no one itself.
+company description, or **Reprocess**. There's no timer at all.
 
 **Do I need to restart it after adding a policy or changing the company?** No. Saving queues
 a task, and a worker starts on it straight away.
@@ -2499,7 +2550,9 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-If Redis is down, the change is still saved, and a worker's reconciler queues it later. Lists
+If Redis can't take the task, the api answers 503 "try again": a new sign-up or policy is
+deleted again (nothing was saved), and an edit stays saved, so saving it again queues its
+task. Lists
 never read the heavy columns (the OCR text, the embeddings); the OCR text has its own
 endpoint. The interactive API docs are at http://localhost:8000/docs.
 
@@ -2546,7 +2599,8 @@ flowchart TD
 | Gemini or OCR returned a 5xx a few times | the circular shows **Failed**, with the error | **Reprocess** it |
 | A wrong API key or model name | the worker stops at startup: "Gemini rejected the key or model name" | fix `.env`, then restart the worker |
 | A PDF link is broken | the watcher logs "failed" for that circular | nothing: it's tried again next round |
-| Redis restarted or was down | the worker logs "Redis unavailable; retrying" | nothing: tasks on disk survive, and the reconciler queues anything missed |
+| Redis restarted or was down | the worker logs "Redis unavailable; retrying"; the console says "try again" when you save | wait for it, then save again. Tasks on disk survive a restart |
+| Redis lost its data (its volume deleted) | circulars stay **New** or **In progress**, policies **Waiting for the worker** | `cd backend/api && uv run python manage.py requeue`: it queues every piece of unfinished work again |
 | A worker died mid-task | nothing | nothing: its task is taken over (at once after a restart, otherwise after 5 minutes), and OCR carries on from the next unsaved page |
 | Postgres or Redis isn't running | the console says **Bad Gateway**; `docker compose ps` shows the api, worker and watcher restarting, and their logs say `failed to resolve host 'postgres'` (or `'redis'`) | `docker compose up -d` |
 | Another project holds port 5432 or 6379 | `docker compose up` stops with "port is already allocated" | stop the other project's database, or set `POSTGRES_PORT` / `REDIS_PORT` in `.env` |
@@ -2612,7 +2666,7 @@ flowchart TD
         a1 --> t1(["Read again, from<br/>what was saved"])
         f2["Your company's check<br/>failed"] -->|"press Reprocess"| a2["Your check back<br/>to pending"]
         a2 --> t2(["Judged again<br/>for your company"])
-        f3["A policy check failed"] -->|"nothing to do"| a3["Within 15 minutes, the<br/>worker sees it isn't<br/>checked"]
+        f3["A policy check failed"] -->|"save the policy<br/>again"| a3["Every save queues<br/>a new check"]
         a3 --> t3(["Checked again"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -2635,18 +2689,9 @@ flowchart TD
 |---|---|---|---|
 | reading a circular | no | fix the cause (start Floci, say), then **Reprocess** | the pages already read, the text, the summary |
 | your company's check of a circular | no | **Reprocess** on the circular | your gaps and "out of date" answers; "does it apply?" and the "up to date" answers are asked again |
-| checking a policy | yes, every 15 minutes, while the policy says **Waiting for the worker** | nothing, or save the policy again | its embeddings and every saved answer |
+| checking a policy | no: it keeps saying **Waiting for the worker** | save the policy again | its embeddings and every saved answer |
 
-**What the 15-minute check for lost work picks up**, and what it leaves alone on purpose:
-
-| Postgres shows | Run again by itself? | Why |
-|---|---|---|
-| a circular **New** or **In progress** that has no task | ✅ | the task was lost (Redis was down) |
-| a company's check still pending | ✅ | the same |
-| a policy saved after its last check | ✅ | the same, or its check failed |
-| a circular **Failed** | no | the same error would happen again: fix the cause and **Reprocess** |
-| a circular **Skipped** | no | too old, on purpose: see [Where "Skipped" comes from](#where-skipped-comes-from) |
-| a task a worker is still holding | no | it isn't lost: its worker, or another one after 5 minutes, carries on |
+Nothing re-runs failed work by itself: the same error would most likely happen again. A person fixes the cause, then saves again or presses **Reprocess**, which queues a new task.
 
 > 🔒 **Workers never step on each other.** However many run, each task goes to one worker,
 > and a task is never queued twice. See [Running several workers](#running-several-workers).
@@ -2697,11 +2742,10 @@ Settings you're most likely to change:
 | Setting | Default | What it changes |
 |---|---|---|
 | `GEMINI_MODEL_NAME` | `gemini-3.5-flash` | the model that answers the three questions |
-| `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | the model used for policy matching (changing it turns every policy and circular into numbers again) |
+| `GEMINI_EMBEDDING_MODEL_NAME` | `gemini-embedding-001` | the model used for policy matching (changing it turns each policy and circular into numbers again, the next time the worker uses it) |
 | `LOOKBACK_DAYS` | 30 | older circulars are skipped; new policies and new companies are checked against this window |
 | `MATCH_TOP_K` | 3 | how many policies Gemini checks per circular |
 | `WORKERS` | 1 | how many workers run side by side |
-| `RECONCILE_MINUTES` | 15 | how often one worker looks in Postgres for work whose task went missing |
 | `OCR_MAX_PAGES` | 20 | how many pages of each PDF are read |
 | `WATCH_INTERVAL_MINUTES` | 60 | how often the watcher visits the regulators |
 | `JWT_SECRET` | empty: a key made on first start, kept in Postgres | signs login tokens |
@@ -2869,6 +2913,15 @@ docker compose exec redis redis-cli XINFO GROUPS rci:tasks   # lag: waiting, pen
 docker compose exec redis redis-cli XRANGE rci:dead - +      # tasks that failed for good
 ```
 
+**…get the work back after Redis lost its data?** Redis keeps the queue on disk, so a
+restart loses nothing. If its data was deleted, queue every unfinished piece of work again,
+once:
+
+```bash
+cd backend/api && uv run python manage.py requeue
+# 3 unfinished: 3 queued, 0 already queued
+```
+
 **…run one service on my machine instead of in Docker?**
 
 ```bash
@@ -2899,7 +2952,6 @@ uv run python main.py --once               # work until the queue is empty, then
 | **Lookback** | The window (`LOOKBACK_DAYS`, 30) of recent circulars the agent cares about |
 | **OCR** | Optical character recognition: reading text from a picture of a page |
 | **Policy** | One of the company's own rule documents, e.g. its KYC policy. It has an owner, the regulators it answers to, and a version |
-| **Reconciler** | A check one worker runs every 15 minutes: unfinished work in Postgres whose task went missing is queued again |
 | **Requirements** | The concrete obligations Gemini found in a circular |
 | **Round** | One visit of the watcher to all three regulators, every 60 minutes |
 | **Stream, consumer group** | Redis's list of tasks, and the group of workers reading it, which hands each task to one of them |

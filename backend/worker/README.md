@@ -61,7 +61,7 @@ starts on it too.
 
 | File | Job |
 |---|---|
-| `main.py` | The task loop: take the next task, run it, then acknowledge, retry or give up; the reconciler |
+| `main.py` | The task loop: take the next task, run it, then acknowledge, retry or give up |
 | `pipeline.py` | What each task does: `read_circular`, `assess`, `check_policy`, `refresh_company` |
 | `failures.py` | What counts as "wait", "try again" or "give up" |
 | `ocr.py` | PDF to text through Unlimited-OCR |
@@ -84,8 +84,11 @@ starts on it too.
   restart; otherwise another worker takes it over once it has gone `CLAIM_IDLE_SECONDS` (5
   minutes) without its claim being renewed (`XAUTOCLAIM`). Either way, OCR carries on from
   the next unsaved page.
-- **A task goes missing** (Redis down or wiped): every `RECONCILE_MINUTES`, one worker queues
-  again whatever Postgres shows as unfinished.
+- **Redis is down:** the worker waits for it. Its own unfinished task stays on its pending
+  list; if Redis failed while it was queueing the next tasks, the task runs again and queues
+  them. The stream is its only source of work: it never looks in Postgres for something to
+  do. If Redis lost its data, `uv run python manage.py requeue` in `backend/api` queues every
+  unfinished piece of work again.
 - **A wrong API key or model name:** the worker stops at startup.
 
 LangChain first retries Gemini rate limits and server errors itself (`max_retries=3`), and

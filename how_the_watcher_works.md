@@ -428,9 +428,10 @@ flowchart TD
 The row also keeps the page link, the PDF link and the publication date. The text, the
 summary and everything else stay empty: the workers fill them in.
 
-> ✅ **Nothing half-saved.** The order (PDF first, then the row) means a circular in the
-> database always has its PDF. If anything fails before the row is saved, nothing is kept,
-> and the next round simply tries again.
+> ✅ **Nothing half-saved.** The order is the PDF, then the row, then the task (step 8). If
+> the task can't be queued, the row is deleted again. So a circular in the database always
+> has its PDF and its task; if anything fails, nothing is kept, and the next round simply
+> tries again.
 
 **In the code:** `fetch_new()` in `main.py`.
 
@@ -458,9 +459,11 @@ sequenceDiagram
 ```
 
 - Redis remembers each task while it's on the list, so the same task is never added twice
-  (for example, if the reconciler finds the same circular).
-- If Redis is down at that moment, the watcher only logs it. The row is saved, and within 15
-  minutes a worker's **reconciler** notices a `new` circular with no task, and adds one.
+  (for example, if someone presses **Reprocess** on it twice).
+- **The task list is the workers' only source of work**: they never look in Postgres for new
+  circulars. So if Redis can't take the task, the watcher deletes the row it just saved and
+  counts the circular as failed. Nothing about it is kept, and the next round tries it again,
+  from the download.
 
 **In the code:** `enqueue()` in `backend/common/common/queue.py`.
 
@@ -677,7 +680,8 @@ flowchart TD
         e(["Something failed"]) --> k{"What failed?"}
         k -->|"a whole listing<br/>(site down, page changed)"| r["Skip that regulator<br/>this round"]
         k -->|"one circular<br/>(PDF link, download, S3)"| s["Skip that circular:<br/>nothing was saved"]
-        k -->|"only the task<br/>(Redis down)"| n["The row is saved: the<br/>reconciler adds the task"]
+        k -->|"the task<br/>(Redis down)"| n["Delete the row again:<br/>nothing is kept"]
+        n --> again
         r --> again(["Next round tries again"])
         s --> again
     end
@@ -693,8 +697,8 @@ flowchart TD
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class e bad
     class k ask
-    class r,s muted
-    class n,again ok
+    class r,s,n muted
+    class again ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -705,7 +709,7 @@ flowchart TD
 | A circular's page has no PDF link | `RBI failed (…): no PDF link on …` | tried again every round | nothing, unless it lasts; then check the page by hand |
 | The download is an HTML page, not a PDF | `… failed (…): not a PDF: …` | tried again next round | nothing |
 | Floci (S3) isn't running | `… failed (…): Could not connect to the endpoint URL: "http://host.docker.internal:4566/…"` | nothing is saved; tried again every round | start Floci: `floci start --persist="$HOME/.floci/aws-state"` |
-| Redis is down | `couldn't queue {…}` | the row is saved; a worker's reconciler adds the task within 15 minutes | nothing |
+| Redis is down | `RBI failed (…): Error 111 connecting to redis:6379. Connection refused.` | the row is deleted again; tried again every round | start Redis: `docker compose up -d redis` |
 | Postgres is down | the watcher restarts until it's back | the next round catches up | `docker compose up -d` |
 
 > 💡 Because a failed circular isn't saved, it stays "new" in the watcher's eyes, so every
@@ -768,7 +772,6 @@ docker compose logs -f watcher
 | `RBI: seen=10 new=1 failed=0` | RBI's list had 10 items: 1 was new, none failed |
 | `RBI failed (https://…): …` | one circular couldn't be saved; the reason follows. It's retried next round |
 | `SEBI: listing failed: …` | the whole SEBI list couldn't be read this round |
-| `couldn't queue {…}` | Redis was down; the reconciler will add the task |
 | `sleeping 60 minutes` | the round is over |
 
 A quiet round looks like this, and is normal:

@@ -32,7 +32,7 @@ sections after it are the reference for each piece.
 12. [circular.assess](#12-circularassess)
 13. [policy.check](#13-policycheck)
 14. [company.refresh](#14-companyrefresh)
-15. [The reconciler](#15-the-reconciler)
+15. [Where tasks come from](#15-where-tasks-come-from)
 16. [Transactions, acknowledgements and crashes](#16-transactions-acknowledgements-and-crashes)
 17. [When something fails](#17-when-something-fails)
 18. [What the api and the watcher queue](#18-what-the-api-and-the-watcher-queue)
@@ -85,7 +85,7 @@ flowchart LR
 
 | What | How | Used for |
 |---|---|---|
-| **Redis** | redis-py, one connection | the task stream, the dedupe keys, the dead-letter stream, the reconciler's key |
+| **Redis** | redis-py, one connection | the task stream (its only source of work), the dedupe keys, the dead-letter stream |
 | **Postgres** | SQLAlchemy / SQLModel, a connection pool | every result |
 | **S3** (Floci locally) | boto3 | each circular's PDF, read once |
 | **ocr** | HTTP, vLLM's OpenAI-compatible API | page images to text, once per PDF |
@@ -155,7 +155,7 @@ flowchart TD
         s14 --> s9
         s15 --> s9
         s9[["9. Finish: put the next<br/>tasks on the list, then<br/>back to step 2"]]
-        s16[["16. Every 15 minutes:<br/>look for lost tasks"]]
+        s16[["16. Every change<br/>queues its task"]]
         s17["17. Something fails:<br/>wait, retry or give up"]
         s18["18. A worker dies:<br/>another carries on"]
         s9 ~~~ s16
@@ -206,7 +206,7 @@ flowchart TD
 | [13](#step-13-mark-it-done) | mark this company's check as done |
 | [14](#step-14-a-policy-is-added-or-edited) | a policy was added or edited: check it |
 | [15](#step-15-a-company-joins-or-changes-its-description) | a company joined or changed its description: check it |
-| [16](#step-16-look-for-lost-tasks) | every 15 minutes, look for lost tasks |
+| [16](#step-16-every-change-queues-its-task) | every change queues its task: the worker's only source of work |
 | [17](#step-17-something-fails) | something failed: wait, retry or give up, and how to run it again |
 | [18](#step-18-a-worker-dies) | a worker died: another one carries on |
 
@@ -338,11 +338,12 @@ Before looking, on every turn:
 
 - `XGROUP CREATE rci:tasks workers 0 MKSTREAM` makes the group if it doesn't exist (the very
   first start, or Redis lost its data). If it exists, Redis says so and nothing changes.
-- Once a minute, the worker may run the reconciler ([step 16](#step-16-look-for-lost-tasks)).
 - A task whose contents were trimmed away (the stream keeps about the last 100,000) is marked
   finished and skipped.
 
-There's no timer: a new task is picked up the moment it arrives.
+There's no timer, and no other source of work: a new task is picked up the moment it
+arrives, and the worker never looks in Postgres for something to do
+([step 16](#step-16-every-change-queues-its-task)).
 
 **The example starts here.** The watcher has just found circular 98 on RBI's website, saved
 it, and put a task on the list:
@@ -489,8 +490,8 @@ flowchart TD
   months ago (on its very first round especially). Reading those would cost OCR and Gemini
   for circulars nobody needs.
 - A circular with no publication date is never skipped.
-- Nothing retries a skipped circular: the reconciler ([step 16](#step-16-look-for-lost-tasks))
-  only looks for `new` and `parsed` ones.
+- Nothing retries a skipped circular: no task is ever queued for it again, unless someone
+  presses **Reprocess**.
 - **To read one anyway:** raise `LOOKBACK_DAYS` in `.env`, restart the workers, then press
   **Reprocess** on it. Reprocess alone sets it back to `new`, but while it's still older than
   the window, the worker skips it again.
@@ -539,9 +540,9 @@ flowchart TD
 - The error is saved in `circulars.error`. Every company sees it on the circular's page,
   under **Why it failed**.
 - **Why "nothing to do" here:** a failed circular's task was already finished when it was
-  given up. It only reaches this step from a stale copy of a task. The reconciler never
-  queues a failed circular again, on purpose: retrying "no text in the PDF" every 15 minutes
-  would just fail again.
+  given up. It only reaches this step from a stale copy of a task. Nothing queues a failed
+  circular again by itself, on purpose: retrying "no text in the PDF" would just fail
+  again.
 - **To run it again:** fix the cause (start Floci, say), then press **Reprocess**. The api sets
   the status back to `parsed` if the text was saved (or `new` if not), clears the error, and
   queues `circular.read`. The worker carries on from what was saved: the pages already OCR'd,
@@ -818,7 +819,7 @@ flowchart TD
    [step 3](#step-3-take-the-task-and-mark-it-as-its-own) stops.
 2. **Remove the "already queued" mark.** When a task is added to the list, a small Redis key
    (its **mark**) is set at the same time, and a copy of the same task is dropped while that
-   key exists. That's why the watcher and the reconciler can never queue circular 98 twice.
+   key exists. That's why pressing **Reprocess** twice can never queue circular 98 twice.
    Now the mark is removed (`DEL rci:queued:circular_id=98:type=circular.read`), so the same
    task can be queued again later, by **Reprocess** for example.
 3. **Put the next tasks on the list:** here, the two from
@@ -1123,9 +1124,8 @@ flowchart TD
 
 **If it fails here:** a policy has no "failed" status. The task is copied to `rci:dead`
 ([step 17](#step-17-something-fails)), and the policy keeps saying **Waiting for the
-worker**. Because it was saved after its last check, the reconciler
-([step 16](#step-16-look-for-lost-tasks)) queues its check again within 15 minutes: it's
-retried by itself. Saving the policy again queues it at once.
+worker** until someone saves it again: every save queues a new check
+([step 16](#step-16-every-change-queues-its-task)).
 
 **In the code:** `check_policy()` in `pipeline.py`. More: [section 13](#13-policycheck).
 
@@ -1170,35 +1170,30 @@ flowchart TD
 | 2 | 98 | **pending** | **(cleared)** |
 | 2 | 97 | **pending** | **(cleared)** |
 
-**If it fails here:** the to-dos it already saved are `pending`, so the reconciler
-([step 16](#step-16-look-for-lost-tasks)) queues them within 15 minutes.
+**If it fails here:** saving the company description again queues a new refresh, which
+queues the to-dos still `pending` ([step 16](#step-16-every-change-queues-its-task)).
 
 **In the code:** `refresh_company()` in `pipeline.py`. More:
 [section 14](#14-companyrefresh).
 
 **Keeping it all right** (steps 16 to 18)
 
-### Step 16: Look for lost tasks
+### Step 16: Every change queues its task
 
-Postgres holds the real state of everything; the list in Redis is only a to-do list. If Redis
-was down when a task was added (the api and the watcher only log it and carry on), or Redis
-lost its data, the task is gone, but the unfinished work still shows in Postgres. So every
-15 minutes, one worker looks for it and queues it again: the **reconciler**.
+The worker never goes looking for work: it never asks Postgres "is there anything to do?".
+**Everything it does arrives as a task on the Redis list.** So every change that needs a
+worker puts its task on the list, the moment the change is saved.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        t(["Once a minute,<br/>each worker"]) --> m{"SET rci:reconciled<br/>NX EX 900: am I first?"}
-        m -->|"no: another worker did<br/>it in the last 15 minutes"| skip(["Nothing"])
-        m -->|"yes"| l["Look in Postgres for<br/>unfinished work"]
-        l --> a["A circular still new<br/>or parsed: circular.read"]
-        l --> b["A pending check of a read<br/>circular: circular.assess"]
-        l --> c["A policy not checked since<br/>it was saved: policy.check"]
-        a --> q[["Queue each one: dropped<br/>if its mark is still there"]]
-        b --> q
-        c --> q
+        w["watcher: a new circular"] --> q[["Redis: rci:tasks,<br/>the only way in"]]
+        a["api: a sign-up, a company<br/>description, a policy saved,<br/>Reprocess"] --> q
+        k["worker: the next steps<br/>of a task it finished"] --> q
+        m["manage.py requeue:<br/>only after Redis lost its data"] -.-> q
+        q --> x(["the workers"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1210,37 +1205,85 @@ flowchart TD
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class t start
-    class m ask
-    class skip muted
-    class l svc
-    class a,b,c data
+    class w,a,k svc
+    class m muted
     class q queue
+    class x ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- **Only one worker per 15 minutes.** Each worker tries `SET rci:reconciled <its name> NX EX
-  900` once a minute. `NX` means "only if the key doesn't exist", and `EX 900` makes it
-  disappear after 15 minutes (`RECONCILE_MINUTES`). So exactly one worker wins each time.
-- **No duplicates.** A task that's still on the list or on a pending list still has its mark,
-  so the copy is dropped.
+| Something happens | Who queues | The task | What the worker does |
+|---|---|---|---|
+| the watcher finds a new circular | watcher | `circular.read` | steps 4 to 8 |
+| a company signs up | api | `company.refresh` | step 15 |
+| a company saves its description (**every save**, changed or not) | api | `company.refresh` | step 15 |
+| a policy is added | api | `policy.check` | step 14 |
+| a policy is saved again (**every save**) | api | `policy.check` | step 14 |
+| **Reprocess** on a circular that isn't read | api | `circular.read` | steps 4 to 8 |
+| **Reprocess** on a read circular | api | `circular.assess`, this company only | steps 10 to 13 |
+| a circular is read | worker | `circular.assess`, one per company | steps 10 to 13 |
+| a company refresh finds pending checks | worker | `circular.assess`, one per circular | steps 10 to 13 |
+| a policy was saved again while its check ran | worker | `policy.check` again | step 14 |
+| a control is added, a gap updated, a teammate added | nobody | none | nothing to do: the worker reads a policy's controls each time it judges it |
+| the embedding model setting changes | nobody | none | the worker re-embeds each policy the next time it meets it (step 11) |
 
-What it picks up, and what it never does:
+Each one is queued **after** its change is committed, so the worker always finds the change
+when it gets the task. A copy of a task that's still on the list is dropped by its mark
+([step 9](#step-9-finish-the-task)).
 
-| Postgres shows | Queued again? | Why |
-|---|---|---|
-| a circular `new` or `parsed` | ✅ `circular.read` | it was never finished |
-| an assessment `pending`, of a read circular | ✅ `circular.assess` | the same |
-| a policy never checked, saved after its last check, or turned into numbers by another model | ✅ `policy.check` | the same |
-| a circular `failed` | no | it was given up for good; **Reprocess** it once the cause is fixed |
-| an assessment `failed` | no | the same: **Reprocess** the circular |
-| a circular `skipped` | no | too old, on purpose ([step 4](#step-4-skip-it-or-read-it)) |
-| a task still on someone's pending list | no (its mark is there) | step 2 picks it up: its owner, or another worker after 5 minutes |
+#### If Redis can't take a task
 
-**Log:** `reconciler: 3 unfinished tasks checked`
+The rule is: **a change is only finished when its task is on the list.** Nobody just logs a
+lost task and moves on.
 
-**In the code:** `reconcile()` in `main.py`, `missing_work()` in `pipeline.py`. More:
-[section 15](#15-the-reconciler).
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        e(["Redis can't take the task"]) --> who{"Who was queueing it?"}
+        who -->|"the watcher"| wa["Delete the circular's row:<br/>the next round tries again"]
+        who -->|"the api, creating<br/>(sign-up, new policy)"| ac["Delete what it created;<br/>503: nothing was saved,<br/>try again"]
+        who -->|"the api, changing<br/>(description, policy,<br/>Reprocess)"| ae["503: saved, try again.<br/>Saving again queues it"]
+        who -->|"the worker, queueing<br/>its next tasks"| wo["No XACK: the task<br/>runs again, and queues<br/>them again"]
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class e bad
+    class who ask
+    class wa,ac,ae,wo svc
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+Saving again always works because the description, a policy and Reprocess queue their task
+on **every** save, not only when something changed.
+
+#### If Redis loses its data
+
+Redis keeps the list on disk (`--appendonly yes`), so a restart loses nothing. Only if its
+data is deleted (the `redis-data` volume removed, say) are the queued tasks gone. Then a
+person runs, once:
+
+```bash
+cd backend/api && uv run python manage.py requeue
+# 3 unfinished: 3 queued, 0 already queued
+```
+
+It puts back every piece of work Postgres shows unfinished: circulars still `new` or
+`parsed`, checks still `pending`, policies not checked since they were saved. It's a
+producer, like the api: the worker still only reads the list.
+
+**In the code:** `enqueue()` in `backend/common/common/queue.py`; `enqueue()` and
+`enqueue_or_undo()` in `backend/api/database.py`; `fetch_new()` in `backend/watcher/main.py`;
+`requeue()` in `backend/api/manage.py`. More: [section 15](#15-where-tasks-come-from).
 
 ### Step 17: Something fails
 
@@ -1351,7 +1394,7 @@ flowchart TD
         a1 --> t1[["circular.read"]]
         f2["A failed company check"] -->|"press Reprocess<br/>on the circular"| a2["assessment pending;<br/>its 'up to date'<br/>answers cleared"]
         a2 --> t2[["circular.assess"]]
-        f3["A failed policy check"] -->|"nothing to do"| a3["the reconciler sees it<br/>isn't checked, within<br/>15 minutes"]
+        f3["A failed policy check"] -->|"save the policy<br/>again"| a3["every save queues<br/>a new check"]
         a3 --> t3[["policy.check"]]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -1374,8 +1417,8 @@ flowchart TD
 |---|---|---|---|
 | reading a circular (`failed`) | no | fix the cause, then **Reprocess** | the pages already OCR'd, the text, the summary |
 | one company's check (its assessment `failed`) | no | **Reprocess** on the circular, signed in as that company | its gaps and "out of date" answers; "does it apply?" and the "up to date" answers are asked again |
-| a policy check | yes: the reconciler, every 15 minutes, while the policy says **Waiting for the worker** | nothing, or save the policy again to queue it at once | its embeddings and every saved answer |
-| a company refresh | its to-dos already saved, yes (the reconciler) | nothing | the saved to-dos |
+| a policy check | no: it keeps saying **Waiting for the worker** | save the policy again | its embeddings and every saved answer |
+| a company refresh | no | save the company description again | the to-dos already saved |
 
 **Log:** `OCR or Gemini unavailable (…); retrying` (wait), `… failed (…); trying again`
 (retry) or `… failed for good` (give up)
@@ -1425,7 +1468,7 @@ flowchart TD
   worker finds its own task straight away.
 - **A new name:** `docker compose up --build` (or a scale-down) replaces the container, which
   gets a new hostname. The old name's task is then taken over after 5 minutes.
-- The reconciler doesn't queue it again meanwhile: its mark is still there, so a copy would be
+- Nothing else queues it again meanwhile: its mark is still there, so a copy would be
   dropped.
 - The tries count starts again at zero (it lived in the dead worker's memory).
 
@@ -1450,8 +1493,8 @@ flowchart TD
 flowchart TB
     subgraph canvas[" "]
         direction TB
-        main["<b>main.py</b><br/>the task loop: next_task, run_task,<br/>give_up, reconcile"]
-        pipeline["<b>pipeline.py</b><br/>one function per task type,<br/>embeddings, missing_work"]
+        main["<b>main.py</b><br/>the task loop: next_task, run_task,<br/>keep_claimed, give_up"]
+        pipeline["<b>pipeline.py</b><br/>one function per task type,<br/>OCR, matching, embeddings"]
         queue[["<b>common/queue.py</b><br/>the stream's names, connect,<br/>enqueue with its dedupe key"]]
         failures["<b>failures.py</b><br/>wait, retry or give up"]
         llm["<b>llm.py</b><br/>the three Gemini questions,<br/>embeddings"]
@@ -1489,8 +1532,8 @@ flowchart TB
 
 | File | What's in it |
 |---|---|
-| `main.py` | `main()` (the loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `keep_claimed` (renews the claim while a task runs), `give_up`, `reconcile`, `check_gemini` |
-| `pipeline.py` | one function per task type: `read_circular`, `assess`, `check_policy`, `refresh_company`; `ocr_text` (OCR page by page, each saved) and `twin`; `match` and `judge_policy`; the embeddings; `missing_work` for the reconciler. Each returns the tasks to queue next |
+| `main.py` | `main()` (the loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `keep_claimed` (renews the claim while a task runs), `give_up`, `check_gemini` |
+| `pipeline.py` | one function per task type: `read_circular`, `assess`, `check_policy`, `refresh_company`; `ocr_text` (OCR page by page, each saved) and `twin`; `match` (re-embeds a policy another model made) and `judge_policy`; the embeddings. Each returns the tasks to queue next |
 | `../common/common/queue.py` | the Redis names, `connect()`, `key()` (a task's dedupe key) and `enqueue()` (shared with the watcher and the api) |
 | `llm.py` | the Gemini client, the three prompts with their Pydantic reply models, `embed()` |
 | `ocr.py` | PDF pages to text, one at a time (`pages()`): rendering, the OCR request, cleaning the output |
@@ -1548,10 +1591,7 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         start(["main(): forever"]) --> join["XGROUP CREATE<br/>rci:tasks workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)"]
-        join --> due{"A minute since<br/>the last try?"}
-        due -->|"yes"| rec["reconcile(): does work only if<br/>SET rci:reconciled NX EX succeeds"]
-        due -->|"no"| next
-        rec --> next["next_task()"]
+        join --> next["next_task()"]
         next --> got{"A task?"}
         got -->|"yes"| run["run_task(): do it,<br/>XACK unless it's to be retried"]
         got -->|"no, and --once"| stop(["exit"])
@@ -1570,8 +1610,8 @@ flowchart TD
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class start start
-    class join,rec,next svc
-    class due,got ask
+    class join,next svc
+    class got ask
     class run ext
     class stop,wait muted
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
@@ -1583,9 +1623,11 @@ flowchart TD
 - There is **no polling interval**: `next_task` blocks on Redis for up to 5 seconds, and
   returns the moment a task arrives.
 - `--once` (used by tests) works until a 5-second wait finds nothing, then exits.
-- Redis down or timing out: the loop logs it, waits `RETRY_SECONDS` and starts again. The
-  api and the watcher keep saving their changes meanwhile; the reconciler queues what was
-  missed.
+- Redis down or timing out: the loop logs it, waits `RETRY_SECONDS` and starts again.
+  Meanwhile the api answers "try again" and the watcher retries next round
+  ([section 15](#15-where-tasks-come-from)), so nothing is saved without its task.
+- The loop is the worker's only source of work: there's no timer and no Postgres query
+  looking for something to do.
 
 ---
 
@@ -1808,8 +1850,8 @@ sees:
 ## 10. No duplicates: the dedupe key
 
 The consumer group gives each task to one worker, so workers need no locks to share the
-work. What's left is the same **work** queued twice (the reconciler, a double Reprocess, a
-watcher restart). `enqueue` prevents it with a key per task:
+work. What's left is the same **work** queued twice (a double Reprocess, two quick saves of
+a policy, a task re-run after a crash queueing its follow-ups again, `manage.py requeue`). `enqueue` prevents it with a key per task:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -1995,7 +2037,7 @@ sequenceDiagram
             K->>PG: UPDATE applicable, applies_reason, COMMIT
         end
         opt applies, and has requirements
-            K->>PG: SELECT the company's policies (embedded, this regulator)
+            K->>PG: SELECT the company's policies for this regulator<br/>(embed any another model made, COMMIT)
             K->>PG: SELECT the circular's judged pairs and gaps
             Note right of K: score each (cosine, best chunk),<br/>keep MATCH_TOP_K
             loop each top policy not judged at this version, with no gap
@@ -2016,8 +2058,9 @@ circular says who it's for. Without a description the assessment is marked `done
 
 **The closest policies** (`match`), with no Gemini call:
 
-1. The company's policies embedded with the current model that list the circular's
-   regulator.
+1. The company's policies that list the circular's regulator. One not embedded with the
+   current model (new, edited, or the model setting changed) is embedded first
+   (`embed_policy()`, a no-op otherwise).
 2. Each one's score is the best **cosine similarity** between the circular's embedding and
    any of the policy's 5,000-character chunks.
 3. Keep the top `MATCH_TOP_K` (3), and skip pairs already judged at this version, or that
@@ -2065,7 +2108,7 @@ Logs: `#98 vs POL-KYC v1 (0.74): GAP` (0.74 is the similarity), then
 ## 13. policy.check
 
 `check_policy(session, company_id, policy_id)`, queued by the api whenever a policy is
-added or saved, and by the reconciler for a policy saved after its last check.
+added or saved (every save), and by itself when the policy was saved again during the check.
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -2144,27 +2187,21 @@ console shows them as skipped).
 
 ---
 
-## 15. The reconciler
+## 15. Where tasks come from
 
-Postgres is the truth; the stream is only the to-do list. A task can go missing: Redis was
-down when the api or watcher tried `XADD` (`enqueue` logs and carries on, never failing the
-request), or Redis lost its data. Every `RECONCILE_MINUTES` (15), one worker queues again
-whatever Postgres shows as unfinished:
+The stream is the worker's **only** source of work. It never queries Postgres for things to
+do: every change that needs a worker queues its task, right after the change is committed.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        tick(["every minute, each worker"]) --> nx{"SET rci:reconciled &lt;me&gt;<br/>NX EX RECONCILE_MINUTES×60"}
-        nx -->|"nil: another worker<br/>did it this interval"| skip(["nothing"])
-        nx -->|"OK: my turn"| mw["missing_work(): three queries"]
-        mw --> q1["circulars still<br/>new or parsed<br/>→ circular.read"]
-        mw --> q2["assessments pending,<br/>circular read<br/>→ circular.assess"]
-        mw --> q3["policies saved after their<br/>checked_at, or never checked<br/>→ policy.check"]
-        q1 --> add[["enqueue each: work still<br/>queued is skipped by its key"]]
-        q2 --> add
-        q3 --> add
+        W["watcher<br/>fetch_new()"] -->|"circular.read"| Q[["rci:tasks"]]
+        A["api<br/>database.enqueue()"] -->|"company.refresh, policy.check,<br/>circular.read, circular.assess"| Q
+        K["worker<br/>run_task(): follow-ups"] -->|"circular.assess,<br/>policy.check"| Q
+        M["manage.py requeue<br/>(a person, after Redis<br/>lost its data)"] -.-> Q
+        Q --> X(["XREADGROUP:<br/>the workers"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -2176,20 +2213,46 @@ flowchart TD
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class tick start
-    class nx ask
-    class skip muted
-    class mw svc
-    class q1,q2,q3 data
-    class add queue
+    class W,A,K svc
+    class M muted
+    class Q queue
+    class X ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- **One worker per interval.** Each worker tries once a minute; `SET NX EX` succeeds for
-  exactly one of them, and the key expires when the next run is due.
-- **No duplicates.** Work that's still queued or running is skipped by its dedupe key.
-- **Policies** are unfinished when they were saved after their last check (`checked_at` is
-  missing or older than `updated_at`) or embedded with another model.
+| Event | Code | Task | Queued when |
+|---|---|---|---|
+| a new circular | `fetch_new()`, `watcher/main.py` | `circular.read` | after its row is committed |
+| a sign-up | `sign_up()`, `api/routes/auth.py` | `company.refresh` | after the company and user are committed |
+| a company description saved | `set_company()`, `api/routes/company.py` | `company.refresh` | on **every** save, changed or not |
+| a policy added | `create_policy()`, `api/routes/policies.py` | `policy.check` | after it's committed |
+| a policy saved again | `update_policy()`, `api/routes/policies.py` | `policy.check` | on **every** save |
+| Reprocess, circular not read | `reprocess_circular()`, `api/routes/circulars.py` | `circular.read` | after its status is set back |
+| Reprocess, circular read | `reprocess_circular()` | `circular.assess` (this company) | after the assessment is set back to pending |
+| a circular read | `read_circular()` returns them, `run_task()` queues | `circular.assess` per company | when the task is finished |
+| a company refresh | `refresh_company()` returns them | `circular.assess` per pending circular | when the task is finished |
+| a policy saved during its check | `check_policy()` returns it | `policy.check` | when the task is finished |
+
+Nothing is queued for a new control, a gap update, a teammate or a password: no worker work
+depends on them (`judge_policy()` reads the controls each time). A change of
+`GEMINI_EMBEDDING_MODEL_NAME` queues nothing either: `embed_circular()` and `match()` re-embed
+whatever they meet that another model made.
+
+**When Redis can't take a task.** `enqueue()` raises (after deleting the dedupe key it set),
+and each producer handles it so no task is ever lost quietly:
+
+| Producer | What it does | Why that's enough |
+|---|---|---|
+| watcher | deletes the circular's row and counts the circular as failed | the next round finds it unknown, and saves it with its task |
+| api, creating (`enqueue_or_undo()`: sign-up, new policy) | deletes what it created; 503 "nothing was saved: try again" | trying again starts clean |
+| api, changing (`enqueue()`: description, policy save, Reprocess) | keeps the change; 503 "Saved, but the task queue is unavailable: try again" | each of these queues its task on every save |
+| worker (`run_task()`, queueing follow-ups) | the error reaches the main loop: no `XACK`, wait `RETRY_SECONDS` | the task stays pending, runs again, finds its work saved, and queues its follow-ups |
+
+**When Redis loses its data** (its volume deleted; a restart loses nothing, the stream is on
+disk), `manage.py requeue` in `backend/api` queues every unfinished piece of work Postgres
+shows: circulars `new` or `parsed`, assessments `pending` of read circulars, policies never
+checked or saved after their check. A task still queued is skipped by its key; it prints
+`N unfinished: X queued, Y already queued`.
 
 ---
 
@@ -2239,9 +2302,9 @@ task is still pending in Redis, under the dead worker's name:
 
 **Who picks it up.** The same container, restarted by Docker, reads its own pending list
 first. Otherwise another worker takes the task over once it has gone `CLAIM_IDLE_SECONDS`
-(5 minutes) without its claim being renewed, and the reconciler may queue the unfinished
-work sooner. A container recreated by `docker compose up --build` comes back with a new
-name, so its old task waits those 5 minutes.
+(5 minutes) without its claim being renewed. A container recreated by `docker compose up
+--build` comes back with a new name, so its old task waits those 5 minutes. Nothing queues
+the task again meanwhile: its dedupe key is still set.
 
 **Reloading after a commit.** SQLAlchemy expires a session's objects when it commits, so the
 next use reads the row again: the worker always sees the latest values, including changes
@@ -2297,15 +2360,18 @@ flowchart TD
   `gemini_status()` reads the HTTP code from the error underneath LangChain's.
 - The tries counter lives in the worker process, keyed by task id.
 - `give_up` marks a `circular.read` failure on the circular (every company sees it) and a
-  `circular.assess` failure on that company's assessment only. Other failures only go to
-  `rci:dead`; the reconciler tries an unchecked policy again later.
+  `circular.assess` failure on that company's assessment only. Other failures
+  (`policy.check`, `company.refresh`) only go to `rci:dead`: saving the policy, or the
+  company description, again queues a new task. Nothing re-runs failed work by itself.
 
 ---
 
 ## 18. What the api and the watcher queue
 
 Every producer saves its change first, then adds the task, so a worker never receives a
-task whose change it can't see yet:
+task whose change it can't see yet. If Redis can't take the task, nothing is left half done
+([section 15](#15-where-tasks-come-from)): the watcher deletes the row, and the api answers
+503, deleting a sign-up or a new policy it just created:
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
@@ -2324,7 +2390,7 @@ sequenceDiagram
         A->>R: enqueue company.refresh
         A->>PG: POST or PUT /policies: INSERT or UPDATE policies
         A->>R: enqueue policy.check
-        A->>PG: PUT /company (new description): UPDATE companies,<br/>its assessments of read circulars back to pending
+        A->>PG: PUT /company (every save): UPDATE companies, and if the<br/>description changed, its assessments of read circulars back to pending
         A->>R: enqueue company.refresh
         A->>PG: POST /circulars/{id}/reprocess (read): upsert its assessment pending,<br/>DELETE its "up to date" policy_checks
         A->>R: enqueue circular.assess
@@ -2340,8 +2406,8 @@ sequenceDiagram
 | sign up a company | `INSERT` the company and its first user | `company.refresh` |
 | add a policy | `INSERT INTO policies`, version 1, no embeddings | `policy.check` |
 | edit a policy | text: `version + 1`, embeddings cleared, `policy_updated` on its open gaps; title: embeddings cleared; always `updated_at` | `policy.check` |
-| add a control | `INSERT INTO controls` | none: part of the next checks |
-| change the company description | the company's assessments of read circulars → `pending`, `applicable` cleared | `company.refresh` |
+| add a control | `INSERT INTO controls` | none: `judge_policy` reads the controls each time |
+| save the company description (every save) | if it changed: the company's assessments of read circulars → `pending`, `applicable` cleared | `company.refresh` |
 | **Reprocess** a read circular | the company's assessment → `pending` (upsert); its "up to date" verdicts on it deleted | `circular.assess` |
 | **Reprocess** any other circular | status `parsed` if it has text, else `new`; `error` cleared | `circular.read` |
 | add a teammate, change a password | `users` | none |
@@ -2352,7 +2418,7 @@ sequenceDiagram
 
 | Command | Who | When |
 |---|---|---|
-| `SET rci:queued:<task> 1 NX EX 86400`, then `XADD rci:tasks MAXLEN ~ 100000 * type … ids …` | watcher, api, worker | a task is queued (`enqueue`); skipped if the key exists |
+| `SET rci:queued:<task> 1 NX EX 86400`, then `XADD rci:tasks MAXLEN ~ 100000 * type … ids …` | watcher, api, worker, `manage.py requeue` | a task is queued (`enqueue`); skipped if the key exists. If either fails: `DEL` the key, and the error is raised |
 | `XGROUP CREATE rci:tasks workers 0 MKSTREAM` | worker | every turn of the loop; `BUSYGROUP` means it exists |
 | `XREADGROUP GROUP workers <me> COUNT 1 STREAMS rci:tasks 0` | worker | its own unfinished task |
 | `XAUTOCLAIM rci:tasks workers <me> 300000 0-0 COUNT 1` | worker | a dead worker's task |
@@ -2360,7 +2426,6 @@ sequenceDiagram
 | `XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS rci:tasks >` | worker | a new task |
 | `DEL rci:queued:<task>`, then `XACK rci:tasks workers <id>` | worker | a task finished or given up |
 | `XADD rci:dead * type … ids … task_id … error …` | worker | a task given up |
-| `SET rci:reconciled <me> NX EX 900` | worker | once a minute: is it my turn to reconcile? |
 
 To look inside: `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` (`lag`: waiting,
 `pending`: being worked on), `XRANGE rci:dead - +`, `KEYS rci:queued:*`.
@@ -2378,7 +2443,7 @@ What each task sends, in order. `…` stands for the values.
 | `circular.assess` | `SELECT` the company and the circular; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT` the assessment; maybe `UPDATE assessments SET applicable, applies_reason`, `COMMIT`; `SELECT … FROM policies WHERE company_id = …`; `SELECT policy_id, policy_version FROM policy_checks WHERE circular_id = …`; `SELECT policy_id FROM gaps WHERE circular_id = …`; per policy asked: `SELECT … FROM controls`, `INSERT INTO policy_checks`, maybe `INSERT INTO gaps … RETURNING id` and `INSERT INTO gap_events`, `COMMIT`; `UPDATE assessments SET status = 'done', error = NULL, updated_at`, `COMMIT` |
 | `policy.check` | `SELECT` the policy and the company; maybe `UPDATE policies SET embeddings, embedding_model`, `COMMIT`; `SELECT circulars … JOIN assessments …` (no `text`); per circular, the matching statements of `circular.assess`; `UPDATE policies SET checked_at`, `COMMIT` |
 | `company.refresh` | `SELECT id FROM circulars WHERE status = 'read' AND published_at >= …`; `INSERT INTO assessments … ON CONFLICT DO NOTHING`, `COMMIT`; `SELECT … WHERE pending` |
-| reconciler | `SELECT id FROM circulars WHERE status IN ('new', 'parsed')`; the pending assessments; `SELECT company_id, id FROM policies WHERE checked_at IS NULL OR checked_at < updated_at OR embedding_model IS DISTINCT FROM …` |
+| `manage.py requeue` (a person, after Redis lost its data) | `SELECT id FROM circulars WHERE status IN ('new', 'parsed')`; the pending assessments of read circulars; `SELECT company_id, id FROM policies WHERE checked_at IS NULL OR checked_at < updated_at` |
 | giving up | `ROLLBACK`; `UPDATE circulars` or `UPDATE assessments SET status = 'failed', error = …`; `COMMIT` |
 
 To watch them yourself, run a worker on the host with `echo=True` in `make_engine` for a
@@ -2427,14 +2492,13 @@ keep their defaults unless you add them there.
 | `LOOKBACK_DAYS` | 30 | older new circulars are skipped; how far back new policies and companies look |
 | `CLAIM_IDLE_SECONDS` | 300 | how long a task can go without its claim renewed before another worker takes it |
 | `RETRY_SECONDS` | 60 | the wait while OCR, Gemini or Redis is down |
-| `RECONCILE_MINUTES` | 15 | how often one worker looks for missing tasks |
 | `WORKERS` (compose) | 1 | how many workers run side by side |
 
 Constants in the code:
 
 | Constant | Value | Where | Meaning |
 |---|---|---|---|
-| `STREAM`, `GROUP`, `DEAD`, `RECONCILED` | `rci:tasks`, `workers`, `rci:dead`, `rci:reconciled` | `common/queue.py` | the Redis names |
+| `STREAM`, `GROUP`, `DEAD` | `rci:tasks`, `workers`, `rci:dead` | `common/queue.py` | the Redis names |
 | dedupe keys | `rci:queued:…`, expire after 1 day | `common/queue.py` | a task is queued at most once at a time |
 | stream length | 100000 (approximate) | `common/queue.py` | the stream is trimmed beyond this |
 | blocking read | 5000 ms | `main.py` | how long a worker waits for a new task per read |
