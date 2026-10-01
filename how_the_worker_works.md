@@ -949,6 +949,8 @@ flowchart LR
 **Want more?**
 
 - [How it works](how_it_works.md), the main guide to the whole app.
+- [How the watcher works](how_the_watcher_works.md): where the `circular.read` tasks come
+  from, step by step.
 - [Worker internals](backend/worker/INTERNALS.md): everything the worker does in 18 steps,
   then every function, Redis command, SQL statement and commit, for developers changing
   the code.

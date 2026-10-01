@@ -1,5 +1,10 @@
 # watcher
 
+> 📘 **New to the watcher?** [How the watcher works](../../how_the_watcher_works.md) follows
+> one hourly round step by step, with a diagram for each step: reading each regulator, the
+> PDF in S3, the row in Postgres, the task for the workers, and what happens when something
+> fails.
+
 Every `INTERVAL_MINUTES` it checks the RBI, SEBI and IRDAI sites for circulars it hasn't seen.
 For each new one it downloads the PDF, stores it in S3 as `<source>/<sha256>.pdf`, adds a
 `circulars` row with status `new`, and queues a `circular.read` task on the Redis stream,
