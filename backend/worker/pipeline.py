@@ -6,7 +6,7 @@ import logging
 import math
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import defer
 from sqlmodel import Session, col, select
@@ -170,17 +170,40 @@ def check_policy(session: Session, company_id: int, policy_id: int) -> Tasks:
 
 
 def refresh_company(session: Session, company_id: int) -> Tasks:
-    """company.refresh: an assessment of each circular read in the last
-    LOOKBACK_DAYS, and a circular.assess task for each still pending."""
-    if session.get(Company, company_id) is None:
+    """company.refresh, queued when a company's description is added or changed. Its
+    answers given before that go back to pending, each circular read in the last
+    LOOKBACK_DAYS gets an assessment, and each pending one is a circular.assess task.
+    Only "does it apply?" is asked again: the OCR text, the summaries and the policy
+    verdicts are kept. Queues itself again if the description changed meanwhile."""
+    company = session.get(Company, company_id)
+    if company is None:
         return []
+    described_at = company.updated_at
+    session.execute(
+        update(Assessment)
+        .where(
+            Assessment.company_id == company_id,
+            Assessment.status != "pending",
+            Assessment.updated_at < described_at,
+        )
+        .values(
+            status="pending",
+            applicable=None,
+            applies_reason=None,
+            error=None,
+            updated_at=now(),
+        )
+    )
     recent = session.exec(
         select(Circular.id).where(
             Circular.status == "read", Circular.published_at >= cutoff()
         )
     ).all()
     add_assessments(session, [(company_id, circular_id) for circular_id in recent])
-    return pending(session, Assessment.company_id == company_id)
+    tasks = pending(session, Assessment.company_id == company_id)
+    if company.updated_at > described_at:
+        tasks.append(("company.refresh", {"company_id": company_id}))
+    return tasks
 
 
 def match(session: Session, c: Circular, company: Company) -> list[str]:

@@ -1,6 +1,7 @@
 """Circulars, shared by every company, each shown with the company's own status: a
 read circular is "parsed" while the company's assessment is pending, "analyzed" once
-it's done, "failed" if it failed, and "skipped" if it's older than LOOKBACK_DAYS and
+it's done (or, with no assessment, while the company has no description: "Not
+checked"), "failed" if it failed, and "skipped" if it's older than LOOKBACK_DAYS and
 never judged for the company. The OCR text has its own endpoint."""
 
 from datetime import UTC, datetime, timedelta
@@ -11,13 +12,14 @@ from pydantic import BaseModel
 from sqlalchemy import and_, case, delete, literal, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import defer
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 from auth import CurrentUser
 from common.models import (
     Assessment,
     Circular,
     CircularBase,
+    Company,
     Gap,
     Policy,
     PolicyCheck,
@@ -57,23 +59,29 @@ def assessed_by(company_id: int):
     )
 
 
-def shown_status():
+def shown_status(session: Session, company_id: int):
+    """A read circular the company has no assessment of is "skipped" when it's older
+    than LOOKBACK_DAYS. A recent one is "analyzed" (Not checked) while the company has
+    no description, else "parsed": a company.refresh is on its way."""
     cutoff = datetime.now(UTC) - timedelta(days=settings.LOOKBACK_DAYS)
     old = or_(col(Circular.published_at).is_(None), Circular.published_at < cutoff)
-    return case(
+    unjudged = col(Assessment.id).is_(None)
+    whens = [
         (Circular.status != "read", Circular.status),
         (Assessment.status == "done", literal("analyzed")),
         (Assessment.status == "failed", literal("failed")),
-        (and_(col(Assessment.id).is_(None), old), literal("skipped")),
-        else_=literal("parsed"),
-    )
+        (and_(unjudged, old), literal("skipped")),
+    ]
+    if not session.get(Company, company_id).profile:
+        whens.append((unjudged, literal("analyzed")))
+    return case(*whens, else_=literal("parsed"))
 
 
 def views(
     session: SessionDep, company_id: int, *where, status: str | None = None, limit=1
 ) -> list[CircularView]:
     """The circulars as this company sees them, newest first."""
-    shown = shown_status()
+    shown = shown_status(session, company_id)
     query = (
         select(Circular, Assessment, shown)
         .options(defer(Circular.text), defer(Circular.embedding))

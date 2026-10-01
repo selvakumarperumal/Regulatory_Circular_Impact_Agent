@@ -46,7 +46,7 @@ def health(session: SessionDep) -> dict:
 @app.get("/stats")
 def stats(user: CurrentUser, session: SessionDep) -> dict:
     """The company's circulars and gaps by status, and its overdue gaps."""
-    shown = shown_status()
+    shown = shown_status(session, user.company_id)
     ours = Gap.company_id == user.company_id
     overdue = (col(Gap.status).in_(OPEN_STATUSES), Gap.due_date < date.today())
     return {

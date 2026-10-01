@@ -2,7 +2,7 @@
  * who can sign in, and your own password. */
 import { api } from "../lib/api.js";
 import { $, html, put } from "../lib/html.js";
-import { fmtDate, fmtDateTime, plural } from "../lib/format.js";
+import { fmtDate, fmtDateTime } from "../lib/format.js";
 import { busy, dimWhile, toast } from "../ui/feedback.js";
 import { pageHead, panel, person } from "../ui/components.js";
 import { setCrumbs } from "../app/router.js";
@@ -91,9 +91,7 @@ export async function companyPage() {
         method: "PUT", body: { name: form.get("name").trim(), profile: form.get("profile").trim() },
       });
       updateSession({ company: saved.company });
-      toast(saved.requeued
-        ? `Saved. ${plural(saved.requeued, "circular")} queued to be re-checked against it.`
-        : described ? "Saved." : "Saved. Recent circulars are being checked against it now.");
+      toast(saved.checking ? "Saved. A worker is checking your recent circulars against it now." : "Saved.");
       await companyPage();
       refreshBadges();
     });

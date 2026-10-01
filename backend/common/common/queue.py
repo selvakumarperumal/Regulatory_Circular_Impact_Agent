@@ -1,7 +1,7 @@
 """The task queue: one Redis stream, the workers' only source of work. Every change
 that needs a worker queues its task here (XADD): the watcher for a new circular, the api
-for a sign-up, a company description, a policy or a Reprocess, the worker for the next
-steps. Workers read it as the consumer group "workers" (XREADGROUP), so each task goes
+for a company description added or changed, a policy added or saved, or a Reprocess, the
+worker for the next steps. A sign-up queues nothing: there's nothing to judge yet. Workers read it as the consumer group "workers" (XREADGROUP), so each task goes
 to one worker. A task only carries ids: Postgres holds the data.
 
 A task is queued at most once at a time: enqueue sets a key per task (SET NX) and the
@@ -10,7 +10,7 @@ worker deletes it when the task is done, so the same work is never queued twice.
 circular.read    circular_id              read the PDF once, for every company
 circular.assess  company_id, circular_id  does it apply to the company? check its policies
 policy.check     company_id, policy_id    embed a saved policy, check it against circulars
-company.refresh  company_id               queue the company's recent circulars to judge
+company.refresh  company_id               its description changed: judge its circulars again
 """
 
 from contextlib import suppress

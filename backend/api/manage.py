@@ -7,7 +7,8 @@
 add-user gives a company a login, or a new password if the login exists. The password
 is read from RCI_PASSWORD, or asked for. requeue is for after Redis lost its data: the
 queue is the workers' only source of work, so it queues again every task that Postgres
-shows unfinished (one still queued is skipped by its dedupe key)."""
+shows unfinished, and a company.refresh for each described company (cheap when nothing
+changed). A task still queued is skipped by its dedupe key."""
 
 import argparse
 import getpass
@@ -56,8 +57,10 @@ def requeue(session: Session) -> None:
             col(Policy.checked_at).is_(None), col(Policy.checked_at) < Policy.updated_at
         )
     )
+    described = select(Company.id).where(Company.profile != "")
     work = (
         [("circular.read", {"circular_id": i}) for i in session.exec(unread)]
+        + [("company.refresh", {"company_id": i}) for i in session.exec(described)]
         + [
             ("circular.assess", {"company_id": a, "circular_id": b})
             for a, b in session.exec(pending)
