@@ -16,6 +16,7 @@ import { gapPage, gapsPage } from "./views/gaps.js";
 import { circularPage, circularsPage } from "./views/circulars.js";
 import { importPolicies, newPolicyPage, policiesPage, policyPage } from "./views/policies.js";
 import { companyPage } from "./views/company.js";
+import { howPage } from "./views/howitworks.js";
 import { loginPage, signupPage } from "./views/auth.js";
 
 route("overview", overviewPage);                 // the first route is also the fallback
@@ -27,6 +28,7 @@ route("policies", policiesPage);
 route("policies/new", newPolicyPage);
 route("policies/:id", policyPage);
 route("company", companyPage);
+route("how", howPage);
 route("login", loginPage, { open: true });
 route("signup", signupPage, { open: true });
 

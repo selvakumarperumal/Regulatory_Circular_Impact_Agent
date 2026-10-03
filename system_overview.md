@@ -2,6 +2,8 @@
 
 The whole system on one page: what each part does, and each step in a line or two. For
 the full story with every detail, read [how_it_works.md](how_it_works.md).
+To watch it happen, open **How it works** in the console's sidebar: the same steps,
+animated.
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 
