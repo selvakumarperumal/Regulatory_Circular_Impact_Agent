@@ -11,18 +11,27 @@ The agent. It reads each circular the watcher saved, and works out, for each com
 its internal policies the circular makes out of date. For each one, it opens a gap ticket for
 the policy owner with a draft of the change.
 
-**Tasks, not polling.** The worker reads the Redis stream `rci:tasks` as one consumer of the
-group `workers` (`XREADGROUP`), so each task goes to exactly one worker however many run, and
-it starts the moment a task is queued. It acknowledges a task (`XACK`) only when it's done.
-A task is queued at most once at a time (a dedupe key in Redis, deleted when the task is
-done), so workers need no locks to share the work.
+**Tasks, not polling.** Tasks wait in two **lanes**, each a Redis stream. Reading a PDF
+takes minutes on the GPU, so `circular.read` has the `pdf` lane (`rci:tasks:pdf`); every
+other task, a few Gemini calls each, has the `main` lane (`rci:tasks`). A quick task never
+waits behind a PDF. The worker reads each lane in `LANES` as one consumer of that lane's
+group `workers` (`XREADGROUP`), so each task goes to exactly one worker however many run,
+and it starts the moment a task is queued. Each lane gets its own loop (a thread), taking
+one task at a time. It acknowledges a task (`XACK`) only when it's done. A task is queued
+at most once at a time (a dedupe key in Redis, deleted when the task is done), so workers
+need no locks to share the work.
 
-| Task | Queued by | What the worker does |
-|---|---|---|
-| `circular.read` | the watcher, Reprocess | steps 1 and 2 below, once for every company; then one `circular.assess` per company |
-| `circular.assess` | the worker, Reprocess | steps 3 to 6 for one company |
-| `policy.check` | the api (a policy saved) | embeds the policy, then steps 4 to 6 against the company's recent circulars; stamps its `checked_at` (the console then shows it as **Checked**) |
-| `company.refresh` | the api (a description added or changed) | sets the company's older answers back to pending, and queues a `circular.assess` for each of its recent circulars |
+In Docker the same program runs as two services: **`reader`** (`LANES=pdf`, `READERS`
+copies, default 1: the GPU reads one page at a time, so more would only take turns) and
+**`worker`** (`LANES=main`, `WORKERS` copies, as many as your Gemini rate limit allows). On
+the host, `LANES` defaults to `pdf,main`: one process does both, in two loops.
+
+| Task | Lane | Queued by | What the worker does |
+|---|---|---|---|
+| `circular.read` | pdf | the watcher, Reprocess | steps 1 and 2 below, once for every company; then one `circular.assess` per company |
+| `circular.assess` | main | the worker, Reprocess | steps 3 to 6 for one company |
+| `policy.check` | main | the api (a policy saved) | embeds the policy, then steps 4 to 6 against the company's recent circulars; stamps its `checked_at` (the console then shows it as **Checked**) |
+| `company.refresh` | main | the api (a description added or changed) | sets the company's older answers back to pending, and queues a `circular.assess` for each of its recent circulars |
 
 ```
 new ──OCR──► parsed ──Gemini──► read ──► per company: pending ──► done   (failed: see `error`)
@@ -61,7 +70,7 @@ starts on it too.
 
 | File | Job |
 |---|---|
-| `main.py` | The task loop: take the next task, run it, then acknowledge, retry or give up |
+| `main.py` | The task loops, one per lane: take the next task, run it, then acknowledge, retry or give up |
 | `pipeline.py` | What each task does: `read_circular`, `assess`, `check_policy`, `refresh_company` |
 | `failures.py` | What counts as "wait", "try again" or "give up" |
 | `ocr.py` | PDF to text through Unlimited-OCR |
@@ -71,13 +80,13 @@ starts on it too.
 
 **When something fails.**
 - **OCR unreachable** (the model is still loading) **or Gemini rate-limited (429):** the
-  task stays unacknowledged; the worker waits `RETRY_SECONDS` and tries again, as long as it
-  takes.
+  task stays unacknowledged; its lane waits `RETRY_SECONDS` and tries again, as long as it
+  takes. Only that lane waits: while OCR loads, the main lane carries on.
 - **A 5xx, a timeout, a dropped connection or a reply not in the asked-for JSON:** the task
   is retried up to 3 times, then given up. So is a clash with another task that saved the
   same verdict first (`IntegrityError`): the retry skips it.
 - **Given up:** the circular (or the company's assessment) is marked `failed` with the error,
-  and the task is copied to the stream `rci:dead`.
+  and the task is copied to the stream `rci:dead`, with the lane's stream it came from.
 - **S3 unreachable (Floci not running) or the PDF missing:** this isn't waited out. The
   circular is marked `failed` at once; start Floci, then press **Reprocess**.
 - **A worker dies mid-task:** the task is still pending. The same container finds it on
@@ -86,7 +95,7 @@ starts on it too.
   the next unsaved page.
 - **Redis is down:** the worker waits for it. Its own unfinished task stays on its pending
   list; if Redis failed while it was queueing the next tasks, the task runs again and queues
-  them. The stream is its only source of work: it never looks in Postgres for something to
+  them. The lanes are its only source of work: it never looks in Postgres for something to
   do. If Redis lost its data, `uv run python manage.py requeue` in `backend/api` queues every
   unfinished piece of work again.
 - **A wrong API key or model name:** the worker stops at startup.
@@ -98,5 +107,6 @@ error underneath (`gemini_status` in `failures.py`).
 ```bash
 cp .env.example .env                # set GEMINI_API_KEY
 uv sync
-uv run python main.py --once        # work until the queue is empty, then exit
+uv run python main.py --once        # work until both lanes are empty, then exit
+LANES=main uv run python main.py    # only the main lane (another process reads the PDFs)
 ```

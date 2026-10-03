@@ -54,7 +54,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes   # the task stream survives restarts
+    command: redis-server --appendonly yes   # the task lanes survive restarts
     ports:
       - "${REDIS_PORT:-6379}:6379"          # for services run on the host with `uv run`
     volumes:

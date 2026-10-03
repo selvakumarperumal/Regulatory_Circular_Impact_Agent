@@ -14,7 +14,7 @@ At every step you'll see what the worker does, **what goes through the task queu
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 
-![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
+![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
 
 **Contents**
 
@@ -35,18 +35,21 @@ At every step you'll see what the worker does, **what goes through the task queu
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
-        watcher["watcher<br/>finds new circulars"] -->|"XADD circular.read"| Q[["Redis stream<br/><b>rci:tasks</b><br/>the to-do list"]]
-        console["console + api<br/>(you and your team)"] -->|"XADD policy.check,<br/>company.refresh, …"| Q
+        direction TB
+        watcher["watcher<br/>finds new circulars"] -->|"XADD circular.read"| P[["the PDF lane<br/><b>rci:tasks:pdf</b>"]]
+        console["console + api<br/>(you and your team)"] -->|"XADD policy.check,<br/>company.refresh, …"| Q[["the main lane<br/><b>rci:tasks</b>"]]
+        P -->|"XREADGROUP:<br/>one PDF at a time"| R["<b>reader</b><br/>OCR, summary, embedding"]
+        R <-->|"page image → text"| O["OCR<br/>on the GPU"]
+        R -->|"XADD circular.assess<br/>(one per company)"| Q
         Q -->|"XREADGROUP:<br/>each task to<br/>one worker"| K["<b>workers</b><br/>1, 2, 3 …"]
-        K -->|"XADD circular.assess<br/>(one per company)"| Q
-        K <-->|"read and save<br/>every result"| DB[("Postgres<br/>the source of truth")]
+        K <-->|"questions → answers"| G["Gemini"]
+        R <-->|"summary"| G
+        R <-->|"text, summary"| DB[("Postgres<br/>the source of truth")]
+        K <-->|"read and save<br/>every result"| DB
         console <-->|"policies in,<br/>gaps out"| DB
         watcher -->|"the new circular"| DB
-        K <-->|"page image → text"| O["OCR<br/>on the GPU"]
-        K <-->|"questions → answers"| G["Gemini"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -58,23 +61,28 @@ flowchart LR
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class watcher,K svc
+    class watcher,R,K svc
     class console start
-    class Q queue
+    class P,Q queue
     class DB data
     class O gpu
     class G ext
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-Four things to know before the stories:
+Five things to know before the stories:
 
 - **Work arrives as tasks.** When something happens (a new circular, a policy saved, a
   company described), the service that saw it adds a **task** to a Redis stream. A task is
   tiny: a type and some ids, like `circular.read 98`.
-- **No polling.** A worker waits on the stream and starts a task **the moment it's added**.
+- **Two lanes.** Reading a PDF takes minutes; everything else takes seconds. So
+  `circular.read` goes to the **PDF lane**, taken by the **reader**, and every other task to
+  the **main lane**, taken by the **workers**. A quick task never waits behind a PDF. The
+  reader and the workers are the same program, each told which lane to take
+  ([section 5](#two-lanes-a-pdf-never-holds-up-a-quick-task)).
+- **No polling.** A worker waits on its lane and starts a task **the moment it's added**.
   When there's nothing to do, it just waits: no OCR, no Gemini, no database work. The
-  stream is its only source of work (section 5).
+  lanes are its only source of work (section 5).
 - **Each task goes to exactly one worker**, however many run. Run 3 and they share the tasks.
 - **Postgres is the truth, Redis is the to-do list.** Every result is saved in Postgres after
   every step. A task only says *what to look at*; the worker reads the database to see what
@@ -83,12 +91,12 @@ Four things to know before the stories:
 
 The four task types:
 
-| Task | Carries | Added by | The worker… |
-|---|---|---|---|
-| `circular.read` | circular id | the watcher (new circular), the api (Reprocess) | reads the PDF (OCR), summarises and embeds it: **once, for every company** |
-| `circular.assess` | company id, circular id | the worker (after reading), the api (Reprocess) | decides if the circular applies to **that company**, checks its closest policies |
-| `policy.check` | company id, policy id | the api (a policy added or edited) | embeds the policy, checks it against the company's recent circulars |
-| `company.refresh` | company id | the api (a description added or changed) | resets the company's answers given before the change, and queues a `circular.assess` for each one to judge again and each recent circular it hasn't judged |
+| Task | Lane | Carries | Added by | The worker… |
+|---|---|---|---|---|
+| `circular.read` | PDF | circular id | the watcher (new circular), the api (Reprocess) | reads the PDF (OCR), summarises and embeds it: **once, for every company** |
+| `circular.assess` | main | company id, circular id | the reader (after reading), the api (Reprocess) | decides if the circular applies to **that company**, checks its closest policies |
+| `policy.check` | main | company id, policy id | the api (a policy added or edited) | embeds the policy, checks it against the company's recent circulars |
+| `company.refresh` | main | company id | the api (a description added or changed) | resets the company's answers given before the change, and queues a `circular.assess` for each one to judge again and each recent circular it hasn't judged |
 
 ---
 
@@ -106,14 +114,14 @@ The circular is **read once** (the OCR and the summary are the same for everyone
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        s0(["The watcher saves it and queues <b>circular.read</b>"]) --> r["<b>circular.read</b>: once, for everyone"]
+        s0(["The watcher saves it and queues <b>circular.read</b>"]) --> r["<b>circular.read</b>: once, for everyone<br/>(the reader, on the PDF lane)"]
         subgraph read[" "]
             direction LR
             r1["1. Read the PDF<br/>OCR<br/><i>status: parsed</i>"] --> r2["2. Summarise it<br/>Gemini"]
             r2 --> r3["3. Embed it<br/><i>status: read</i>"]
         end
         r --> read
-        read --> fan{"one <b>circular.assess</b><br/>per company"}
+        read --> fan{"one <b>circular.assess</b><br/>per company, on the main lane"}
         fan --> a1["<b>Company A</b><br/>4. does it apply?<br/>5. check its 3 closest policies"]
         fan --> a2["<b>Company B</b><br/>4. does it apply?<br/>5. check its 3 closest policies"]
         a1 --> d1(["A's gaps"])
@@ -139,38 +147,33 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-And in time order, with two workers running:
+And in time order, with the reader and two workers running:
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     autonumber
     box rgb(11, 16, 32)
-        participant W as watcher
-        participant Q as Redis stream
+        participant P as PDF lane
+        participant R as reader
+        participant Q as main lane
         participant K1 as worker 1
         participant K2 as worker 2
-        participant DB as Postgres
-        participant G as OCR + Gemini
     end
 
     rect rgb(13, 20, 36)
-        W->>DB: INSERT circular 98 (status new)
-        W->>Q: XADD circular.read 98
-        Q-->>K1: XREADGROUP: circular.read 98
-        K1->>G: OCR each page, then summarise
-        K1->>DB: save text, summary, embedding (status read)
-        K1->>DB: an assessment row for each company (pending)
-        K1->>Q: XADD circular.assess (A, 98)
-        K1->>Q: XADD circular.assess (B, 98)
-        K1->>Q: XACK circular.read 98
+        Note right of P: the watcher saved circular 98
+        P-->>R: XREADGROUP: circular.read 98
+        Note over R: OCR, summary, embedding<br/>(minutes), each saved
+        Note over R: an assessment<br/>per company (pending)
+        R->>Q: XADD circular.assess (A, 98)
+        R->>Q: XADD circular.assess (B, 98)
+        R->>P: XACK circular.read 98
+        Note over R: on to the next PDF
         Q-->>K1: circular.assess (A, 98)
         Q-->>K2: circular.assess (B, 98)
-        Note over K1,K2: both at the same time
-        K1->>G: does 98 apply to A? then A's 3 closest policies
-        K2->>G: does 98 apply to B? then B's 3 closest policies
-        K1->>DB: A's answers and gaps (assessment done)
-        K2->>DB: B's answers and gaps (assessment done)
+        Note over K1: Gemini, then A's<br/>answers and gaps
+        Note over K2: at the same time,<br/>for company B
         K1->>Q: XACK
         K2->>Q: XACK
     end
@@ -181,23 +184,23 @@ Now step by step, with the database after each one. **Bold** marks what changed.
 ### Step 0: the watcher saves it and queues a task
 
 The watcher finds the circular on RBI's website, stores the PDF in S3, adds a row, and adds
-a task to the stream:
+a task to the PDF lane:
 
 | id | source | title | status | text |
 |---|---|---|---|---|
 | 98 | RBI | Designation of terrorist organisation… | **new** | *(empty)* |
 
 ```text
-XADD rci:tasks * type circular.read circular_id 98
+XADD rci:tasks:pdf * type circular.read circular_id 98
 ```
 
 (Just before, `enqueue` sets the task's dedupe key, so the same task can't be queued
-twice; see [section 7](#7-no-duplicates-each-task-is-queued-once).) A free worker picks it up
-straight away.
+twice; see [section 7](#7-no-duplicates-each-task-is-queued-once).) The reader picks it up
+straight away, or as soon as it finishes the PDF it's on.
 
 ### Step 1: read the PDF
 
-The worker downloads the PDF and sends each page to the **OCR** model on the GPU, which
+The reader downloads the PDF and sends each page to the **OCR** model on the GPU, which
 turns the page image into text. Each page is saved the moment it's read, in `ocr_pages`:
 
 | sha256 (the PDF) | page | text |
@@ -205,9 +208,9 @@ turns the page image into text. Each page is saved the moment it's read, in `ocr
 | 3f9a… | 0 | **"RESERVE BANK OF INDIA …"** |
 | 3f9a… | 1 | **"2. Banks shall report …"** |
 
-So if the worker is stopped on page 3 (a restart, a crash, a timeout), it comes back to
+So if the reader is stopped on page 3 (a restart, a crash, a timeout), it comes back to
 page 3, not page 1: a page already read is never sent to the GPU again. When the last page
-is in, the worker joins them into the circular's text, and in the same commit deletes those
+is in, the reader joins them into the circular's text, and in the same commit deletes those
 rows:
 
 | id | status | text |
@@ -220,7 +223,7 @@ step 2, the summary) instead of running OCR or asking Gemini.
 
 ### Step 2: summarise and embed it
 
-The worker asks **Gemini** to read the text and answer in a fixed shape: who it's addressed
+The reader asks **Gemini** to read the text and answer in a fixed shape: who it's addressed
 to, a short summary, and every obligation. Then it **embeds** the summary (turns it into a
 list of numbers that capture its meaning, used to find the closest policies).
 
@@ -232,8 +235,8 @@ list of numbers that capture its meaning, used to find the closest policies).
 
 ### Step 3: one task per company
 
-The worker gives every company an **assessment** of the circular, a row that says "company
-X hasn't judged circular 98 yet", and queues a task for each:
+The reader gives every company an **assessment** of the circular, a row that says "company
+X hasn't judged circular 98 yet", and queues a task for each on the **main lane**:
 
 | company | circular | status | applicable |
 |---|---|---|---|
@@ -245,8 +248,9 @@ XADD rci:tasks * type circular.assess company_id A circular_id 98
 XADD rci:tasks * type circular.assess company_id B circular_id 98
 ```
 
-Then it acknowledges the `circular.read` task (`XACK`): done. With two workers, the two
-companies are now judged **at the same time**.
+Then it acknowledges the `circular.read` task (`XACK`): done, and the reader moves on to the
+next PDF. On the main lane, with two workers, the two companies are now judged **at the same
+time**, and never wait behind a PDF.
 
 ### Step 4: does it apply to this company?
 
@@ -359,7 +363,7 @@ sequenceDiagram
     box rgb(11, 16, 32)
         participant U as you (console)
         participant A as api
-        participant Q as Redis stream
+        participant Q as main lane
         participant K as worker
         participant DB as Postgres
         participant G as Gemini
@@ -471,16 +475,17 @@ ever change **your** rows.
 
 ### A stream and a group
 
-A Redis **stream** is an append-only list of messages. The app has one, `rci:tasks`, and
-three commands do all the work:
+A Redis **stream** is an append-only list of messages. The app has two, one per **lane**:
+`rci:tasks:pdf` for reading PDFs and `rci:tasks` for everything else (the next part says
+why). Three commands do all the work:
 
 | Command | Who | What it does |
 |---|---|---|
-| `XADD rci:tasks * type … ids …` | watcher, api, worker | adds a task at the end |
-| `XREADGROUP GROUP workers <me> … >` | each worker | "give me the next task nobody in my group has had" |
-| `XACK rci:tasks workers <task id>` | each worker | "I finished it": it leaves the group's pending list |
+| `XADD <lane> * type … ids …` | watcher, api, reader, worker | adds a task at the end of its lane |
+| `XREADGROUP GROUP workers <me> … >` | each reader or worker, on its lane | "give me the next task nobody in my group has had" |
+| `XACK <lane> workers <task id>` | each reader or worker | "I finished it": it leaves the group's pending list |
 
-The workers read as one **consumer group** called `workers`. The group remembers which task
+Each lane is read by its own **consumer group** called `workers`. The group remembers which task
 it handed to which worker, so **each task goes to exactly one worker**:
 
 ```mermaid
@@ -488,7 +493,7 @@ it handed to which worker, so **each task goes to exactly one worker**:
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        subgraph stream["the stream rci:tasks"]
+        subgraph stream["one lane: the stream rci:tasks"]
             direction LR
             t1["task 1"] --- t2["task 2"] --- t3["task 3"] --- t4["task 4"] --- t5["task 5"]
         end
@@ -519,6 +524,74 @@ flowchart TD
 A task handed out but not yet acknowledged sits on the group's **pending list**, under the
 worker that has it. That list is what makes the queue safe.
 
+### Two lanes: a PDF never holds up a quick task
+
+Tasks take very different times. Reading a PDF is minutes of OCR on the GPU; everything
+else is a few Gemini calls, seconds each. With a single list, first in first out, a quick
+task waits behind every PDF put on the list before it. This happened on 2026-10-01, with
+one list and one worker:
+
+| Time | What the log says |
+|---|---|
+| 12:33:19 | `#183 read`: circular 183's "does it apply?" checks are queued |
+| 12:35:34 | `#184 read`: the only worker is busy reading PDFs queued earlier |
+| 12:37:53 | `#185 read` |
+| 12:39:33 | `#186 read` |
+| 12:39:35 | `#183 for company 1: applies: False`: a 2-second check waited **6 minutes** |
+
+So the tasks are split into two **lanes**, each its own stream, with its own workers:
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        subgraph pdf["the PDF lane: rci:tasks:pdf"]
+            direction LR
+            p1["read circular 99"] ~~~ p2["read circular 100"]
+        end
+        subgraph main["the main lane: rci:tasks"]
+            direction LR
+            m1["check 98 for<br/>company A"] ~~~ m2["check 98 for<br/>company B"]
+            m2 ~~~ m3["check policy<br/>POL-AML"]
+        end
+        pdf -->|"one at a time:<br/>minutes each"| R["<b>reader</b><br/>LANES=pdf"]
+        R --> O["OCR on the GPU:<br/>one page at a time"]
+        main -->|"each task to<br/>one worker"| K["<b>workers</b> 1, 2, 3<br/>LANES=main"]
+        K --> G["Gemini:<br/>seconds per call"]
+        R -.->|"after a read: one check<br/>per company"| main
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class p1,p2,m1,m2,m3 data
+    class R,K svc
+    class O gpu
+    class G ext
+    style pdf fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    style main fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+- **Which lane?** Only `circular.read` goes to the PDF lane. `enqueue` picks it from the task
+  type, so the watcher and the api don't need to know about lanes.
+- **The reader and the workers are the same program.** The `LANES` setting says which lanes
+  it takes: the `reader` service has `LANES=pdf`, the `worker` service `LANES=main`. Run on
+  your machine, it takes both (`pdf,main`), with a loop for each, so even one process never
+  makes a check wait behind a PDF.
+- **One reader, many workers.** The GPU reads one page at a time, so a second reader would
+  only take turns with the first: `READERS` stays 1. Workers only wait for Gemini, so
+  `WORKERS` can grow up to your Gemini key's rate limit.
+- **A slow service only stops its own lane.** While the OCR model is loading, the reader
+  waits and the workers carry on.
+
 ### How a task becomes a worker's own
 
 Each worker has a name in the group: its container's hostname and process number, such as
@@ -531,12 +604,12 @@ worker's own: from then on, no other worker gets it from `XREADGROUP`.
 sequenceDiagram
     box rgb(11, 16, 32)
         participant K as worker e02f…-1
-        participant R as Redis: the group workers
+        participant R as Redis: the main lane's group
     end
 
     rect rgb(13, 20, 36)
         K->>R: XREADGROUP: a task nobody has had, please
-        R-->>K: task 1790…-0: read circular 98
+        R-->>K: task 1790…-0: check circular 98 for company A
         Note left of R: pending list: task 1790…-0 belongs to e02f…-1
         K->>R: every minute while it works: XCLAIM, still mine
         Note left of R: idle time back to 0 s
@@ -562,7 +635,8 @@ To look at it yourself: `docker compose exec redis redis-cli XPENDING rci:tasks 
 
 ### How a worker picks its next task
 
-Each time a worker is free, it looks in three places, in this order:
+Each time a worker is free, it looks in three places on its lane, in this order (with both
+lanes, each lane's loop does this on its own):
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -623,8 +697,8 @@ done is lost or paid for twice.
 
 ### Every change queues its task
 
-The stream is the workers' **only** source of work. A worker never looks in Postgres for
-something to do: every change that needs a worker puts its task on the stream, right after
+The lanes are the workers' **only** source of work. A worker never looks in Postgres for
+something to do: every change that needs a worker puts its task on its lane, right after
 the change is saved.
 
 ```mermaid
@@ -632,10 +706,13 @@ the change is saved.
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        w["watcher:<br/>a new circular"] --> q[["the stream<br/>rci:tasks"]]
-        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q
-        k["worker: the next steps<br/>of a task it finished"] --> q
+        w["watcher:<br/>a new circular"] --> p[["the PDF lane<br/>rci:tasks:pdf"]]
+        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q[["the main lane<br/>rci:tasks"]]
+        a -.->|"Reprocess an<br/>unread circular"| p
+        k["reader or worker: the next<br/>steps of a task it finished"] --> q
         m["manage.py requeue:<br/>only after Redis<br/>lost its data"] -.-> q
+        m -.-> p
+        p --> y(["the reader"])
         q --> x(["the workers"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -650,8 +727,8 @@ flowchart TD
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class w,a,k svc
     class m muted
-    class q queue
-    class x ok
+    class p,q queue
+    class x,y ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -661,7 +738,7 @@ flowchart TD
 | you add your company description, or change it | `company.refresh` | the api |
 | you add a policy, or save one again (**every save**) | `policy.check` | the api |
 | you press **Reprocess** | `circular.read`, or `circular.assess` for your company | the api |
-| a circular has been read | `circular.assess`, one per company | the worker |
+| a circular has been read | `circular.assess`, one per company | the reader |
 | a company refresh finds circulars to check | `circular.assess`, one per circular | the worker |
 | a policy was saved again while it was being checked | `policy.check` again | the worker |
 | a company signs up | nothing | (no description and no policies yet: nothing to judge) |
@@ -670,7 +747,7 @@ flowchart TD
 
 ### If Redis can't take a task
 
-A change is only finished when its task is on the stream: nobody just logs a lost task and
+A change is only finished when its task is on its lane: nobody just logs a lost task and
 moves on.
 
 ```mermaid
@@ -705,7 +782,7 @@ Reprocess queues its task every time.
 
 ### If Redis loses its data
 
-Redis keeps the stream on disk (`--appendonly yes`), so a restart loses nothing. Only if its
+Redis keeps the lanes on disk (`--appendonly yes`), so a restart loses nothing. Only if its
 data is deleted are the queued tasks gone. Then a person runs, once:
 
 ```bash
@@ -716,7 +793,7 @@ cd backend/api && uv run python manage.py requeue
 It puts back every piece of work Postgres shows unfinished: circulars still `new` or
 `parsed`, checks still `pending`, policies not checked since they were saved, and a
 `company.refresh` for each company with a description (which resets nothing when nothing
-changed). The workers still only read the stream.
+changed). Each task goes back to its own lane, and the workers still only read the lanes.
 
 ### Failed work, and running it again
 
@@ -809,8 +886,9 @@ flowchart TD
 
 > 🔍 **See the queue live:**
 > `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` shows how many tasks are
-> waiting (`lag`) and being worked on (`pending`); `XPENDING rci:tasks workers - + 10` lists
-> the pending ones with their owners; `XRANGE rci:dead - +` lists the failures.
+> waiting (`lag`) and being worked on (`pending`) on the main lane (`rci:tasks:pdf` for the
+> PDF lane); `XPENDING rci:tasks workers - + 10` lists the pending ones with their owners;
+> `XRANGE rci:dead - +` lists the failures.
 
 ---
 
@@ -1004,7 +1082,7 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         add(["enqueue: circular.read 98"]) --> nx{"SET rci:queued:…:circular_id=98<br/>NX EX 1 day"}
-        nx -->|"OK: not queued yet"| x[["XADD to rci:tasks"]]
+        nx -->|"OK: not queued yet"| x[["XADD to its lane:<br/>rci:tasks:pdf"]]
         nx -->|"nil: already queued<br/>or running"| skip(["skip: the task that's<br/>there will do the work"])
         x --> take["a worker takes it<br/>(XREADGROUP)"]
         take --> work["does the work"]
@@ -1144,7 +1222,7 @@ flowchart LR
 
 | What happens | Example | What the worker does | What you do |
 |---|---|---|---|
-| a service is down | OCR still loading, Gemini quota used up | leaves the task unacknowledged, waits a minute, tries again | nothing, or raise your quota |
+| a service is down | OCR still loading, Gemini quota used up | leaves the task unacknowledged, waits a minute, tries again; only that lane waits (while OCR loads, the workers carry on) | nothing, or raise your quota |
 | a hiccup | a timeout, a server error, an answer in the wrong shape | retries the task up to 3 times | nothing |
 | anything else | the PDF has no text at all; the PDF is missing from S3; Gemini refuses the request | marks the circular (or your assessment) `failed` with the error, copies the task to `rci:dead` | open the circular, read **Why it failed**, fix the cause, press **Reprocess** ([how it runs again](#failed-work-and-running-it-again)) |
 | Redis is down | a restart | the api answers "try again" (a new policy or a description change isn't saved; a policy edit is, and saving again queues its task); the watcher tries its new circulars again next round; the worker waits for Redis | save again once Redis is back |
@@ -1167,7 +1245,8 @@ flowchart LR
 
 | Setting | Default | What it does |
 |---|---|---|
-| `WORKERS` | 1 | how many workers run side by side |
+| `WORKERS` | 1 | how many workers take the main lane side by side |
+| `READERS` | 1 | how many readers take the PDF lane (the GPU reads one page at a time, so leave it at 1) |
 | `MATCH_TOP_K` | 3 | how many closest policies Gemini checks per circular |
 | `LOOKBACK_DAYS` | 30 | new circulars older than this are skipped; new policies and new companies are checked against this many days |
 | `OCR_MAX_PAGES` | 20 | pages read per PDF |

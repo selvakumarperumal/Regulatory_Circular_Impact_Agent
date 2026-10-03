@@ -37,13 +37,16 @@ ocr_pages                                    a PDF's pages OCR'd so far (by its 
 - `init_db(engine)`: creates missing tables at startup, and adds any column a model gained
   since (nullable; nothing is dropped). Services starting together take turns.
 
-`queue.py`: the task stream. `STREAM` (`rci:tasks`), `GROUP` (`workers`), `DEAD`
-(`rci:dead`), `connect(url)`, and `enqueue(client, kind, **ids)`, which adds a task after the
+`queue.py`: the task lanes. `LANES` maps each lane to its stream: `pdf` (`rci:tasks:pdf`,
+reading a circular's PDF, minutes each) and `main` (`rci:tasks`, every other task, a few
+Gemini calls each), so a quick task never waits behind a PDF. `lane(kind)` says which lane
+a task type goes to. Also `GROUP` (`workers`, one per lane), `DEAD` (`rci:dead`),
+`connect(url)`, and `enqueue(client, kind, **ids)`, which adds a task to its lane after the
 caller has committed its change, unless the same task is already queued or running (its
 dedupe key, `key(task)`, exists); it returns whether it added it. If Redis can't take the
-task it raises, so the caller undoes its change or fails: the stream is the workers' only
-source of work, and a task is never dropped quietly. The task types are listed in its
-docstring.
+task it raises, so the caller undoes its change or fails: the lanes are the workers' only
+source of work, and a task is never dropped quietly. The task types and their lanes are
+listed in its docstring.
 
 This isn't a service. Each service installs it from `../common` as a path dependency (see
 `[tool.uv.sources]` in its `pyproject.toml`), so every service keeps its own `.venv`.

@@ -18,15 +18,18 @@ flowchart TD
         sites["RBI · SEBI · IRDAI<br/>websites"] -->|"every hour"| W["watcher"]
         W -->|PDF| S3[("S3 (Floci)")]
         W -->|"row, status new"| DB[("Postgres<br/>every result")]
-        W -->|"circular.read"| Q[["Redis stream<br/>the tasks"]]
+        W -->|"circular.read"| QP[["Redis: the PDF lane"]]
         F["frontend<br/>console :8080<br/>(sign in)"] <--> A["api<br/>FastAPI :8000"]
         A <--> DB
-        A -->|"policy.check, …"| Q
-        Q -->|"each task to one worker,<br/>the moment it's queued"| K["<b>worker × N</b>: the agent<br/>1. OCR each page, once<br/>2. summarise it, once<br/>3. for each company: does it apply?<br/>4. find its closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
-        S3 -->|PDF| K
+        A -->|"policy.check, …"| QM[["Redis: the main lane"]]
+        QP -->|"one PDF at a time"| R["<b>reader</b><br/>1. OCR each page, once<br/>2. summarise it, once"]
+        S3 -->|PDF| R
+        R <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
+        R -->|"circular.assess,<br/>one per company"| QM
+        QM -->|"each task to one worker,<br/>never behind a PDF"| K["<b>worker × N</b>: the agent<br/>3. for each company: does it apply?<br/>4. find its closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
+        R <-->|"summary, embedding"| G["Gemini<br/>via LangChain"]
+        K <-->|"question → JSON answer"| G
         K <-->|"reads the work,<br/>saves results and gaps"| DB
-        K <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
-        K <-->|"question → JSON answer"| G["Gemini<br/>via LangChain"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -38,9 +41,9 @@ flowchart TD
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class W,A,F,K svc
+    class W,A,F,R,K svc
     class S3,DB data
-    class Q queue
+    class QP,QM queue
     class sites,G ext
     class O gpu
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
@@ -57,7 +60,7 @@ One folder per service. Each Python service has its own `pyproject.toml`, `uv.lo
 |---|---|---|
 | [backend/watcher](backend/watcher) | `watcher` | Finds new circulars, stores the PDF in S3, adds a `circulars` row and a `circular.read` task |
 | [backend/ocr](backend/ocr) | `ocr` | Unlimited-OCR served by vLLM on the GPU (image and flags only) |
-| [backend/worker](backend/worker) | `worker` | The agent: takes tasks off the Redis stream; OCR → Gemini → gap tickets |
+| [backend/worker](backend/worker) | `reader`, `worker` | The agent, one program in two services: `reader` takes the PDF lane (OCR, then a summary), `worker` the main lane (does it apply, which policies are out of date, gap tickets) |
 | [backend/api](backend/api) | `api` | FastAPI: sign-up and login, then each company's circulars, policies, controls and gaps |
 | [backend/common](backend/common) | none | The Postgres tables and the task queue, installed into each service from `../common` |
 | [frontend](frontend) | `frontend` | A test console over every API endpoint: static files served by nginx |
@@ -79,7 +82,7 @@ You need these first:
 ```bash
 cp .env.example .env                        # set GEMINI_API_KEY (the rest have defaults)
 docker compose up -d --build
-docker compose logs -f worker               # watch the agent work
+docker compose logs -f reader worker        # watch the agent work
                                             # console: http://localhost:8080   API docs: http://localhost:8000/docs
 ```
 
@@ -100,13 +103,17 @@ tell it:
 Compose also takes settings from your shell, so a direnv `.envrc` that exports
 `GEMINI_API_KEY` and `GEMINI_MODEL_NAME` works too.
 
-> ⚡ **More workers, more speed.** Set `WORKERS=3` in `.env` to run three workers side by
-> side. The Redis consumer group gives each task to one of them, and a task is never queued
-> twice, so no work is done twice. See
+> ⚡ **More workers, more speed.** Tasks wait in two lanes. Reading a PDF takes minutes,
+> so it has its own lane and its own `reader`; everything else (a few Gemini calls each)
+> goes to the main lane, so it never waits behind a PDF. Set `WORKERS=3` in `.env` to run
+> three workers on the main lane, up to what your Gemini key's rate limit allows. Leave
+> `READERS` at 1: the GPU reads one page at a time. The Redis consumer group gives each
+> task to one of them, and a task is never queued twice, so no work is done twice. See
 > [Running several workers](how_it_works.md#running-several-workers).
 
-> ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the worker
-> logs "OCR or Gemini unavailable" and keeps retrying.
+> ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the reader
+> logs "OCR or Gemini unavailable" and keeps retrying; the worker carries on with
+> everything else.
 
 Circulars published more than `LOOKBACK_DAYS` ago are marked `skipped` instead of being
 read, so a first start doesn't work through years of history.

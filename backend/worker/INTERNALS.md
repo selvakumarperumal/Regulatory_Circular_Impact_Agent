@@ -45,25 +45,33 @@ sections after it are the reference for each piece.
 
 ## 1. The worker at a glance
 
-The worker is one Python process (`python main.py`) per `worker` container; compose runs
-`WORKERS` of them. It never talks to the watcher or the api directly. They save a change
-in **Postgres** and add a **task** to the Redis stream `rci:tasks`; the workers read the
-stream as the consumer group `workers`, so each task goes to one of them.
+The worker is one Python program (`python main.py`). It never talks to the watcher or the
+api directly. They save a change in **Postgres** and add a **task** to its **lane**, a Redis
+stream: `circular.read` goes to `rci:tasks:pdf` (the PDF lane: minutes of OCR per task),
+every other task to `rci:tasks` (the main lane: a few Gemini calls, seconds each). Each lane
+is read as the consumer group `workers`, so each task goes to one worker.
+
+Compose runs the program as two services, told which lane to take by `LANES`: **`reader`**
+(`LANES=pdf`, `READERS` copies, default 1, since the GPU reads one page at a time) and
+**`worker`** (`LANES=main`, `WORKERS` copies). A quick task never waits behind a PDF. Run on
+the host, one process takes both lanes (`LANES=pdf,main`), with a loop for each.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
-flowchart LR
+flowchart TD
     subgraph canvas[" "]
-        direction LR
-        watcher["watcher"] -->|"INSERT circular,<br/>XADD circular.read"| Q[["Redis<br/><b>rci:tasks</b>"]]
-        api["api<br/>(the console)"] -->|"saves the change,<br/>XADD the task"| Q
-        Q <-->|"XREADGROUP, XACK<br/>(group: workers)"| K["<b>worker</b><br/>× WORKERS"]
-        K <-->|"reads the work,<br/>saves each step"| PG[("Postgres<br/>every result")]
-        watcher --> PG
-        api --> PG
-        S3[("S3 (Floci)<br/>the PDFs")] -->|"GET the PDF"| K
-        K <-->|"page image → text"| O["ocr<br/>on the GPU"]
-        K <-->|"questions → JSON,<br/>texts → embeddings"| G["Gemini<br/>via LangChain"]
+        direction TB
+        watcher["watcher"] -->|"INSERT circular,<br/>XADD circular.read"| P[["Redis: the PDF lane<br/><b>rci:tasks:pdf</b>"]]
+        api["api<br/>(the console)"] -->|"saves the change,<br/>XADD the task"| Q[["Redis: the main lane<br/><b>rci:tasks</b>"]]
+        P <-->|"XREADGROUP, XACK<br/>(group: workers)"| R["<b>reader</b> × READERS<br/>LANES=pdf"]
+        Q <-->|"XREADGROUP, XACK<br/>(group: workers)"| K["<b>worker</b> × WORKERS<br/>LANES=main"]
+        R -->|"XADD circular.assess,<br/>one per company"| Q
+        S3[("S3 (Floci)<br/>the PDFs")] -->|"GET the PDF"| R
+        R <-->|"page image → text"| O["ocr<br/>on the GPU"]
+        R <-->|"summary,<br/>embedding"| G["Gemini<br/>via LangChain"]
+        K <-->|"questions → JSON,<br/>texts → embeddings"| G
+        R <-->|"saves each step"| PG[("Postgres<br/>every result")]
+        K <-->|"reads the work,<br/>saves each step"| PG
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -75,8 +83,8 @@ flowchart LR
     classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
-    class watcher,api,K svc
-    class Q queue
+    class watcher,api,R,K svc
+    class P,Q queue
     class PG,S3 data
     class O gpu
     class G ext
@@ -85,7 +93,7 @@ flowchart LR
 
 | What | How | Used for |
 |---|---|---|
-| **Redis** | redis-py, one connection | the task stream (its only source of work), the dedupe keys, the dead-letter stream |
+| **Redis** | redis-py, one client (a connection per lane's loop) | the two lanes (its only source of work), the dedupe keys, the dead-letter stream |
 | **Postgres** | SQLAlchemy / SQLModel, a connection pool | every result |
 | **S3** (Floci locally) | boto3 | each circular's PDF, read once |
 | **ocr** | HTTP, vLLM's OpenAI-compatible API | page images to text, once per PDF |
@@ -105,20 +113,24 @@ Two rules hold everything together:
 ## 2. Step by step: everything the worker does
 
 The worker is a program that waits for **tasks** (small notes on a list in Redis, such
-as "read circular 98") and does them, one at a time:
+as "read circular 98") and does them, one at a time. There are two lists, called **lanes**:
+reading a PDF takes minutes, so it has a list of its own, taken by the **reader**; every
+other note takes seconds and goes on the main list, taken by the **workers**:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        wt(["The watcher finds<br/>a new circular"]) -->|"adds a note"| Q
-        ap(["You add a policy<br/>in the console"]) -->|"adds a note"| Q
-        Q[["<b>The list in Redis</b><br/>read circular 98<br/>check policy 7"]] -->|"the oldest note<br/>(none yet? it waits)"| take
-        take["1. The worker<br/>takes one note"] --> work["2. It does the job:<br/>reads the PDF, asks Gemini"]
-        work --> save[("3. It saves what it<br/>found in Postgres")]
-        save --> off["4. It adds any new notes,<br/>like 'check circular 98<br/>for company 1', then<br/>crosses this one off"]
-        off -->|"back for<br/>the next note"| Q
+        wt(["The watcher finds<br/>a new circular"]) -->|"adds a note"| P
+        ap(["You add a policy<br/>in the console"]) -->|"adds a note"| M
+        P[["<b>The PDF list</b><br/>read circular 98"]] -->|"the oldest note<br/>(none yet? it waits)"| r1
+        M[["<b>The main list</b><br/>check policy 7"]] -->|"the oldest note<br/>(none yet? it waits)"| w1
+        r1["<b>The reader</b> reads the PDF<br/>and sums it up (minutes),<br/>saving it in Postgres"] --> r2["It adds a note per company,<br/>like 'check circular 98<br/>for company 1', then<br/>crosses this one off"]
+        r2 -->|"new notes"| M
+        r2 -->|"back for the<br/>next PDF"| P
+        w1["<b>A worker</b> asks Gemini<br/>(seconds), saving the<br/>answer in Postgres"] --> w2["It crosses the note off"]
+        w2 -->|"back for the<br/>next note"| M
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -131,18 +143,19 @@ flowchart TD
     classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class wt,ap start
-    class Q queue
-    class take,work svc
-    class save data
-    class off ok
+    class P,M queue
+    class r1,w1 svc
+    class r2,w2 ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - **Who writes the notes:** the watcher and the api, whenever something changes, and the
-  worker itself when one job leads to the next. The worker never goes looking for work; it
-  only reads this list.
-- **One at a time:** a worker finishes a note before it takes the next. More workers
-  (`WORKERS`) share one list, and each note goes to only one of them.
+  reader and workers themselves when one job leads to the next. The worker never goes
+  looking for work; it only reads these lists.
+- **One at a time, per list:** the reader finishes a PDF before it takes the next, and each
+  worker finishes its note before it takes the next. The two lists never wait for each
+  other, so a 2-second check never waits behind a 2-minute PDF. More workers (`WORKERS`)
+  share the main list, and each note goes to only one of them.
 - **A note is only a pointer:** it says *what* to do, never the data. The worker reads the
   data from Postgres when it starts the job.
 
@@ -168,14 +181,14 @@ flowchart TD
             s2 --> s3["3. Take it, mark it<br/>as its own"]
         end
         s3 --> kind{"Which task?"}
-        subgraph read["once for every company"]
+        subgraph read["the reader, on the PDF lane: once for every company"]
             direction TB
             s4{"4. Skip it<br/>or read it?"} --> s5["5. Turn the PDF<br/>into text"]
             s5 --> s6["6. Summarise it"]
             s6 --> s7["7. Turn it into<br/>numbers"]
             s7 --> s8["8. A to-do for<br/>each company"]
         end
-        subgraph judge["once per company"]
+        subgraph judge["a worker, on the main lane: once per company"]
             direction TB
             s10["10. Does it apply<br/>to this company?"] --> s11["11. Find the<br/>closest policies"]
             s11 --> s12["12. Is each policy<br/>out of date?"]
@@ -194,7 +207,7 @@ flowchart TD
         s13 --> s9
         s14 --> s9
         s15 --> s9
-        s9[["9. Finish: put the next<br/>tasks on the list, then<br/>back to step 2"]]
+        s9[["9. Finish: put the next<br/>tasks on their lane, then<br/>back to step 2"]]
         s16[["16. Every change<br/>queues its task"]]
         s17["17. Something fails:<br/>wait, retry or give up"]
         s18["18. A worker dies:<br/>another carries on"]
@@ -231,14 +244,14 @@ flowchart TD
 
 | Step | In plain words |
 |---|---|
-| [1](#step-1-start-up) | the worker starts and checks it can reach everything |
-| [2](#step-2-wait-for-a-task) | it waits for a task; Redis writes the worker's name on it |
+| [1](#step-1-start-up) | the worker starts, checks it can reach everything, and starts a loop per lane |
+| [2](#step-2-wait-for-a-task) | each loop waits for a task on its lane; Redis writes the worker's name on it |
 | [3](#step-3-take-the-task-and-mark-it-as-its-own) | it takes the task, and keeps touching it so nobody takes it over |
 | [4](#step-4-skip-it-or-read-it) | skip a circular that's too old; leave a failed one alone |
 | [5](#step-5-turn-the-pdf-into-text) | turn the PDF into text, page by page |
 | [6](#step-6-summarise-it) | Gemini summarises it |
 | [7](#step-7-turn-the-summary-into-numbers) | turn the summary into numbers (an embedding) |
-| [8](#step-8-a-to-do-for-each-company) | add a to-do for each company |
+| [8](#step-8-a-to-do-for-each-company) | add a to-do for each company, on the main lane |
 | [9](#step-9-finish-the-task) | finish the task and put the next tasks on the list |
 | [10](#step-10-does-it-apply-to-this-company) | does the circular apply to this company? |
 | [11](#step-11-find-the-closest-policies) | find the company's most related policies |
@@ -246,9 +259,9 @@ flowchart TD
 | [13](#step-13-mark-it-done) | mark this company's check as done |
 | [14](#step-14-a-policy-is-added-or-edited) | a policy was added or edited: check it |
 | [15](#step-15-a-company-adds-or-changes-its-description) | a company added or changed its description: which circulars apply now? |
-| [16](#step-16-every-change-queues-its-task) | every change queues its task: the worker's only source of work |
+| [16](#step-16-every-change-queues-its-task) | every change queues its task on its lane: the worker's only source of work |
 | [17](#step-17-something-fails) | something failed: wait, retry or give up, and how to run it again |
-| [18](#step-18-a-worker-dies) | a worker died: another one carries on |
+| [18](#step-18-a-worker-dies) | a worker died: another one on its lane carries on |
 
 **The worker itself** (steps 1 to 3)
 
@@ -261,12 +274,13 @@ When the worker program starts, it gets ready before it takes any work.
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["The worker starts"]) --> b["Read the settings"]
+        a(["The worker starts"]) --> b["Read the settings:<br/>which lanes to take?"]
+        b -->|"a name that<br/>isn't a lane"| x
         b --> c["Make sure the database<br/>tables exist"]
         c --> d{"Can it talk<br/>to Gemini?"}
         d -->|"wrong key or<br/>model name"| x(["Stop, with a<br/>clear error"])
         d -->|"yes, or Gemini<br/>is only busy"| e["Connect to Redis<br/>and pick a name"]
-        e --> f(["Ready: step 2"])
+        e --> f(["A loop per lane:<br/>each goes to step 2"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -286,25 +300,34 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- It reads its settings. With no Gemini key it stops straight away.
+- It reads its settings. With no Gemini key it stops straight away. `LANES` says which
+  lanes it takes: `pdf`, `main`, or both (the default when run on the host). The `reader`
+  service has `LANES=pdf`, the `worker` service `LANES=main`. A name that isn't a lane
+  stops it with a clear message.
 - It creates any table that's missing in Postgres.
 - It asks Gemini one test question. A wrong key or model name stops it with a clear
   message. If Gemini is only busy, it starts anyway.
 - It connects to Redis and gives itself a name, like `e02ff2af94f5-1`, so Redis knows which
   tasks belong to it.
+- It starts **one loop per lane**, each in its own thread. From here on, each loop goes
+  through steps 2 to 9 on its own lane, one task at a time. If a loop ever stops on an
+  error nobody expected, the whole worker exits, so Docker restarts it.
 
 **Database:** nothing changes.
 
-**Log:** `worker e02ff2af94f5-1: using gemini-3.5-flash, waiting for tasks`
+**Log:** `worker e02ff2af94f5-1: lanes pdf, using gemini-3.5-flash, waiting for tasks` (in the
+example, `e02ff2af94f5-1` is the reader).
 
 **In the code:** `main()` in `main.py`. More: [section 4](#4-startup).
 
 ### Step 2: Wait for a task
 
-A **task** is a small note, such as "read circular 98". The notes sit on a list in Redis, a
-**stream** called `rci:tasks`. The workers read that list together as one **consumer group**
-called `workers`, and each worker has its own name in the group, such as `e02ff2af94f5-1`
-(the container's hostname, then the process number).
+A **task** is a small note, such as "read circular 98". The notes sit on two lists in Redis,
+the **lanes**, each a **stream**: `rci:tasks:pdf` (the PDF lane) for `circular.read`, and
+`rci:tasks` (the main lane) for every other task. `enqueue()` picks the lane from the task's
+type. The workers on a lane read it together as one **consumer group** called `workers`
+(each stream has its own group), and each worker has its own name in the group, such as
+`e02ff2af94f5-1` (the container's hostname, then the process number).
 
 The group also keeps a second list, the **pending list**: every task it has handed out that
 isn't finished yet, with the name of the worker that has it. **That's how a task becomes a
@@ -315,8 +338,8 @@ pending list. It stays there until the worker says "finished" ([step 9](#step-9-
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     box rgb(11, 16, 32)
-        participant K as worker e02f…-1
-        participant R as Redis: the group workers
+        participant K as reader e02f…-1
+        participant R as Redis: the PDF lane's group
     end
 
     rect rgb(13, 20, 36)
@@ -326,7 +349,8 @@ sequenceDiagram
     end
 ```
 
-Each time it's free, the worker looks in three places, in this order:
+Each time a loop is free, it looks in three places on its lane, in this order (`<lane>` is
+the lane's stream, `rci:tasks:pdf` or `rci:tasks`):
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -359,25 +383,27 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-1. **My own pending list** (`XREADGROUP GROUP workers <me> COUNT 1 STREAMS rci:tasks 0`; the
+1. **My own pending list** (`XREADGROUP GROUP workers <me> COUNT 1 STREAMS <lane> 0`; the
    `0` means "from my pending list"). A task is still there when the last try hit a hiccup
    and was left unfinished on purpose, to be tried again ([step 17](#step-17-something-fails)),
    or when this worker's container restarted in the middle of it: it comes back with the
    same name, so it finds its own task.
-2. **Another worker's pending list** (`XAUTOCLAIM rci:tasks workers <me> 300000 0-0 COUNT 1`).
+2. **Another worker's pending list** (`XAUTOCLAIM <lane> workers <me> 300000 0-0 COUNT 1`).
    A task nobody has touched for 5 minutes (300,000 ms, `CLAIM_IDLE_SECONDS`) belongs to a
    worker that died: a live worker touches its task every minute
    ([step 3](#step-3-take-the-task-and-mark-it-as-its-own)). Redis moves it to this worker's
    pending list ([step 18](#step-18-a-worker-dies)).
-3. **A new task** (`XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS rci:tasks >`;
+3. **A new task** (`XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS <lane> >`;
    the `>` means "one nobody in the group has had"). Redis hands it over and writes this
    worker's name on the pending list in the same moment. If none arrives within 5 seconds,
    the worker looks again from 1.
 
 Before looking, on every turn:
 
-- `XGROUP CREATE rci:tasks workers 0 MKSTREAM` makes the group if it doesn't exist (the very
-  first start, or Redis lost its data). If it exists, Redis says so and nothing changes.
+- `XGROUP CREATE <lane> workers 0 MKSTREAM` makes the group if it doesn't exist (the very
+  first start, or Redis lost its data). If it exists, Redis says so and nothing changes. If
+  Redis loses the group while the loop is waiting (`NOGROUP`), the loop logs it and makes it
+  again on the next turn.
 - A task whose contents were trimmed away (the stream keeps about the last 100,000) is marked
   finished and skipped.
 
@@ -386,19 +412,20 @@ arrives, and the worker never looks in Postgres for something to do
 ([step 16](#step-16-every-change-queues-its-task)).
 
 **The example starts here.** The watcher has just found circular 98 on RBI's website, saved
-it, and put a task on the list:
+it, and put a task on the PDF lane:
 
 | circulars.id | source | title | status | text |
 |---|---|---|---|---|
 | **98** | **RBI** | **Designation of terrorist organisation…** | **new** | *(empty)* |
 
-The worker's `XREADGROUP … >` returns it at once. **The pending list after:**
+The reader's `XREADGROUP … >` returns it at once. **The PDF lane's pending list after:**
 
 | task id | the task | owner | idle | times handed out |
 |---|---|---|---|---|
 | **1790831159691-0** | **circular.read, circular 98** | **e02ff2af94f5-1** | **0 s** | **1** |
 
-To look at it yourself: `docker compose exec redis redis-cli XPENDING rci:tasks workers - + 10`.
+To look at it yourself: `docker compose exec redis redis-cli XPENDING rci:tasks:pdf workers - + 10`
+(or `rci:tasks` for the main lane).
 
 **In the code:** `next_task()` in `main.py`. More: [section 6](#6-taking-the-next-task).
 
@@ -410,7 +437,7 @@ pending task it also keeps an **idle time**: how long since its owner last touch
 task idle for 5 minutes is taken over by another worker (step 2, the second place).
 
 Reading a long PDF can take longer than 5 minutes. So while the job runs, a small helper
-inside the worker **touches the task every minute** (`XCLAIM rci:tasks workers <me> 0 <task id>
+inside the worker **touches the task every minute** (`XCLAIM <lane> workers <me> 0 <task id>
 JUSTID`), which sets its idle time back to 0. The task never looks abandoned while its
 worker is alive, and no second worker ever starts the same PDF.
 
@@ -454,7 +481,8 @@ The task's line on the pending list, minute by minute:
 **In the code:** `run_task()` and `keep_claimed()` (the helper) in `main.py`. More:
 [section 7](#7-doing-a-task).
 
-**Reading a circular** (steps 4 to 9): one `circular.read` task, once for every company
+**Reading a circular** (steps 4 to 9): one `circular.read` task, once for every company, on
+the PDF lane: the **reader** does these
 
 ### Step 4: Skip it or read it
 
@@ -834,7 +862,7 @@ flowchart TD
         direction TB
         d(["The job is done"]) --> u["1. Stop touching<br/>the task"]
         u --> k["2. Remove its<br/>'already queued' mark"]
-        k --> n[["3. Put the next tasks<br/>on the list"]]
+        k --> n[["3. Put the next tasks<br/>on their lane"]]
         n --> a["4. XACK: Redis takes it<br/>off the pending list"]
         a --> b(["Back to step 2"])
     end
@@ -862,9 +890,9 @@ flowchart TD
    key exists. That's why pressing **Reprocess** twice can never queue circular 98 twice.
    Now the mark is removed (`DEL rci:queued:circular_id=98:type=circular.read`), so the same
    task can be queued again later, by **Reprocess** for example.
-3. **Put the next tasks on the list:** here, the two from
+3. **Put the next tasks on their lane:** here, the two from
    [step 8](#step-8-a-to-do-for-each-company), one per company. Each gets its own mark first,
-   then goes on the stream:
+   then goes on the main lane, where the workers take them:
 
    ```text
    SET rci:queued:circular_id=98:company_id=1:type=circular.assess 1 NX EX 86400
@@ -873,21 +901,25 @@ flowchart TD
 
    (and the same for company 2). A mark lasts a day at most, in case a worker dies before
    removing it.
-4. **Tell Redis it's finished** (`XACK rci:tasks workers 1790831159691-0`). Redis takes the
-   task off the pending list: no worker will ever get it again.
+4. **Tell Redis it's finished** (`XACK rci:tasks:pdf workers 1790831159691-0`, on the lane the
+   task came from). Redis takes the task off the pending list: no worker will ever get it
+   again.
 
 **Why this order?** If the worker dies after 3 but before 4, the task is still on the pending
 list, so it's done once more ([step 18](#step-18-a-worker-dies)): it finds all its work
 already saved, and its next tasks are dropped because their marks are still there. Nothing
-is lost or done twice. With two workers, companies 1 and 2 are now checked at the same time.
+is lost or done twice. The reader goes back to step 2 for the next PDF. On the main lane,
+with two workers, companies 1 and 2 are now checked at the same time, never behind a PDF.
 
-**The pending list after:** empty (until a worker takes one of the two new tasks).
+**The PDF lane's pending list after:** empty. The two new tasks wait on the main lane until
+a worker takes them, which is at once when one is free.
 
 **In the code:** the end of `run_task()` in `main.py`, `enqueue()` in
 `backend/common/common/queue.py`. More: [section 7](#7-doing-a-task) and
 [section 10](#10-no-duplicates-the-dedupe-key).
 
-**Checking it for one company** (steps 10 to 13): one `circular.assess` task per company
+**Checking it for one company** (steps 10 to 13): one `circular.assess` task per company, on
+the main lane: a **worker** does these
 
 ### Step 10: Does it apply to this company?
 
@@ -1108,7 +1140,7 @@ questions.
 **In the code:** the end of `assess()` in `pipeline.py`. More:
 [section 12](#12-circularassess).
 
-**The other tasks** (steps 14 and 15)
+**The other tasks** (steps 14 and 15), on the main lane
 
 ### Step 14: A policy is added or edited
 
@@ -1245,18 +1277,22 @@ for every described company ([step 16](#step-16-every-change-queues-its-task)).
 ### Step 16: Every change queues its task
 
 The worker never goes looking for work: it never asks Postgres "is there anything to do?".
-**Everything it does arrives as a task on the Redis list.** So every change that needs a
-worker puts its task on the list, the moment the change is saved.
+**Everything it does arrives as a task on one of the two Redis lanes.** So every change that
+needs a worker puts its task on its lane, the moment the change is saved. `enqueue()` picks
+the lane: the PDF lane for `circular.read`, the main lane for the rest.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        w["watcher: a new circular"] --> q[["Redis: rci:tasks,<br/>the only way in"]]
-        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q
-        k["worker: the next steps<br/>of a task it finished"] --> q
+        w["watcher: a new circular"] --> p[["the PDF lane:<br/>rci:tasks:pdf"]]
+        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q[["the main lane:<br/>rci:tasks"]]
+        a -.->|"Reprocess an<br/>unread circular"| p
+        k["reader or worker: the next<br/>steps of a task it finished"] --> q
         m["manage.py requeue:<br/>only after Redis lost its data"] -.-> q
+        m -.-> p
+        p --> y(["the reader"])
         q --> x(["the workers"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -1271,22 +1307,22 @@ flowchart TD
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class w,a,k svc
     class m muted
-    class q queue
-    class x ok
+    class p,q queue
+    class x,y ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-| Something happens | Who queues | The task | What the worker does |
+| Something happens | Who queues | The task (its lane) | What the worker does |
 |---|---|---|---|
-| the watcher finds a new circular | watcher | `circular.read` | steps 4 to 8 |
-| a company adds its description, or changes it | api | `company.refresh` | step 15 |
-| a policy is added | api | `policy.check` | step 14 |
-| a policy is saved again (**every save**) | api | `policy.check` | step 14 |
-| **Reprocess** on a circular that isn't read | api | `circular.read` | steps 4 to 8 |
-| **Reprocess** on a read circular | api | `circular.assess`, this company only | steps 10 to 13 |
-| a circular is read | worker | `circular.assess`, one per company | steps 10 to 13 |
-| a company refresh finds pending checks | worker | `circular.assess`, one per circular | steps 10 to 13 |
-| a policy was saved again while its check ran | worker | `policy.check` again | step 14 |
+| the watcher finds a new circular | watcher | `circular.read` (PDF) | steps 4 to 8 |
+| a company adds its description, or changes it | api | `company.refresh` (main) | step 15 |
+| a policy is added | api | `policy.check` (main) | step 14 |
+| a policy is saved again (**every save**) | api | `policy.check` (main) | step 14 |
+| **Reprocess** on a circular that isn't read | api | `circular.read` (PDF) | steps 4 to 8 |
+| **Reprocess** on a read circular | api | `circular.assess` (main), this company only | steps 10 to 13 |
+| a circular is read | reader | `circular.assess` (main), one per company | steps 10 to 13 |
+| a company refresh finds pending checks | worker | `circular.assess` (main), one per circular | steps 10 to 13 |
+| a policy was saved again while its check ran | worker | `policy.check` (main) again | step 14 |
 | a company signs up | nobody | none | nothing to judge yet: no description, no policies |
 | the description saved unchanged, or only the name | nobody | none | nothing changed for the worker |
 | a control is added, a gap updated, a teammate added | nobody | none | nothing to do: the worker reads a policy's controls each time it judges it |
@@ -1387,8 +1423,8 @@ flowchart TD
 
 | Kind | For example | What happens to the task |
 |---|---|---|
-| **Wait** | the ocr service can't be reached (the model is still loading); Gemini answers 429 (the quota is used up) | not finished on purpose: it stays on this worker's pending list. After 60 s (`RETRY_SECONDS`), step 2's first place finds it again. No limit: it waits as long as the service is down |
-| **Retry** | an OCR page takes over 10 minutes; OCR or Gemini answers with a server error (5xx); Gemini's answer isn't in the asked-for form; another task saved the same answer first | not finished: tried again straight away. The worker counts the tries in its memory, so a restarted worker starts counting again. The 3rd failed try gives up |
+| **Wait** | the ocr service can't be reached (the model is still loading); Gemini answers 429 (the quota is used up) | not finished on purpose: it stays on this worker's pending list. After 60 s (`RETRY_SECONDS`), step 2's first place finds it again. No limit: it waits as long as the service is down. Only this lane's loop waits: while OCR loads, the main lane carries on |
+| **Retry** | an OCR page takes over 10 minutes; OCR or Gemini answers with a server error (5xx); Gemini's answer isn't in the asked-for form; another task saved the same answer first | not finished: tried again straight away. The worker counts the tries in its memory (by lane and task id), so a restarted worker starts counting again. The 3rd failed try gives up |
 | **Give up** | Gemini refuses the request (400); `OCR found no text in the PDF`; the PDF is missing from S3, or S3 can't be reached | `give_up()`, below |
 
 LangChain tries Gemini's busy (429) and server (5xx) errors 3 times itself before the worker
@@ -1435,6 +1471,7 @@ The copy in the **dead-letter stream** `rci:dead` looks like this:
 |---|---|
 | `type` | circular.read |
 | `circular_id` | 98 |
+| `stream` | rci:tasks:pdf (the lane it came from) |
 | `task_id` | 1790831159691-0 |
 | `error` | ValueError: OCR found no text in the PDF |
 
@@ -1507,7 +1544,7 @@ flowchart TD
         d(["A worker dies<br/>in the middle of a task"]) --> q{"Does its container<br/>come back with the<br/>same name?"}
         q -->|"yes: Docker restarted it"| s["Step 2, first place:<br/>it finds the task on<br/>its own pending list"]
         q -->|"no: gone, or replaced<br/>by up --build"| i["The task's idle time<br/>grows: nobody touches it"]
-        i --> o["At 5 minutes, another worker's<br/>XAUTOCLAIM moves it to<br/>that worker's pending list"]
+        i --> o["At 5 minutes, another worker<br/>on the same lane: its XAUTOCLAIM<br/>moves it to its own pending list"]
         s --> c(["Carry on from the<br/>last saved step"])
         o --> c
     end
@@ -1533,7 +1570,10 @@ flowchart TD
   Docker restarting the container (a crash, `docker compose restart`) keeps both, so the
   worker finds its own task straight away.
 - **A new name:** `docker compose up --build` (or a scale-down) replaces the container, which
-  gets a new hostname. The old name's task is then taken over after 5 minutes.
+  gets a new hostname. The old name's task is then taken over after 5 minutes, by the new
+  container itself or by another worker on the same lane.
+- **Takeover stays in its lane.** Each lane has its own group and pending list: a dead
+  reader's PDF is taken over by a reader, a dead worker's check by a worker.
 - Nothing else queues it again meanwhile: its mark is still there, so a copy would be
   dropped.
 - The tries count starts again at zero (it lived in the dead worker's memory).
@@ -1559,9 +1599,9 @@ flowchart TD
 flowchart TB
     subgraph canvas[" "]
         direction TB
-        main["<b>main.py</b><br/>the task loop: next_task, run_task,<br/>keep_claimed, give_up"]
+        main["<b>main.py</b><br/>a loop per lane: serve, next_task,<br/>run_task, keep_claimed, give_up"]
         pipeline["<b>pipeline.py</b><br/>one function per task type,<br/>OCR, matching, embeddings"]
-        queue[["<b>common/queue.py</b><br/>the stream's names, connect,<br/>enqueue with its dedupe key"]]
+        queue[["<b>common/queue.py</b><br/>the lanes, connect,<br/>enqueue with its dedupe key"]]
         failures["<b>failures.py</b><br/>wait, retry or give up"]
         llm["<b>llm.py</b><br/>the three Gemini questions,<br/>embeddings"]
         ocr["<b>ocr.py</b><br/>PDF pages → text"]
@@ -1598,9 +1638,9 @@ flowchart TB
 
 | File | What's in it |
 |---|---|
-| `main.py` | `main()` (the loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `keep_claimed` (renews the claim while a task runs), `give_up`, `check_gemini` |
+| `main.py` | `main()` (checks `LANES` with `lanes()`, starts a `serve()` loop per lane in its own thread, and exits if one stops), `serve` (one lane's loop), `TASKS` (task type → pipeline function), `next_task`, `run_task` (do it, then delete its dedupe key, queue its follow-ups and acknowledge it, or retry, or give up), `keep_claimed` (renews the claim while a task runs), `give_up`, `check_gemini` |
 | `pipeline.py` | one function per task type: `read_circular`, `assess`, `check_policy`, `refresh_company`; `ocr_text` (OCR page by page, each saved) and `twin`; `match` (re-embeds a policy another model made) and `judge_policy`; the embeddings. Each returns the tasks to queue next |
-| `../common/common/queue.py` | the Redis names, `connect()`, `key()` (a task's dedupe key) and `enqueue()` (shared with the watcher and the api) |
+| `../common/common/queue.py` | `LANES` (lane → stream), `lane()` (a task type's lane), the other Redis names, `connect()`, `key()` (a task's dedupe key) and `enqueue()` (shared with the watcher and the api) |
 | `llm.py` | the Gemini client, the three prompts with their Pydantic reply models, `embed()` |
 | `ocr.py` | PDF pages to text, one at a time (`pages()`): rendering, the OCR request, cleaning the output |
 | `failures.py` | `should_wait`, `should_retry`, `gemini_status` |
@@ -1622,7 +1662,7 @@ sequenceDiagram
     end
 
     rect rgb(13, 20, 36)
-        Note right of M: load Settings (GEMINI_API_KEY missing? stop)
+        Note right of M: load Settings (GEMINI_API_KEY missing, or a LANES name that isn't a lane? stop)
         M->>PG: BEGIN, pg_advisory_xact_lock(hashtext('rci-schema'))
         Note over PG: services starting together take turns
         M->>PG: create_all, then ADD COLUMN for any column a model gained
@@ -1635,6 +1675,7 @@ sequenceDiagram
         end
         M->>R: connect (socket_timeout 30 s)
         Note right of M: consumer name = hostname-pid
+        Note right of M: a thread per lane runs serve(lane)
     end
 ```
 
@@ -1645,7 +1686,12 @@ sequenceDiagram
 - **`check_gemini`** turns a wrong key or model name (a 4xx) into one clear error. A 429, a
   5xx or no network only logs a warning: tasks wait for Gemini themselves.
 - **The consumer name** is `<hostname>-<pid>`. In a container the pid is 1, so a restarted
-  container comes back under the same name and finds its own unfinished tasks.
+  container comes back under the same name and finds its own unfinished tasks. A process on
+  both lanes uses the one name in both groups: each group keeps its own pending list.
+- **A loop per lane.** Each lane in `LANES` gets a `serve()` loop in its own thread. The
+  loops share the Redis client and the database engine (both are thread-safe); each task
+  gets its own session. The main thread checks every second that all loops are alive, and
+  exits if one stopped on an error nobody expected, so Docker restarts the container.
 
 ---
 
@@ -1656,7 +1702,7 @@ sequenceDiagram
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        start(["main(): forever"]) --> join["XGROUP CREATE<br/>rci:tasks workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)"]
+        start(["serve(lane): forever"]) --> join["XGROUP CREATE<br/>&lt;lane&gt; workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)"]
         join --> next["next_task()"]
         next --> got{"A task?"}
         got -->|"yes"| run["run_task(): do it,<br/>XACK unless it's to be retried"]
@@ -1664,6 +1710,7 @@ flowchart TD
         got -->|"no"| join
         run --> join
         join -.->|"Redis down or timing out"| wait["log, sleep RETRY_SECONDS,<br/>start again"]
+        join -.->|"NOGROUP: Redis<br/>lost the group"| join
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1683,12 +1730,17 @@ flowchart TD
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
-- Each turn starts with `XGROUP CREATE rci:tasks workers 0 MKSTREAM` (a group that exists
+- Each lane has this loop, `serve(lane)`, in its own thread: the PDF lane's loop can spend
+  minutes on a PDF while the main lane's loop takes task after task.
+- Each turn starts with `XGROUP CREATE <lane> workers 0 MKSTREAM` (a group that exists
   already is fine). Starting at id `0` delivers tasks queued before any worker ever ran,
-  and running it every turn recreates the group if Redis lost its data.
+  and running it every turn recreates the group if Redis lost its data. If the group goes
+  while the loop waits, Redis answers `NOGROUP`: the loop logs it and starts the turn again.
 - There is **no polling interval**: `next_task` blocks on Redis for up to 5 seconds, and
   returns the moment a task arrives.
-- `--once` (used by tests) works until a 5-second wait finds nothing, then exits.
+- `--once` (used by tests) runs the lanes one after another, each until a 5-second wait
+  finds nothing, and again until a whole round finds nothing (a read queues work on the
+  main lane), then exits.
 - Redis down or timing out: the loop logs it, waits `RETRY_SECONDS` and starts again.
   Meanwhile the api answers "try again" and the watcher retries next round
   ([section 15](#15-where-tasks-come-from)), so nothing is saved without its task.
@@ -1699,17 +1751,17 @@ flowchart TD
 
 ## 6. Taking the next task
 
-`next_task()` looks in three places, in order, and takes one task:
+`next_task()` looks in three places on its lane, in order, and takes one task:
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 STREAMS rci:tasks <b>0</b>"] -->|"one of mine,<br/>never acknowledged"| r1(["retry it"])
-        a -->|"none"| b["XAUTOCLAIM rci:tasks workers &lt;me&gt;<br/><b>300000</b> 0-0 COUNT 1"]
+        a["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 STREAMS &lt;lane&gt; <b>0</b>"] -->|"one of mine,<br/>never acknowledged"| r1(["retry it"])
+        a -->|"none"| b["XAUTOCLAIM &lt;lane&gt; workers &lt;me&gt;<br/><b>300000</b> 0-0 COUNT 1"]
         b -->|"one idle 5 min<br/>(its worker died)"| r2(["take it over"])
-        b -->|"none"| c["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 BLOCK 5000 STREAMS rci:tasks <b>&gt;</b>"]
+        b -->|"none"| c["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 BLOCK 5000 STREAMS &lt;lane&gt; <b>&gt;</b>"]
         c -->|"a new one"| r3(["do it"])
         c -->|"5 s, nothing"| r4(["None"])
     end
@@ -1780,7 +1832,7 @@ flowchart TD
   acknowledge. Deleting the key first lets a task queue itself again; a crash between the
   steps only means the task runs once more.
 - **Keeping the claim.** While the function runs, `keep_claimed()` sends
-  `XCLAIM rci:tasks workers <me> 0 <id> JUSTID` every `HEARTBEAT_SECONDS` (60) from a
+  `XCLAIM <lane> workers <me> 0 <id> JUSTID` every `HEARTBEAT_SECONDS` (60) from a
   background thread. Claiming resets the task's idle time, so however long a task takes (a
   20-page PDF waiting its turn on the GPU), it never looks abandoned, and no second worker
   starts the same OCR. The thread stops when the function returns or raises.
@@ -1926,7 +1978,7 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         add(["enqueue(kind, **ids)"]) --> nx{"SET rci:queued:&lt;task&gt;<br/>1 NX EX 86400"}
-        nx -->|"OK"| xadd[["XADD rci:tasks"]]
+        nx -->|"OK"| xadd[["XADD to its lane"]]
         nx -->|"nil: queued or running"| skip(["dropped"])
         xadd --> w["a worker: XREADGROUP,<br/>does the work"]
         w --> del["DEL rci:queued:&lt;task&gt;"]
@@ -2268,18 +2320,22 @@ sequenceDiagram
 
 ## 15. Where tasks come from
 
-The stream is the worker's **only** source of work. It never queries Postgres for things to
-do: every change that needs a worker queues its task, right after the change is committed.
+The two lanes are the worker's **only** source of work. It never queries Postgres for things
+to do: every change that needs a worker queues its task, right after the change is
+committed. `enqueue()` puts `circular.read` on `rci:tasks:pdf` and the rest on `rci:tasks`.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        W["watcher<br/>fetch_new()"] -->|"circular.read"| Q[["rci:tasks"]]
-        A["api<br/>database.enqueue()"] -->|"company.refresh, policy.check,<br/>circular.read, circular.assess"| Q
-        K["worker<br/>run_task(): follow-ups"] -->|"circular.assess,<br/>policy.check"| Q
-        M["manage.py requeue<br/>(a person, after Redis<br/>lost its data)"] -.-> Q
+        W["watcher<br/>fetch_new()"] -->|"circular.read"| P[["rci:tasks:pdf"]]
+        A["api<br/>database.enqueue()"] -->|"company.refresh, policy.check,<br/>circular.assess"| Q[["rci:tasks"]]
+        A -->|"circular.read<br/>(Reprocess)"| P
+        K["reader or worker<br/>run_task(): follow-ups"] -->|"circular.assess,<br/>policy.check"| Q
+        M["manage.py requeue<br/>(a person, after Redis<br/>lost its data)"] -.-> P
+        M -.-> Q
+        P --> Y(["XREADGROUP:<br/>the reader"])
         Q --> X(["XREADGROUP:<br/>the workers"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -2294,8 +2350,8 @@ flowchart TD
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class W,A,K svc
     class M muted
-    class Q queue
-    class X ok
+    class P,Q queue
+    class X,Y ok
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -2328,7 +2384,7 @@ and each producer handles it so no task is ever lost quietly:
 | api, policy save or Reprocess (`enqueue()`) | keeps the change; 503 "Saved, but the task queue is unavailable: try again" | each of these queues its task on every save |
 | worker (`run_task()`, queueing follow-ups) | the error reaches the main loop: no `XACK`, wait `RETRY_SECONDS` | the task stays pending, runs again, finds its work saved, and queues its follow-ups |
 
-**When Redis loses its data** (its volume deleted; a restart loses nothing, the stream is on
+**When Redis loses its data** (its volume deleted; a restart loses nothing, the lanes are on
 disk), `manage.py requeue` in `backend/api` queues every unfinished piece of work Postgres
 shows: circulars `new` or `parsed`, assessments `pending` of read circulars, policies never
 checked or saved after their check, and a `company.refresh` for each described company (a
@@ -2347,20 +2403,21 @@ is finished**. For one circular and one company:
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     box rgb(11, 16, 32)
+        participant RD as reader
         participant K as worker
         participant PG as Postgres
         participant R as Redis
     end
 
     rect rgb(13, 20, 36)
-        Note right of K: circular.read 98
-        K->>PG: UPDATE text, status 'parsed': COMMIT ①
-        K->>PG: UPDATE summary fields: COMMIT ②
-        K->>PG: UPDATE embedding: COMMIT ③
-        K->>PG: UPDATE status 'read': COMMIT ④
-        K->>PG: INSERT assessments: COMMIT ⑤
-        K->>R: DEL its key, XADD circular.assess × companies, XACK ⑥
-        Note right of K: circular.assess A/98
+        Note right of RD: circular.read 98, PDF lane
+        RD->>PG: UPDATE text, status 'parsed': COMMIT ①
+        RD->>PG: UPDATE summary fields: COMMIT ②
+        RD->>PG: UPDATE embedding: COMMIT ③
+        RD->>PG: UPDATE status 'read': COMMIT ④
+        RD->>PG: INSERT assessments: COMMIT ⑤
+        RD->>R: DEL its key, XADD circular.assess × companies to the main lane, XACK ⑥
+        Note right of K: circular.assess A/98, main lane
         K->>PG: UPDATE applicable: COMMIT ⑦
         K->>PG: INSERT policy_checks (+ gap): COMMIT ⑧
         K->>PG: UPDATE assessment 'done': COMMIT ⑨
@@ -2383,7 +2440,7 @@ task is still pending in Redis, under the dead worker's name:
 | after ⑨ | the assessment is `done` | nothing to do |
 
 **Who picks it up.** The same container, restarted by Docker, reads its own pending list
-first. Otherwise another worker takes the task over once it has gone `CLAIM_IDLE_SECONDS`
+first. Otherwise another worker on the same lane takes the task over once it has gone `CLAIM_IDLE_SECONDS`
 (5 minutes) without its claim being renewed. A container recreated by `docker compose up
 --build` comes back with a new name, so its old task waits those 5 minutes. Nothing queues
 the task again meanwhile: its dedupe key is still set.
@@ -2501,17 +2558,23 @@ sequenceDiagram
 
 | Command | Who | When |
 |---|---|---|
-| `SET rci:queued:<task> 1 NX EX 86400`, then `XADD rci:tasks MAXLEN ~ 100000 * type … ids …` | watcher, api, worker, `manage.py requeue` | a task is queued (`enqueue`); skipped if the key exists. If either fails: `DEL` the key, and the error is raised |
-| `XGROUP CREATE rci:tasks workers 0 MKSTREAM` | worker | every turn of the loop; `BUSYGROUP` means it exists |
-| `XREADGROUP GROUP workers <me> COUNT 1 STREAMS rci:tasks 0` | worker | its own unfinished task |
-| `XAUTOCLAIM rci:tasks workers <me> 300000 0-0 COUNT 1` | worker | a dead worker's task |
-| `XCLAIM rci:tasks workers <me> 0 <id> JUSTID` | worker | every minute while it runs a task: renews its claim |
-| `XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS rci:tasks >` | worker | a new task |
-| `DEL rci:queued:<task>`, then `XACK rci:tasks workers <id>` | worker | a task finished or given up |
-| `XADD rci:dead * type … ids … task_id … error …` | worker | a task given up |
+`<lane>` is the task's lane: `rci:tasks:pdf` for `circular.read`, `rci:tasks` for the rest.
+Every command below runs on one lane; a reader or worker on both lanes runs them for each.
 
-To look inside: `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` (`lag`: waiting,
-`pending`: being worked on), `XRANGE rci:dead - +`, `KEYS rci:queued:*`.
+| Command | Who | When |
+|---|---|---|
+| `SET rci:queued:<task> 1 NX EX 86400`, then `XADD <lane> MAXLEN ~ 100000 * type … ids …` | watcher, api, worker, `manage.py requeue` | a task is queued (`enqueue`); skipped if the key exists. If either fails: `DEL` the key, and the error is raised |
+| `XGROUP CREATE <lane> workers 0 MKSTREAM` | worker | every turn of the lane's loop; `BUSYGROUP` means it exists |
+| `XREADGROUP GROUP workers <me> COUNT 1 STREAMS <lane> 0` | worker | its own unfinished task |
+| `XAUTOCLAIM <lane> workers <me> 300000 0-0 COUNT 1` | worker | a dead worker's task |
+| `XCLAIM <lane> workers <me> 0 <id> JUSTID` | worker | every minute while it runs a task: renews its claim |
+| `XREADGROUP GROUP workers <me> COUNT 1 BLOCK 5000 STREAMS <lane> >` | worker | a new task |
+| `DEL rci:queued:<task>`, then `XACK <lane> workers <id>` | worker | a task finished or given up |
+| `XADD rci:dead * type … ids … stream … task_id … error …` | worker | a task given up |
+
+To look inside: `docker compose exec redis redis-cli XINFO GROUPS rci:tasks` (the main lane;
+`rci:tasks:pdf` for the PDF lane. `lag`: waiting, `pending`: being worked on),
+`XRANGE rci:dead - +`, `KEYS rci:queued:*`.
 
 ---
 
@@ -2563,7 +2626,7 @@ keep their defaults unless you add them there.
 | Setting | Default | What it controls |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+psycopg://rci:rci@localhost:5432/rci` | the database |
-| `REDIS_URL` | `redis://localhost:6379/0` (compose: `redis://redis:6379/0`) | the task stream |
+| `REDIS_URL` | `redis://localhost:6379/0` (compose: `redis://redis:6379/0`) | the task lanes |
 | `S3_ENDPOINT_URL`, `S3_BUCKET`, AWS keys, region | empty (real AWS), `rci`, empty, `us-east-1` | where the PDFs are |
 | `OCR_URL` | `http://localhost:8001/v1` | the ocr service |
 | `OCR_MAX_PAGES` | 20 | pages read per PDF |
@@ -2575,15 +2638,18 @@ keep their defaults unless you add them there.
 | `LOOKBACK_DAYS` | 30 | older new circulars are skipped; how far back new policies and companies look |
 | `CLAIM_IDLE_SECONDS` | 300 | how long a task can go without its claim renewed before another worker takes it |
 | `RETRY_SECONDS` | 60 | the wait while OCR, Gemini or Redis is down |
-| `WORKERS` (compose) | 1 | how many workers run side by side |
+| `LANES` | `pdf,main` (compose: `reader` has `pdf`, `worker` has `main`) | the lanes this process takes, a loop for each |
+| `READERS` (compose) | 1 | how many readers take the PDF lane (the GPU reads one page at a time: more only take turns) |
+| `WORKERS` (compose) | 1 | how many workers take the main lane side by side |
 
 Constants in the code:
 
 | Constant | Value | Where | Meaning |
 |---|---|---|---|
-| `STREAM`, `GROUP`, `DEAD` | `rci:tasks`, `workers`, `rci:dead` | `common/queue.py` | the Redis names |
+| `LANES` | `pdf`: `rci:tasks:pdf`, `main`: `rci:tasks` | `common/queue.py` | the lanes' streams; `lane()` sends `circular.read` to `pdf` |
+| `GROUP`, `DEAD` | `workers`, `rci:dead` | `common/queue.py` | the group on each lane, the dead-letter stream |
 | dedupe keys | `rci:queued:…`, expire after 1 day | `common/queue.py` | a task is queued at most once at a time |
-| stream length | 100000 (approximate) | `common/queue.py` | the stream is trimmed beyond this |
+| stream length | 100000 (approximate) | `common/queue.py` | each lane is trimmed beyond this |
 | blocking read | 5000 ms | `main.py` | how long a worker waits for a new task per read |
 | `MAX_TRIES` | 3 | `failures.py` | tries before a crashing task is given up |
 | `HEARTBEAT_SECONDS` | 60 | `main.py` | how often a worker renews its claim on the task it's running |

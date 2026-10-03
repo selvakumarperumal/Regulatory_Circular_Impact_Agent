@@ -10,8 +10,9 @@ Passwords are stored as scrypt hashes. Tokens are JWTs (HS256) signed with `JWT_
 with a key made on first start and kept in Postgres, and last `TOKEN_HOURS`.
 
 **Tasks.** The api never calls OCR or Gemini. When a change needs the agent, it saves the
-change, then adds a task to the Redis stream `rci:tasks` (unless the same task is already
-queued). That stream is the workers' only source of work, so a task is never dropped
+change, then adds a task to its lane in Redis (unless the same task is already queued):
+the stream `rci:tasks`, or `rci:tasks:pdf` for reading a circular. Those streams are the
+workers' only source of work, so a task is never dropped
 quietly: if Redis can't take it, the request fails with **503**. A new policy is deleted
 again and a changed description is put back ("nothing was saved: try again"); a policy edit
 or a Reprocess stays saved ("Saved, but the task queue is unavailable: try again"), and
