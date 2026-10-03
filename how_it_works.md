@@ -2428,8 +2428,15 @@ flowchart TD
   steps, each caption names the step it shows, and the example is the guides' own
   (circular 98; company 1 and company 2). The log lines, Redis commands and SQL are the ones
   the services print and run.
-- **Full screen** (the button, or F) puts the picture on the left, as large as the screen
-  allows, and the rows and the log beside it.
+- **Each kind of part has its own shape**, as in a flowchart, and the legend under the
+  picture shows them: our code is a rounded box; you, a start or an end a pill; a table or
+  a store a cylinder; a Redis lane or list a pipe; Gemini and the regulators' sites a
+  parallelogram; OCR on the GPU a chip; a check a hexagon; a gap or a failure a flag. The
+  main paths stay faintly drawn with their arrows, and a moving note lights its path, with
+  an arrowhead where it's going.
+- **Each picture is medium-sized** (at most 1160 pixels wide), with room between its parts.
+  **Full screen** (the button, or F) puts it on the left, as large as the screen allows, and
+  the rows and the log beside it.
 - With your system set to **reduce motion**, it starts paused and each step shows its end
   state.
 

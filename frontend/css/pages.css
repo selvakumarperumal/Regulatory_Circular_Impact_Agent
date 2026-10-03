@@ -241,8 +241,9 @@ a.xbar:hover .name { color: var(--accent); }
                  text-transform: uppercase; color: var(--muted); background: var(--surface-3); vertical-align: 1px; }
 .how-canvas { margin-top: 12px; overflow-x: auto; }     /* phones: scroll the picture sideways */
 .how-svg {
-  display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line);
-  background: radial-gradient(ellipse at 50% 45%, rgba(56, 189, 248, 0.05), transparent 70%), #070b14;
+  display: block; width: 100%; max-width: 1160px; height: auto; margin: 0 auto; border-radius: 12px; border: 1px solid var(--line);
+  background: radial-gradient(ellipse at 50% 45%, rgba(56, 189, 248, 0.05), transparent 70%),
+              radial-gradient(circle, rgba(148, 163, 184, 0.08) 1px, transparent 1.4px) 0 0 / 22px 22px, #070b14;
 }
 .how-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
 .how-panels.log-only { grid-template-columns: minmax(0, 1fr); }
@@ -282,22 +283,30 @@ a.xbar:hover .name { color: var(--accent); }
 .how-count { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .how-legend { list-style: none; margin: 0 0 0 auto; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
 .how-legend li { display: flex; align-items: center; gap: 6px; }
-.how-legend i { width: 8px; height: 8px; border-radius: 3px; background: var(--k); box-shadow: 0 0 6px var(--k); }
+.how-legend svg { width: 22px; height: 13px; flex: none; overflow: visible; }
+.how-legend svg path { fill: color-mix(in srgb, var(--k) 18%, transparent); stroke: var(--k); stroke-width: 5; stroke-linejoin: round; }
+.how-legend svg .lid { fill: color-mix(in srgb, var(--k) 38%, transparent); }
 
-.how-svg .group rect { fill: rgba(148, 163, 184, 0.025); stroke: rgba(148, 163, 184, 0.16); stroke-dasharray: 5 6; }
-.how-svg .group text { font: 700 11px var(--sans); letter-spacing: 0.12em; text-transform: uppercase; fill: #64748b; }
-.how-svg .edge { fill: none; stroke: rgba(148, 163, 184, 0.11); stroke-width: 1.6; }
+.how-svg .group .frame { fill: rgba(148, 163, 184, 0.022); stroke: rgba(148, 163, 184, 0.15); stroke-dasharray: 4 6; }
+.how-svg .group .tag rect { fill: #0b1220; stroke: rgba(148, 163, 184, 0.22); }
+.how-svg .group .tag text { font: 700 10.5px var(--sans); letter-spacing: 0.12em; text-transform: uppercase; fill: #7d8fa8; }
+.how-svg .edge { fill: none; stroke: rgba(148, 163, 184, 0.11); stroke-width: 1.6; stroke-linecap: round; }
 .how-svg.quiet .edge { stroke: transparent; }
 .how-svg.quiet .edge.route { stroke: rgba(148, 163, 184, 0.2); stroke-dasharray: 2 5; }
 .how-svg.quiet .edge.backbone { stroke: rgba(148, 163, 184, 0.13); }
 .how-svg .edge.on, .how-svg.quiet .edge.on { stroke: var(--k); stroke-width: 2; stroke-dasharray: 7 7; animation: how-flow 0.7s linear infinite; }
 .how-svg .edge.on.back { animation-direction: reverse; }
 @keyframes how-flow { to { stroke-dashoffset: -14; } }
-.how-svg .node > rect {
-  fill: color-mix(in srgb, var(--k) 9%, #0a0f1c); stroke: color-mix(in srgb, var(--k) 42%, transparent); stroke-width: 1.4;
-  transition: stroke 0.25s, filter 0.25s;
+/* Each part's shape (player.js, SHAPE): a soft sheen on top, a cylinder's rim, a pipe's end, a chip's pins */
+.how-svg .node > .shape {
+  fill: color-mix(in srgb, var(--k) 10%, #0a0f1c); stroke: color-mix(in srgb, var(--k) 45%, transparent); stroke-width: 1.4;
+  stroke-linejoin: round; transition: stroke 0.25s, filter 0.25s;
 }
-.how-svg .node.on > rect { stroke: var(--k); stroke-width: 2; filter: drop-shadow(0 0 12px color-mix(in srgb, var(--k) 45%, transparent)); }
+.how-svg .node > .sheen { fill: url(#how-sheen); pointer-events: none; }
+.how-svg .node > .lid { fill: color-mix(in srgb, var(--k) 22%, #0a0f1c); stroke: color-mix(in srgb, var(--k) 50%, transparent); stroke-width: 1.2; }
+.how-svg .node > .pins { fill: none; stroke: color-mix(in srgb, var(--k) 50%, transparent); stroke-width: 2; stroke-linecap: round; }
+.how-svg .node.on > .shape { stroke: var(--k); stroke-width: 2; filter: drop-shadow(0 0 12px color-mix(in srgb, var(--k) 45%, transparent)); }
+.how-svg .node.on > .lid, .how-svg .node.on > .pins { stroke: var(--k); }
 .how-svg .node-title { font: 600 16px var(--display); fill: var(--ink); text-anchor: middle; letter-spacing: -0.01em; }
 .how-svg .node-sub { font: 500 13px var(--sans); fill: var(--muted); text-anchor: middle; }
 .how-svg .node-sub.mono { font: 500 11.5px var(--mono); }
@@ -310,7 +319,7 @@ a.xbar:hover .name { color: var(--accent); }
 .how-svg .node.inline .node-sub { text-anchor: end; }
 .how-svg .node.busy .node-sub { fill: color-mix(in srgb, var(--k) 70%, var(--ink)); font-weight: 650; }
 .how-svg .node.link { cursor: pointer; }
-.how-svg .node.link:hover > rect, .how-svg .node.link:focus-visible > rect { stroke: var(--k); fill: color-mix(in srgb, var(--k) 16%, #0a0f1c); }
+.how-svg .node.link:hover > .shape, .how-svg .node.link:focus-visible > .shape { stroke: var(--k); fill: color-mix(in srgb, var(--k) 16%, #0a0f1c); }
 .how-svg .node.link:focus { outline: none; }
 .how-svg .node-open { font: 700 12px var(--sans); fill: color-mix(in srgb, var(--k) 70%, transparent); text-anchor: middle; }
 .how-svg .slot rect { fill: rgba(56, 189, 248, 0.04); stroke: rgba(56, 189, 248, 0.25); stroke-dasharray: 3 3; }
@@ -354,7 +363,7 @@ a.xbar:hover .name { color: var(--accent); }
 .how-stage:fullscreen > .how-caption, .how-stage:fullscreen > .how-canvas,
 .how-stage:fullscreen > .how-bar, .how-stage:fullscreen > .how-controls { grid-column: 1; }
 .how-stage:fullscreen > .how-panels { grid-column: 2; grid-row: 1 / span 4; margin-top: 0; grid-template-columns: minmax(0, 1fr); align-content: start; }
-.how-stage:fullscreen .how-svg { max-height: calc(100vh - 250px); max-width: none !important; }  /* a scene's maxWidth is for the page */
+.how-stage:fullscreen .how-svg { max-height: calc(100vh - 250px); max-width: none; }
 .how-stage:fullscreen #how-tables { max-height: 48vh; }
 .how-stage:fullscreen .how-log ol { height: 38vh; max-height: none; }
 @media (max-width: 1100px) { .how-stage:fullscreen { grid-template-columns: minmax(0, 1fr); }

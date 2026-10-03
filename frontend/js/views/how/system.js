@@ -12,62 +12,65 @@ const SHA = "3f9a…c1";
 
 const nodes = {
   // the regulators and the watcher
-  reg: node(75, 95, 130, 60, "ext", "regulators", "RBI · SEBI · IRDAI"),
-  watcher: node(235, 95, 130, 60, "svc", "watcher", "every 60 min", { link: "watcher" }),
+  reg: node(88, 104, 150, 58, "ext", "regulators", "RBI · SEBI · IRDAI"),
+  watcher: node(272, 104, 132, 58, "svc", "watcher", "every 60 min", { link: "watcher" }),
   // Redis's bookkeeping
-  marks: node(95, 245, 140, 52, "queue", "marks", "no duplicates"),
-  pending: node(260, 245, 150, 52, "queue", "pending lists", "who has what"),
-  dead: node(180, 330, 170, 52, "bad", "rci:dead", "tasks given up"),
+  marks: node(104, 268, 150, 52, "queue", "marks", "no duplicates"),
+  pending: node(292, 268, 168, 52, "queue", "pending lists", "who has what"),
+  dead: node(198, 356, 180, 52, "bad", "rci:dead", "tasks given up", { shape: "pipe" }),
   // your team and the console's pages, in the sidebar's order
-  team: node(62, 560, 96, 64, "start", "your team", "browser"),
-  overview: node(219, 470, 190, 36, "svc", "Overview", "at a glance", { inline: true }),
-  gappage: node(219, 515, 190, 36, "svc", "Gaps", "to fix", { inline: true }),
-  circpage: node(219, 560, 190, 36, "svc", "Circulars", "the list", { inline: true }),
-  polpage: node(219, 605, 190, 36, "svc", "Policies", "your library", { inline: true }),
-  compage: node(219, 650, 190, 36, "svc", "Company", "who you are", { inline: true }),
-  nginx: node(370, 520, 80, 56, "svc", "nginx", ":8080"),
-  api: node(370, 625, 80, 64, "svc", "api", "FastAPI", { link: "api" }),
+  team: node(62, 600, 92, 64, "start", "your team", "browser"),
+  overview: node(235, 486, 198, 34, "svc", "Overview", "at a glance", { inline: true }),
+  gappage: node(235, 532, 198, 34, "svc", "Gaps", "to fix", { inline: true }),
+  circpage: node(235, 578, 198, 34, "svc", "Circulars", "the list", { inline: true }),
+  polpage: node(235, 624, 198, 34, "svc", "Policies", "your library", { inline: true }),
+  compage: node(235, 670, 198, 34, "svc", "Company", "who you are", { inline: true }),
+  nginx: node(402, 548, 84, 56, "svc", "nginx", ":8080"),
+  api: node(402, 662, 84, 64, "svc", "api", "FastAPI", { link: "api" }),
   // reading circulars, and checking them
-  s3: node(520, 45, 180, 40, "data", "S3", "the PDFs", { inline: true }),
-  pdf: node(520, 128, 180, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true }),
-  reader: node(720, 128, 140, 64, "svc", "reader", W, { idle: W, link: "worker" }),
-  main: node(540, 475, 230, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true }),
-  w1: node(735, 430, 130, 60, "svc", "worker 1", W, { idle: W, link: "worker" }),
-  w2: node(735, 530, 130, 60, "svc", "worker 2", W, { idle: W, link: "worker" }),
+  s3: node(575, 50, 196, 38, "data", "S3", "the PDFs", { inline: true }),
+  pdf: node(575, 142, 196, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true }),
+  reader: node(790, 142, 140, 64, "svc", "reader", W, { idle: W, link: "worker" }),
+  main: node(600, 522, 240, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true }),
+  w1: node(800, 470, 136, 60, "svc", "worker 1", W, { idle: W, link: "worker" }),
+  w2: node(800, 578, 136, 60, "svc", "worker 2", W, { idle: W, link: "worker" }),
   // what they call, and where everything is kept
-  ocr: node(995, 72, 330, 34, "gpu", "OCR · GPU", "a page at a time", { inline: true }),
-  chat: node(995, 114, 330, 34, "ext", "Gemini chat", "JSON answers", { inline: true }),
-  emb: node(995, 156, 330, 34, "ext", "Gemini embeddings", "768 numbers", { inline: true }),
-  companies: node(995, 248, 330, 34, "data", "companies · users", "A, B", { inline: true }),
-  circulars: node(995, 288, 330, 34, "data", "circulars", "95 read", { inline: true }),
-  ocrpages: node(995, 328, 330, 34, "data", "ocr_pages", "empty", { inline: true }),
-  policies: node(995, 368, 330, 34, "data", "policies · controls", "A: 4 policies", { inline: true }),
-  assessments: node(995, 408, 330, 34, "data", "assessments", "who it applies to", { inline: true }),
-  checks: node(995, 448, 330, 34, "data", "policy_checks", "one verdict each", { inline: true }),
-  gaps: node(995, 488, 330, 34, "gap", "gaps", "none open", { inline: true }),
-  events: node(995, 528, 330, 34, "gap", "gap_events", "each gap's history", { inline: true }),
+  ocr: node(1062, 80, 304, 34, "gpu", "OCR · GPU", "a page at a time", { inline: true }),
+  chat: node(1062, 124, 304, 34, "ext", "Gemini chat", "JSON answers", { inline: true }),
+  emb: node(1062, 168, 304, 34, "ext", "Gemini embeddings", "768 numbers", { inline: true }),
+  companies: node(1062, 276, 304, 34, "data", "companies · users", "A, B", { inline: true }),
+  circulars: node(1062, 320, 304, 34, "data", "circulars", "95 read", { inline: true }),
+  ocrpages: node(1062, 364, 304, 34, "data", "ocr_pages", "empty", { inline: true }),
+  policies: node(1062, 408, 304, 34, "data", "policies · controls", "A: 4 policies", { inline: true }),
+  assessments: node(1062, 452, 304, 34, "data", "assessments", "who it applies to", { inline: true }),
+  checks: node(1062, 496, 304, 34, "data", "policy_checks", "one verdict each", { inline: true }),
+  gaps: node(1062, 540, 304, 34, "gap", "gaps", "none open", { inline: true }),
+  events: node(1062, 584, 304, 34, "gap", "gap_events", "each gap's history", { inline: true }),
 };
 
 const { at, line, curve } = geometry(nodes);
-/** Right, up or down the corridor at x 814, into a table or service on the right. */
-const side = (from, to, d = 0) => curve(at(from, "r", d), [814, nodes[from].y + d], [814, nodes[to].y], at(to, "l"));
+const X = 886;                                   // the corridor between the middle and the right
+/** Right, up or down the corridor, into a table or service on the right. */
+const side = (from, to, d = 0) => curve(at(from, "r", d), [X, nodes[from].y + d], [X, nodes[to].y], at(to, "l"));
 /** From the api, along the bottom and up the same corridor, into a table. */
 const low = (to) => {
-  const y = nodes[to].y;
-  return `M${at("api", "b")} C370,672 385,684 405,684 L800,684 C814,684 814,670 814,656 L814,${y + 16} C814,${y} 822,${y} 830,${y}`;
+  const y = nodes[to].y, [ax, ay] = at("api", "b"), [tx] = at(to, "l");
+  return `M${ax},${ay} C${ax},${ay + 22} ${ax + 18},734 ${ax + 40},734 L${X - 16},734 C${X},734 ${X},720 ${X},704 `
+    + `L${X},${y + 16} C${X},${y} ${X + 8},${y} ${tx},${y}`;
 };
 const PAGES = ["overview", "gappage", "circpage", "polpage", "compage"];
-const page = (p) => [`team>${p}`, curve(at("team", "r"), [116, 560], [116, nodes[p].y], at(p, "l"))];
-const toNginx = (p) => [`${p}>nginx`, curve(at(p, "r"), [322, nodes[p].y], [322, 520], at("nginx", "l"))];
+const page = (p) => [`team>${p}`, curve(at("team", "r"), [122, 600], [122, nodes[p].y], at(p, "l"))];
+const toNginx = (p) => [`${p}>nginx`, curve(at(p, "r"), [348, nodes[p].y], [348, 548], at("nginx", "l"))];
 const cy = nodes.circulars.y;
 
 const edges = {
   "reg>watcher": line(at("reg", "r"), at("watcher", "l")),
-  "watcher>s3": curve(at("watcher", "r", -12), [360, 83], [390, 45], at("s3", "l")),
-  "watcher>pdf": curve(at("watcher", "r", 12), [360, 107], [395, 128], at("pdf", "l")),
-  "watcher>marks": curve(at("watcher", "b", -30), [205, 180], [95, 190], at("marks", "t")),
-  "watcher>circulars": `M${at("watcher", "t")} C235,40 250,12 280,12 L798,12 C812,12 812,26 812,40 L812,${cy - 16} C812,${cy} 820,${cy} 830,${cy}`,
-  "s3>reader": curve(at("s3", "r"), [660, 45], [690, 70], at("reader", "t", -20)),
+  "watcher>s3": curve(at("watcher", "r", -12), [390, 92], [430, 50], at("s3", "l")),
+  "watcher>pdf": curve(at("watcher", "r", 12), [390, 116], [430, 142], at("pdf", "l")),
+  "watcher>marks": curve(at("watcher", "b", -30), [242, 196], [104, 206], at("marks", "t")),
+  "watcher>circulars": `M${at("watcher", "t")} C272,44 290,14 320,14 L${X - 16},14 C${X},14 ${X},28 ${X},44 `
+    + `L${X},${cy - 16} C${X},${cy} ${X + 8},${cy} ${at("circulars", "l")}`,
+  "s3>reader": curve(at("s3", "r"), [720, 50], [752, 80], at("reader", "t", -20)),
   "pdf>reader": line(at("pdf", "r"), at("reader", "l")),
   "reader>ocr": side("reader", "ocr", -20),
   "reader>chat": side("reader", "chat", -10),
@@ -75,11 +78,11 @@ const edges = {
   "reader>circulars": side("reader", "circulars", 10),
   "reader>ocrpages": side("reader", "ocrpages", 18),
   "reader>assessments": side("reader", "assessments", 26),
-  "reader>main": curve(at("reader", "b", -10), [700, 300], [600, 380], at("main", "t", 50)),
-  "reader>pending": curve(at("reader", "b", -40), [660, 235], [400, 245], at("pending", "r")),
-  "reader>dead": curve(at("reader", "b", -55), [650, 300], [400, 330], at("dead", "r")),
-  "main>w1": curve(at("main", "r", -12), [663, 463], [663, 430], at("w1", "l")),
-  "main>w2": curve(at("main", "r", 12), [663, 487], [663, 530], at("w2", "l")),
+  "reader>main": curve(at("reader", "b", -10), [770, 310], [660, 410], at("main", "t", 50)),
+  "reader>pending": curve(at("reader", "b", -40), [740, 250], [470, 268], at("pending", "r")),
+  "reader>dead": curve(at("reader", "b", -55), [730, 330], [480, 356], at("dead", "r")),
+  "main>w1": curve(at("main", "r", -12), [726, 510], [722, 470], at("w1", "l")),
+  "main>w2": curve(at("main", "r", 12), [726, 534], [722, 578], at("w2", "l")),
   "w1>chat": side("w1", "chat", -10), "w2>chat": side("w2", "chat", -10),
   "w1>emb": side("w1", "emb", -4), "w2>emb": side("w2", "emb", -4),
   "w1>companies": side("w1", "companies", 2), "w2>companies": side("w2", "companies", 2),
@@ -87,11 +90,11 @@ const edges = {
   "w1>assessments": side("w1", "assessments", 10), "w2>assessments": side("w2", "assessments", 10),
   "w1>checks": side("w1", "checks", 14), "w2>checks": side("w2", "checks", 14),
   "w1>gaps": side("w1", "gaps", 18), "w1>events": side("w1", "events", 22),
-  "w1>pending": curve(at("w1", "t", -30), [705, 330], [420, 300], at("pending", "r", 14)),
+  "w1>pending": curve(at("w1", "t", -30), [770, 370], [490, 320], at("pending", "r", 14)),
   ...Object.fromEntries(PAGES.flatMap((p) => [page(p), toNginx(p)])),
   "nginx>api": line(at("nginx", "b"), at("api", "t")),
-  "api>main": curve(at("api", "r"), [418, 625], [418, 490], at("main", "l", 15)),
-  "api>pdf": curve(at("api", "r", -20), [416, 605], [416, 140], at("pdf", "l", 12)),
+  "api>main": curve(at("api", "r"), [462, 662], [462, 538], at("main", "l", 16)),
+  "api>pdf": curve(at("api", "r", -20), [458, 642], [458, 154], at("pdf", "l", 12)),
   ...Object.fromEntries(["companies", "circulars", "policies", "assessments", "checks", "gaps", "events"].map((t) => [`api>${t}`, low(t)])),
 };
 
@@ -658,10 +661,9 @@ export default {
   heading: "The whole system, step by step",
   lead: "Every part, and everything it does: a new circular from the regulator's site to a gap on your Gaps page; a company signing up and describing itself; a new policy, the full process; editing a policy; working a gap until it's closed; what happens when something goes wrong; and Reprocess. Click the watcher, the reader, a worker or the api to see that part in detail.",
   label: "The system: the regulators and the watcher top left; Redis's marks, pending lists and rci:dead below them; your team, the console's pages, nginx and the api bottom left; S3, the PDF lane and the reader top middle; the main lane and two workers below; OCR and Gemini top right; and the Postgres tables on the right.",
-  size: [1180, 700],
-  maxWidth: 1120,
-  groups: [[16, 180, 388, 210, "Redis"], [118, 420, 202, 250, "the console"], [820, 28, 350, 162, "Gemini and the GPU"],
-           [820, 206, 350, 346, "Postgres"]],
+  size: [1240, 750],
+  groups: [[16, 196, 424, 196, "Redis"], [124, 450, 222, 254, "the console"], [900, 40, 324, 166, "Gemini and the GPU"],
+           [900, 234, 324, 386, "Postgres"]],
   nodes,
   edges,
   tables,
