@@ -2,9 +2,10 @@
 default. GEMINI_API_KEY is required (https://ai.google.dev/gemini-api). Empty S3
 endpoint and keys mean real AWS.
 
-LOOKBACK_DAYS: newer circulars are read, and new policies and companies are checked
-against them. A task held CLAIM_IDLE_SECONDS by a silent worker is taken over; while a
-service is down tasks wait RETRY_SECONDS."""
+LANES: the task lanes this worker takes ("pdf": reading PDFs, "main": everything
+else), each with a loop of its own. LOOKBACK_DAYS: newer circulars are read, and new
+policies and companies are checked against them. A task held CLAIM_IDLE_SECONDS by a
+silent worker is taken over; while a service is down tasks wait RETRY_SECONDS."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,6 +31,8 @@ class Settings(BaseSettings):
     GEMINI_MODEL_NAME: str = "gemini-3.5-flash"
     GEMINI_EMBEDDING_MODEL_NAME: str = "gemini-embedding-001"
     LLM_MAX_CHARS: int = 100_000
+
+    LANES: str = "pdf,main"
 
     MATCH_TOP_K: int = 3
     LOOKBACK_DAYS: int = 30

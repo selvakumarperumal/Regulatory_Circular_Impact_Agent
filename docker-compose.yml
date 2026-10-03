@@ -6,11 +6,14 @@
 #
 # One folder per service under backend/:
 #   watcher   new RBI / SEBI / IRDAI circulars -> PDF in S3 + a row in Postgres,
-#             and a task on the Redis stream (one replica only)
+#             and a task in Redis (one replica only)
 #   ocr       Baidu Unlimited-OCR on the GPU (vLLM)
-#   worker    takes tasks off the stream: OCR -> Gemini -> gap tickets (scale freely)
+#   reader    the worker, on the pdf lane: reads each new circular's PDF (OCR), sums
+#             it up with Gemini (READERS, default 1: the GPU reads one page at a time)
+#   worker    the worker, on the main lane: does it apply, is a policy out of date ->
+#             gap tickets (WORKERS, scale up to your Gemini rate limit)
 #   api       FastAPI on :8000; queues a task when a policy or a company changes
-# plus Postgres, Redis (the task stream), and frontend/ (a static console served by
+# plus Postgres, Redis (the two task lanes), and frontend/ (a static console served by
 # nginx, which forwards /api to the api service). Floci (local S3) runs outside this
 # file, on the host's port 4566 (`floci start --persist="$HOME/.floci/aws-state"`, bucket
 # rci), and Gemini is Google's API, reached over the internet.
@@ -97,10 +100,11 @@ services:
       interval: 30s
       start_period: 20m               # the first start downloads the model
 
-  worker:
+  worker:                             # the main lane: a few Gemini calls per task
     build:
       context: ./backend
       dockerfile: worker/Dockerfile
+    image: rci-worker
     restart: unless-stopped
     deploy:
       replicas: ${WORKERS:-1}         # the consumer group gives each task to one worker
@@ -118,8 +122,16 @@ services:
       OCR_MAX_PAGES: ${OCR_MAX_PAGES:-}
       MATCH_TOP_K: ${MATCH_TOP_K:-}
       LOOKBACK_DAYS: ${LOOKBACK_DAYS:-}
+      LANES: main
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  reader:                             # the same worker on the pdf lane: minutes per PDF
+    extends: worker                   # same image and settings; only these differ
+    deploy:
+      replicas: ${READERS:-1}         # one page at a time on the GPU: more only take turns
+    environment:
+      LANES: pdf
 
   api:
     build:
