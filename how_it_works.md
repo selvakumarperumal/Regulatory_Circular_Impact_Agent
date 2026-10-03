@@ -262,7 +262,7 @@ flowchart TD
             API --> RD[["redis :6379"]]
             WA["watcher"] --> PG
             WA --> RD
-            RD -->|"PDF lane"| RE["reader × READERS"]
+            RD -->|"PDF lane"| RE["reader (one)"]
             RD -->|"main lane"| WK["worker × WORKERS"]
             RE --> PG
             WK --> PG
@@ -298,7 +298,7 @@ flowchart TD
 |---|---|---|---|
 | `watcher` | `backend/watcher` | `python main.py`: one round every 60 minutes; a task per new circular. Always **one** copy | none |
 | `ocr` | `backend/ocr` | vLLM serving `baidu/Unlimited-OCR` on the GPU | 8001 |
-| `reader` | `backend/worker` | `python main.py` with `LANES=pdf`: reads each new circular's PDF and sums it up. `READERS` copies (1: the GPU reads one page at a time) | none |
+| `reader` | `backend/worker` | `python main.py` with `LANES=pdf`: reads each new circular's PDF and sums it up. always one copy (the GPU reads one page at a time, and each PDF is read once) | none |
 | `worker` | `backend/worker` | `python main.py` with `LANES=main`: everything else, a few Gemini calls per task. `WORKERS` copies | none |
 | `api` | `backend/api` | `uvicorn main:app` | 8000 (docs at `/docs`) |
 | `frontend` | `frontend` | nginx serving the console's files, and passing `/api` on to the api | 8080 |
@@ -2044,8 +2044,9 @@ flowchart TD
   and a copy is dropped while that key exists. The worker deletes the key when the task is
   done.
 - **No locks.** Nothing is shared but Postgres, and each piece of work is saved once.
-- **More workers, not more readers.** The OCR server reads one page at a time on the GPU, so a
-  second reader would only take turns with the first (`READERS` stays 1). Workers only wait
+- **More workers, not more readers.** There's always one reader: the OCR server reads one
+  page at a time on the GPU, so a second would only take turns, and one reader never reads
+  the same PDF twice. Workers only wait
   for Gemini, so more of them do more at once, up to your Gemini key's rate limit (past it,
   they wait a minute and try again).
 - **A worker that dies** leaves its task unfinished. It's picked up again: at once if its
@@ -2096,6 +2097,13 @@ A worker with nothing to do prints nothing.
 **Does it call Gemini every minute?** No. There's no polling: a worker wakes up when a task
 arrives, and only calls Gemini for real work: a new circular, a new or edited policy, a new
 company description, or **Reprocess**. There's no timer at all.
+
+**Is a circular's PDF ever read twice?** No. Each page is read by OCR once and saved the
+moment it's read; a circular already read, queued again or Reprocessed, uses its saved
+text, and a new circular with the very same PDF copies it. Only a page whose request never
+finished (a timeout, a restart mid-page) is sent again. There's always exactly one reader,
+so two copies of a PDF are never read at once. The checks, and how each case was tested:
+[A PDF is read only once](how_the_worker_works.md#a-pdf-is-read-only-once).
 
 **Do I need to restart it after adding a policy or changing the company?** No. Saving queues
 a task, and a worker starts on it straight away.
@@ -2798,7 +2806,6 @@ Settings you're most likely to change:
 | `LOOKBACK_DAYS` | 30 | older circulars are skipped; new policies and new companies are checked against this window |
 | `MATCH_TOP_K` | 3 | how many policies Gemini checks per circular |
 | `WORKERS` | 1 | how many workers take the main lane side by side (does it apply, policy checks) |
-| `READERS` | 1 | how many readers take the PDF lane; raise it only with the ocr service's `--max-num-seqs` |
 | `OCR_MAX_PAGES` | 20 | how many pages of each PDF are read |
 | `WATCH_INTERVAL_MINUTES` | 60 | how often the watcher visits the regulators |
 | `JWT_SECRET` | empty: a key made on first start, kept in Postgres | signs login tokens |

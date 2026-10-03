@@ -9,7 +9,7 @@
 #             and a task in Redis (one replica only)
 #   ocr       Baidu Unlimited-OCR on the GPU (vLLM)
 #   reader    the worker, on the pdf lane: reads each new circular's PDF (OCR), sums
-#             it up with Gemini (READERS, default 1: the GPU reads one page at a time)
+#             it up with Gemini (always one: a PDF is never read twice)
 #   worker    the worker, on the main lane: does it apply, is a policy out of date ->
 #             gap tickets (WORKERS, scale up to your Gemini rate limit)
 #   api       FastAPI on :8000; queues a task when a policy or a company changes
@@ -129,7 +129,7 @@ services:
   reader:                             # the same worker on the pdf lane: minutes per PDF
     extends: worker                   # same image and settings; only these differ
     deploy:
-      replicas: ${READERS:-1}         # one page at a time on the GPU: more only take turns
+      replicas: 1                     # one reader: no PDF is read twice, and the GPU reads one page at a time
     environment:
       LANES: pdf
 

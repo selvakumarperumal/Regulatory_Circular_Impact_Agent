@@ -21,8 +21,8 @@ one task at a time. It acknowledges a task (`XACK`) only when it's done. A task 
 at most once at a time (a dedupe key in Redis, deleted when the task is done), so workers
 need no locks to share the work.
 
-In Docker the same program runs as two services: **`reader`** (`LANES=pdf`, `READERS`
-copies, default 1: the GPU reads one page at a time, so more would only take turns) and
+In Docker the same program runs as two services: **`reader`** (`LANES=pdf`, always one
+copy: the GPU reads one page at a time, and one reader never reads the same PDF twice) and
 **`worker`** (`LANES=main`, `WORKERS` copies, as many as your Gemini rate limit allows). On
 the host, `LANES` defaults to `pdf,main`: one process does both, in two loops.
 

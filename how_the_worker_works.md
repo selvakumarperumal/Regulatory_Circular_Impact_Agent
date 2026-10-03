@@ -586,9 +586,10 @@ flowchart TD
   it takes: the `reader` service has `LANES=pdf`, the `worker` service `LANES=main`. Run on
   your machine, it takes both (`pdf,main`), with a loop for each, so even one process never
   makes a check wait behind a PDF.
-- **One reader, many workers.** The GPU reads one page at a time, so a second reader would
-  only take turns with the first: `READERS` stays 1. Workers only wait for Gemini, so
-  `WORKERS` can grow up to your Gemini key's rate limit.
+- **One reader, many workers.** There's always exactly one reader. The GPU reads one page at
+  a time, so a second would only take turns with it, and with one reader two circulars with
+  the same PDF are read one after the other: the second copies the first's text. Workers
+  only wait for Gemini, so `WORKERS` can grow up to your Gemini key's rate limit.
 - **A slow service only stops its own lane.** While the OCR model is loading, the reader
   waits and the workers carry on.
 
@@ -1127,31 +1128,94 @@ constraint), so the second save fails with an `IntegrityError`. The worker treat
 hiccup and retries the task, which then sees the verdict already saved and skips it.
 Nothing is marked failed, and no gap is opened twice.
 
+### A PDF is read only once
+
+Reading a PDF is the slow, costly part, so several checks stand between a `circular.read`
+task and the GPU. A page goes to OCR only if nothing has read it before:
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        e(["A circular.read task<br/>is queued"]) --> k{"Its key already<br/>in Redis?"}
+        k -->|"yes: queued<br/>or running"| d1(["dropped:<br/>no copy"])
+        k -->|"no"| one["The one reader takes it,<br/>one PDF at a time"]
+        one --> st{"The circular's<br/>status?"}
+        st -->|"read, skipped, failed,<br/>or older than 30 days"| d2(["no OCR"])
+        st -->|"parsed: the<br/>text is saved"| d3(["no OCR:<br/>uses the text"])
+        st -->|"new"| tw{"Another circular with<br/>the same PDF has<br/>its text already?"}
+        tw -->|"yes"| d4(["copies it:<br/>no OCR"])
+        tw -->|"no"| pg["OCR only the pages<br/>not saved yet"]
+        pg --> sv["Each page saved<br/>the moment it's read"]
+        sv --> done(["The whole text saved:<br/>never OCR'd again"])
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class e start
+    class k,st,tw ask
+    class one svc
+    class pg,sv gpu
+    class d1,d2,d3,d4 muted
+    class done ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+Each way a PDF could be read twice was tested on 2026-10-03 against the real worker code,
+counting every page sent to OCR:
+
+| What happens | Pages sent to OCR |
+|---|---|
+| a new circular (3 pages, the last one blank) | each page once; the blank page never |
+| the same circular queued again after it was read (a re-delivery, **Reprocess**, `manage.py requeue`) | none |
+| the same task queued twice before it runs | the copy is dropped |
+| a new circular with exactly the same PDF as one already read | none: it copies the text |
+| two circulars with the same new PDF, queued together | each page once: the second copies the first's text |
+| a page's request times out | only that page is sent again |
+| the reader is killed on page 3, and a new one takes over | pages 1 and 2 are not sent again |
+| **Reprocess** on a failed circular that has its text | none |
+| a circular older than `LOOKBACK_DAYS` | none: it's skipped |
+
+The one thing sent again is a page whose request never finished (a timeout, or the reader
+stopped mid-page): its text was never saved, so there's nothing to reuse. A page that was
+read is never sent again.
+
+**Why exactly one reader.** The OCR server reads one page at a time (`--max-num-seqs 1`),
+so a second reader would only take turns with the first. And with one reader, two
+circulars with the same PDF are always read one after the other, so the second finds the
+first's text. Compose runs the `reader` service with exactly one copy for both reasons.
+
 ### Sharing the GPU
 
-The OCR server takes one page at a time (`--max-num-seqs 1`) and queues the rest, so the
-workers don't need to take turns themselves: they all send pages, and the server works
-through them in order. A PDF waiting its turn can take a while, but its worker keeps renewing
-its claim, so no other worker starts the same PDF. Meanwhile the other steps, which need no
-GPU, keep running:
+Only the reader sends pages to the GPU, one at a time. Meanwhile the workers on the main
+lane need no GPU and keep going:
 
 ```mermaid
 %%{init: {"theme": "base", "sequence": {"diagramMarginX": 0, "diagramMarginY": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "actorBkg": "#16213a", "actorBorder": "#5eead4", "actorTextColor": "#e6edf7", "actorLineColor": "#3b4a66", "signalColor": "#8b9bb4", "signalTextColor": "#e2e8f0", "noteBkgColor": "#2a2410", "noteBorderColor": "#fbbf24", "noteTextColor": "#fde68a", "labelBoxBkgColor": "#1e293b", "labelBoxBorderColor": "#64748b", "labelTextColor": "#e2e8f0", "loopTextColor": "#c4b5fd", "sequenceNumberColor": "#0b1020", "activationBkgColor": "#1e293b"}}}%%
 sequenceDiagram
     box rgb(11, 16, 32)
-        participant K1 as worker 1
+        participant R as reader
         participant O as ocr (GPU)
+        participant K as worker
         participant G as Gemini
-        participant K2 as worker 2
     end
 
     rect rgb(13, 20, 36)
-        K1->>O: circular.read 99: page 1
-        K2->>O: circular.read 100: page 1
-        Note over O: one page at a time (--max-num-seqs 1):<br/>worker 2's page waits in the OCR server's queue
-        O-->>K1: page 1 text
-        O-->>K2: page 1 text
-        K1->>G: circular.assess (A, 98) meanwhile needs no GPU
+        R->>O: circular.read 99: page 1
+        K->>G: circular.assess (A, 98)
+        O-->>R: page 1 text (saved)
+        G-->>K: applies, with a reason
+        R->>O: page 2
+        K->>G: is POL-KYC out of date?
+        O-->>R: page 2 text (saved)
     end
 ```
 
@@ -1246,7 +1310,6 @@ flowchart LR
 | Setting | Default | What it does |
 |---|---|---|
 | `WORKERS` | 1 | how many workers take the main lane side by side |
-| `READERS` | 1 | how many readers take the PDF lane (the GPU reads one page at a time, so leave it at 1) |
 | `MATCH_TOP_K` | 3 | how many closest policies Gemini checks per circular |
 | `LOOKBACK_DAYS` | 30 | new circulars older than this are skipped; new policies and new companies are checked against this many days |
 | `OCR_MAX_PAGES` | 20 | pages read per PDF |

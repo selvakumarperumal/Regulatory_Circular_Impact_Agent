@@ -106,9 +106,10 @@ Compose also takes settings from your shell, so a direnv `.envrc` that exports
 > ⚡ **More workers, more speed.** Tasks wait in two lanes. Reading a PDF takes minutes,
 > so it has its own lane and its own `reader`; everything else (a few Gemini calls each)
 > goes to the main lane, so it never waits behind a PDF. Set `WORKERS=3` in `.env` to run
-> three workers on the main lane, up to what your Gemini key's rate limit allows. Leave
-> `READERS` at 1: the GPU reads one page at a time. The Redis consumer group gives each
-> task to one of them, and a task is never queued twice, so no work is done twice. See
+> three workers on the main lane, up to what your Gemini key's rate limit allows. There's
+> always one reader: the GPU reads one page at a time, and each PDF is read only once.
+> The Redis consumer group gives each task to one worker, and a task is never queued
+> twice, so no work is done twice. See
 > [Running several workers](how_it_works.md#running-several-workers).
 
 > ⏳ **The first start of `ocr` downloads the 6.7 GB model.** Until it's ready, the reader

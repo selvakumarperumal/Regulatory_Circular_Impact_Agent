@@ -52,7 +52,8 @@ every other task to `rci:tasks` (the main lane: a few Gemini calls, seconds each
 is read as the consumer group `workers`, so each task goes to one worker.
 
 Compose runs the program as two services, told which lane to take by `LANES`: **`reader`**
-(`LANES=pdf`, `READERS` copies, default 1, since the GPU reads one page at a time) and
+(`LANES=pdf`, always one copy: the GPU reads one page at a time, and a PDF is never read
+twice) and
 **`worker`** (`LANES=main`, `WORKERS` copies). A quick task never waits behind a PDF. Run on
 the host, one process takes both lanes (`LANES=pdf,main`), with a loop for each.
 
@@ -63,7 +64,7 @@ flowchart TD
         direction TB
         watcher["watcher"] -->|"INSERT circular,<br/>XADD circular.read"| P[["Redis: the PDF lane<br/><b>rci:tasks:pdf</b>"]]
         api["api<br/>(the console)"] -->|"saves the change,<br/>XADD the task"| Q[["Redis: the main lane<br/><b>rci:tasks</b>"]]
-        P <-->|"XREADGROUP, XACK<br/>(group: workers)"| R["<b>reader</b> × READERS<br/>LANES=pdf"]
+        P <-->|"XREADGROUP, XACK<br/>(group: workers)"| R["<b>reader</b> (one)<br/>LANES=pdf"]
         Q <-->|"XREADGROUP, XACK<br/>(group: workers)"| K["<b>worker</b> × WORKERS<br/>LANES=main"]
         R -->|"XADD circular.assess,<br/>one per company"| Q
         S3[("S3 (Floci)<br/>the PDFs")] -->|"GET the PDF"| R
@@ -107,6 +108,10 @@ Two rules hold everything together:
 - **Nothing slow or paid for is done twice.** Each OCR'd page, the summary, the embeddings,
   every "does it apply?" and every policy verdict are committed the moment they exist, and
   a running task is never handed to a second worker.
+- **A PDF is read once.** OCR runs only for a circular still `new` with no twin, and only
+  for its pages not saved yet; the one reader takes PDFs one at a time, so two circulars
+  with the same PDF never run OCR together. Each case is tested in
+  [A PDF is read only once](../../how_the_worker_works.md#a-pdf-is-read-only-once).
 
 ---
 
@@ -2639,7 +2644,6 @@ keep their defaults unless you add them there.
 | `CLAIM_IDLE_SECONDS` | 300 | how long a task can go without its claim renewed before another worker takes it |
 | `RETRY_SECONDS` | 60 | the wait while OCR, Gemini or Redis is down |
 | `LANES` | `pdf,main` (compose: `reader` has `pdf`, `worker` has `main`) | the lanes this process takes, a loop for each |
-| `READERS` (compose) | 1 | how many readers take the PDF lane (the GPU reads one page at a time: more only take turns) |
 | `WORKERS` (compose) | 1 | how many workers take the main lane side by side |
 
 Constants in the code:
