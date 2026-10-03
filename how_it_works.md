@@ -13,6 +13,8 @@ picture, and shows what changes in the database and what you see in the console.
 
 > 📖 **The other guides**
 >
+> - [system_overview.md](system_overview.md): the whole system on one page, each step in a
+>   line or two.
 > - [how_the_watcher_works.md](how_the_watcher_works.md): the watcher, which finds new
 >   circulars, step by step.
 > - [how_the_worker_works.md](how_the_worker_works.md): the worker, which does the reading and

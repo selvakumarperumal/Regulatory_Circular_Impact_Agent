@@ -7,8 +7,8 @@
 
 Every `INTERVAL_MINUTES` it checks the RBI, SEBI and IRDAI sites for circulars it hasn't seen.
 For each new one it downloads the PDF, stores it in S3 as `<source>/<sha256>.pdf`, adds a
-`circulars` row with status `new`, and queues a `circular.read` task on the Redis stream,
-which a worker picks up at once.
+`circulars` row with status `new`, and queues a `circular.read` task on the Redis PDF lane
+(`rci:tasks:pdf`), which the reader picks up at once.
 
 | File | Job |
 |---|---|

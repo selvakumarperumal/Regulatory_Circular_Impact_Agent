@@ -124,6 +124,8 @@ read, so a first start doesn't work through years of history.
 
 ## Where things are explained
 
+- **[system_overview.md](system_overview.md): the whole system on one page.** Each part
+  (watcher, task queue, reader, worker, api, console) with its steps in a line or two.
 - **[how_it_works.md](how_it_works.md): start here.** The whole app in plain words, with a
   diagram for every step: the life of one circular from the regulator's website to a closed
   gap, each service, the console page by page, the data, failures and settings.
