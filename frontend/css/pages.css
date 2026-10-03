@@ -216,17 +216,42 @@ a.xbar:hover .name { color: var(--accent); }
 
 /* ── How it works: the system, animated ─────────────────────────────── */
 
+.how-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-bottom: 18px; }
+.how-tabs a {
+  display: grid; gap: 2px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink-2); transition: border-color 0.15s, background 0.15s;
+}
+.how-tabs a:hover { border-color: var(--line-strong); color: var(--ink); }
+.how-tabs a b { font: 600 14.5px var(--display); letter-spacing: -0.01em; color: var(--ink); }
+.how-tabs a small { font-size: 12px; color: var(--muted); }
+.how-tabs a.on { border-color: rgba(167, 239, 111, 0.45); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(167, 239, 111, 0.15); }
+.how-tabs a.on b { color: var(--accent-strong); }
+
 .how { display: grid; gap: 20px; }
 .how-stage { padding: 18px 20px 16px; }
-.how-caption { min-height: 112px; }
+.how-caption { min-height: 132px; }
 .how-story { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
 .how-caption h2 { margin-top: 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
-.how-caption p { margin-top: 6px; max-width: 80ch; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+.how-caption p { margin-top: 6px; max-width: 88ch; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+.how-caption .how-code { margin-top: 8px; max-width: none; font: 500 12.5px var(--mono); color: var(--teal); }
+.how-code span { margin-right: 10px; padding: 1px 7px; border-radius: 6px; font: 700 10px var(--sans); letter-spacing: 0.1em;
+                 text-transform: uppercase; color: var(--muted); background: var(--surface-3); vertical-align: 1px; }
 .how-canvas { margin-top: 12px; overflow-x: auto; }     /* phones: scroll the picture sideways */
 .how-svg {
-  display: block; width: 100%; min-width: 720px; height: auto; border-radius: 12px; border: 1px solid var(--line);
+  display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line);
   background: radial-gradient(ellipse at 50% 45%, rgba(56, 189, 248, 0.05), transparent 70%), #070b14;
 }
+.how-log { margin-top: 12px; border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; }
+.how-log-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+                font-size: 12px; color: var(--muted); }
+.how-log-head b { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
+.how-log ol { list-style: none; margin: 0; padding: 8px 0; height: 172px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.how-log li { display: flex; align-items: baseline; gap: 10px; padding: 1.5px 14px; min-width: 0; opacity: 0.7; }
+.how-log li.new { opacity: 1; background: rgba(255, 255, 255, 0.03); animation: how-line 0.35s ease-out; }
+.how-log li.none { color: var(--muted); font-size: 12.5px; opacity: 1; }
+.how-log li b { flex: none; width: 52px; font: 700 10px/18px var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--c); }
+.how-log li code { font: 500 12px/18px var(--mono); color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@keyframes how-line { from { opacity: 0; transform: translateY(4px); } }
 .how-bar { height: 3px; margin-top: 14px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
 .how-bar i { display: block; height: 100%; width: 0; background: var(--grad-button); }
 .how-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -238,8 +263,12 @@ a.xbar:hover .name { color: var(--accent); }
 .how-legend li { display: flex; align-items: center; gap: 6px; }
 .how-legend i { width: 8px; height: 8px; border-radius: 3px; background: var(--k); box-shadow: 0 0 6px var(--k); }
 
+.how-svg .group rect { fill: rgba(148, 163, 184, 0.025); stroke: rgba(148, 163, 184, 0.16); stroke-dasharray: 5 6; }
+.how-svg .group text { font: 700 11px var(--sans); letter-spacing: 0.12em; text-transform: uppercase; fill: #64748b; }
 .how-svg .edge { fill: none; stroke: rgba(148, 163, 184, 0.11); stroke-width: 1.6; }
-.how-svg .edge.on { stroke: var(--k); stroke-width: 2; stroke-dasharray: 7 7; animation: how-flow 0.7s linear infinite; }
+.how-svg.quiet .edge { stroke: transparent; }
+.how-svg.quiet .edge.route { stroke: rgba(148, 163, 184, 0.2); stroke-dasharray: 2 5; }
+.how-svg .edge.on, .how-svg.quiet .edge.on { stroke: var(--k); stroke-width: 2; stroke-dasharray: 7 7; animation: how-flow 0.7s linear infinite; }
 .how-svg .edge.on.back { animation-direction: reverse; }
 @keyframes how-flow { to { stroke-dashoffset: -14; } }
 .how-svg .node > rect {
@@ -250,7 +279,13 @@ a.xbar:hover .name { color: var(--accent); }
 .how-svg .node-title { font: 600 16px var(--display); fill: var(--ink); text-anchor: middle; letter-spacing: -0.01em; }
 .how-svg .node-sub { font: 500 13px var(--sans); fill: var(--muted); text-anchor: middle; }
 .how-svg .node-sub.mono { font: 500 11.5px var(--mono); }
+.how-svg .node.inline .node-title { text-anchor: start; font-size: 14px; }
+.how-svg .node.inline .node-sub { text-anchor: end; }
 .how-svg .node.busy .node-sub { fill: color-mix(in srgb, var(--k) 70%, var(--ink)); font-weight: 650; }
+.how-svg .node.link { cursor: pointer; }
+.how-svg .node.link:hover > rect, .how-svg .node.link:focus-visible > rect { stroke: var(--k); fill: color-mix(in srgb, var(--k) 16%, #0a0f1c); }
+.how-svg .node.link:focus { outline: none; }
+.how-svg .node-open { font: 700 12px var(--sans); fill: color-mix(in srgb, var(--k) 70%, transparent); text-anchor: middle; }
 .how-svg .slot rect { fill: rgba(56, 189, 248, 0.04); stroke: rgba(56, 189, 248, 0.25); stroke-dasharray: 3 3; }
 .how-svg .slot text { font: 600 12px var(--mono); fill: #475569; text-anchor: middle; }
 .how-svg .slot.full rect { fill: rgba(56, 189, 248, 0.16); stroke: #38bdf8; stroke-dasharray: none; }
@@ -281,4 +316,4 @@ a.xbar:hover .name { color: var(--accent); }
   font: 700 11px var(--sans); background: var(--surface-3); color: var(--ink-2);
 }
 .how-step.on .how-num { background: var(--grad-button); color: var(--accent-ink); }
-@media (prefers-reduced-motion: reduce) { .how-svg .edge.on { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .how-svg .edge.on { animation: none; } .how-log li.new { animation: none; } }

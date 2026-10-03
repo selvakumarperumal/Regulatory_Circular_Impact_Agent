@@ -2118,8 +2118,8 @@ has its own lane, so the checks never wait behind it. See
 ## 15. The console, page by page
 
 The console is the website your team uses, at http://localhost:8080. After signing in, the
-sidebar has two groups: **Work** (what needs attention) and **Library** (what you give the
-agent).
+sidebar has three groups: **Work** (what needs attention), **Library** (what you give the
+agent) and **Help** (the system, animated).
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -2138,9 +2138,14 @@ flowchart TD
             po["<b>Policies</b><br/>your policy library"]
             co["<b>Company</b><br/>your description, team<br/>and password"]
         end
+        subgraph help["Help"]
+            direction TB
+            hw["<b>How it works</b><br/>the system, animated"]
+        end
         ov --> ga
         ov --> ci
         ov ~~~ po
+        co ~~~ hw
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -2155,8 +2160,10 @@ flowchart TD
     class in start
     class ov,ga,ci svc
     class po,co data
+    class hw ok
     style work fill:#0f172a,stroke:#334155,color:#94a3b8
     style lib fill:#0f172a,stroke:#334155,color:#94a3b8
+    style help fill:#0f172a,stroke:#334155,color:#94a3b8
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -2380,6 +2387,38 @@ Adding or changing the description judges your recent circulars again (the same 
 new name, queues nothing)
 ([section 13](#13-when-a-company-signs-up-or-describes-itself)). A teammate you add sees
 everything your company sees, and can change their own password here.
+
+### How it works
+
+Four animations of the system, one per tab. Each step moves small labelled notes along the
+arrows, changes what each part says, adds the real log lines, SQL statements and Redis
+commands to a log underneath, and names the code that does it.
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        sys["<b>Whole system</b> · 14 steps<br/>one circular, end to end<br/>then a saved policy"]
+        sys -->|"click the watcher"| wa["<b>Watcher</b> · 18 steps<br/>one round, every request<br/>each way it can fail"]
+        sys -->|"click the reader<br/>or a worker"| wo["<b>Worker</b> · 26 steps<br/>taking a task · reading 98<br/>checking it · failures"]
+        sys -->|"click the console"| ap["<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down"]
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    class sys ok
+    class wa,wo,ap svc
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+- **Play, pause, step** (also ← and →, and Space), restart, or change the speed (1×, 2×,
+  0.5×). Click any step in the list below the picture to jump to it.
+- **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`), so you
+  can send someone straight to one.
+- **The values are real:** circular 98's links and fingerprint, the log lines, the Redis
+  keys and the SQL are what the services actually print and run.
+- With your system set to **reduce motion**, it starts paused and each step shows its end
+  state.
 
 ---
 

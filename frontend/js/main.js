@@ -29,6 +29,7 @@ route("policies/new", newPolicyPage);
 route("policies/:id", policyPage);
 route("company", companyPage);
 route("how", howPage);
+route("how/:scene", howPage);
 route("login", loginPage, { open: true });
 route("signup", signupPage, { open: true });
 
