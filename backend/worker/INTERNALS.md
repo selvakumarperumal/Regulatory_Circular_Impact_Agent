@@ -14,7 +14,7 @@ sections after it are the reference for each piece.
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 
-![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
+![our services](https://img.shields.io/badge/our_services-2dd4bf?style=flat-square) ![data](https://img.shields.io/badge/data-818cf8?style=flat-square) ![Gemini and outside services](https://img.shields.io/badge/Gemini_and_outside_services-c084fc?style=flat-square) ![OCR on the GPU](https://img.shields.io/badge/OCR_on_the_GPU-fb923c?style=flat-square) ![a decision](https://img.shields.io/badge/a_decision-fbbf24?style=flat-square) ![done, or OK](https://img.shields.io/badge/done,_or_OK-34d399?style=flat-square) ![a failure, or a gap](https://img.shields.io/badge/a_failure,_or_a_gap-fb7185?style=flat-square) ![where it starts](https://img.shields.io/badge/where_it_starts-a7ef6f?style=flat-square) ![the task queue](https://img.shields.io/badge/the_task_queue_in_Redis-38bdf8?style=flat-square)
 
 **Contents**
 
@@ -105,8 +105,48 @@ Two rules hold everything together:
 ## 2. Step by step: everything the worker does
 
 The worker is a program that waits for **tasks** (small notes on a list in Redis, such
-as "read circular 98") and does them, one at a time. This section follows it through
-everything it does, in 18 steps.
+as "read circular 98") and does them, one at a time:
+
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+flowchart TD
+    subgraph canvas[" "]
+        direction TB
+        wt(["The watcher finds<br/>a new circular"]) -->|"adds a note"| Q
+        ap(["You add a policy<br/>in the console"]) -->|"adds a note"| Q
+        Q[["<b>The list in Redis</b><br/>read circular 98<br/>check policy 7"]] -->|"the oldest note<br/>(none yet? it waits)"| take
+        take["1. The worker<br/>takes one note"] --> work["2. It does the job:<br/>reads the PDF, asks Gemini"]
+        work --> save[("3. It saves what it<br/>found in Postgres")]
+        save --> off["4. It adds any new notes,<br/>like 'check circular 98<br/>for company 1', then<br/>crosses this one off"]
+        off -->|"back for<br/>the next note"| Q
+    end
+    classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
+    classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
+    classDef ext fill:#2a1640,stroke:#c084fc,color:#f3e8ff
+    classDef gpu fill:#2d1b0c,stroke:#fb923c,color:#ffedd5
+    classDef ask fill:#2a2410,stroke:#fbbf24,color:#fef3c7
+    classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
+    classDef bad fill:#2e0f17,stroke:#fb7185,color:#ffe4e6
+    classDef start fill:#1c2a0e,stroke:#a7ef6f,color:#ecfccb
+    classDef muted fill:#1a2130,stroke:#64748b,color:#cbd5e1
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
+    class wt,ap start
+    class Q queue
+    class take,work svc
+    class save data
+    class off ok
+    style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
+```
+
+- **Who writes the notes:** the watcher and the api, whenever something changes, and the
+  worker itself when one job leads to the next. The worker never goes looking for work; it
+  only reads this list.
+- **One at a time:** a worker finishes a note before it takes the next. More workers
+  (`WORKERS`) share one list, and each note goes to only one of them.
+- **A note is only a pointer:** it says *what* to do, never the data. The worker reads the
+  data from Postgres when it starts the job.
+
+This section follows the worker through everything it does, in 18 steps.
 
 **The example** used in every step:
 
