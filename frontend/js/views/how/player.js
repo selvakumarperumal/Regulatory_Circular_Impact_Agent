@@ -5,14 +5,15 @@
  * mark up to that moment, and a token is on its edge while its move runs. So pausing,
  * stepping back and changing the speed only draw another moment.
  *
- * A scene: { id, tab, hint, heading, lead, label, refDoc, size: [w, h], nodes, edges,
+ * A scene: { id, tab, hint, heading, lead, label, refDoc, size: [w, h], maxWidth, nodes, edges,
  *            groups: [[x, y, w, h, label]], tables: { id: { title, store, cols } },
- *            start: { sub, slots, badge, rows }, stories, steps, quietEdges }
+ *            start: { sub, slots, badge, rows }, stories, steps, quietEdges, backbone }
  * A step:  { story, dur, ref, title, text, code, focus: [node ids], tables: [table ids],
  *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
  *            marks: [[moment, { sub, slots, badge, rows, log }], …] }
  * A move along "b>a" when only "a>b" is drawn runs the same edge backwards. quietEdges
- * draws only the edges the current step uses. */
+ * draws only the edges the current step uses, plus the backbone ones, always faintly.
+ * maxWidth caps how wide the picture is drawn. */
 import { $, $$, html, put } from "../../lib/html.js";
 import { icon } from "../../ui/icons.js";
 
@@ -111,11 +112,13 @@ function nodeSvg(id, n) {
 function sceneSvg(scene) {
   const [w, h] = scene.size;
   // Never narrower than 80% of its drawn size: on a phone it scrolls sideways instead of shrinking
+  const size = `min-width: ${Math.round(w * 0.8)}px${scene.maxWidth ? `; max-width: ${scene.maxWidth}px; margin: 0 auto` : ""}`;
+  const backbone = new Set(scene.backbone || []);
   return html`<svg class="how-svg${scene.quietEdges ? " quiet" : ""}" viewBox="0 0 ${w} ${h}" role="img"
-      aria-label="${scene.label}" style="min-width: ${Math.round(w * 0.8)}px">
+      aria-label="${scene.label}" style="${size}">
     <g class="groups">${(scene.groups || []).map(([x, y, gw, gh, label]) => html`<g class="group">
       <rect x="${x}" y="${y}" width="${gw}" height="${gh}" rx="18" /><text x="${x + 16}" y="${y + 22}">${label}</text></g>`)}</g>
-    <g class="edges">${Object.entries(scene.edges).map(([id, d]) => html`<path class="edge" data-edge="${id}" d="${d}" />`)}</g>
+    <g class="edges">${Object.entries(scene.edges).map(([id, d]) => html`<path class="edge${backbone.has(id) ? " backbone" : ""}" data-edge="${id}" d="${d}" />`)}</g>
     <g class="nodes">${Object.entries(scene.nodes).map(([id, n]) => nodeSvg(id, n))}</g>
     <g class="tokens">${range(10).map(() => html`<g class="token"><rect height="26" rx="13" y="-13" /><text y="4.5"></text></g>`)}</g>
   </svg>`;

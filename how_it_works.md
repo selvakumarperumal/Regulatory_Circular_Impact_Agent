@@ -2401,10 +2401,10 @@ code that does it.
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        sys["<b>Whole system</b> · 14 steps<br/>one circular, end to end<br/>then a saved policy"]
+        sys["<b>Whole system</b> · 47 steps<br/>every part, 7 stories:<br/>a circular · a new company<br/>a new policy · an edit<br/>a gap · failures · Reprocess"]
         sys -->|"click the watcher"| wa["<b>Watcher</b> · 33 steps<br/>the watcher guide's 9 steps<br/>each way it can fail"]
         sys -->|"click the reader<br/>or a worker"| wo["<b>Worker</b> · 48 steps<br/>INTERNALS.md's 18 steps<br/>with its tables"]
-        sys -->|"click the console"| ap["<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down"]
+        sys -->|"click the api"| ap["<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
@@ -2415,6 +2415,12 @@ flowchart TD
 
 - **Play, pause, step** (also ← and →, and Space), restart, or change the speed (1×, 2×,
   0.5×). Click any step in the list below the picture to jump to it.
+- **The Whole system tab** puts every part on one medium-sized picture (the regulators, the
+  watcher, Redis's lanes, marks and pending lists, the reader and the workers, OCR and
+  Gemini, every Postgres table, your team, the console's pages, nginx and the api) and
+  walks through 7 stories: a new circular end to end; a company signing up and describing
+  itself; a new policy, from the form to the gap it finds; editing a policy; working a gap
+  until it's closed; what happens when something goes wrong; and Reprocess.
 - **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`), so you
   can send someone straight to one.
 - **The Worker tab follows [INTERNALS.md](backend/worker/INTERNALS.md)**, and the Watcher tab
@@ -2422,8 +2428,8 @@ flowchart TD
   steps, each caption names the step it shows, and the example is the guides' own
   (circular 98; company 1 and company 2). The log lines, Redis commands and SQL are the ones
   the services print and run.
-- **Full screen** (the button, or F) puts the picture on the left and the rows and the log
-  beside it.
+- **Full screen** (the button, or F) puts the picture on the left, as large as the screen
+  allows, and the rows and the log beside it.
 - With your system set to **reduce motion**, it starts paused and each step shows its end
   state.
 

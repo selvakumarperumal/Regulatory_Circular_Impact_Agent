@@ -289,6 +289,7 @@ a.xbar:hover .name { color: var(--accent); }
 .how-svg .edge { fill: none; stroke: rgba(148, 163, 184, 0.11); stroke-width: 1.6; }
 .how-svg.quiet .edge { stroke: transparent; }
 .how-svg.quiet .edge.route { stroke: rgba(148, 163, 184, 0.2); stroke-dasharray: 2 5; }
+.how-svg.quiet .edge.backbone { stroke: rgba(148, 163, 184, 0.13); }
 .how-svg .edge.on, .how-svg.quiet .edge.on { stroke: var(--k); stroke-width: 2; stroke-dasharray: 7 7; animation: how-flow 0.7s linear infinite; }
 .how-svg .edge.on.back { animation-direction: reverse; }
 @keyframes how-flow { to { stroke-dashoffset: -14; } }
@@ -353,7 +354,7 @@ a.xbar:hover .name { color: var(--accent); }
 .how-stage:fullscreen > .how-caption, .how-stage:fullscreen > .how-canvas,
 .how-stage:fullscreen > .how-bar, .how-stage:fullscreen > .how-controls { grid-column: 1; }
 .how-stage:fullscreen > .how-panels { grid-column: 2; grid-row: 1 / span 4; margin-top: 0; grid-template-columns: minmax(0, 1fr); align-content: start; }
-.how-stage:fullscreen .how-svg { max-height: calc(100vh - 250px); }
+.how-stage:fullscreen .how-svg { max-height: calc(100vh - 250px); max-width: none !important; }  /* a scene's maxWidth is for the page */
 .how-stage:fullscreen #how-tables { max-height: 48vh; }
 .how-stage:fullscreen .how-log ol { height: 38vh; max-height: none; }
 @media (max-width: 1100px) { .how-stage:fullscreen { grid-template-columns: minmax(0, 1fr); }
