@@ -1,23 +1,25 @@
 /** The player behind every How it works animation. A scene is plain data: nodes, edges,
- * and steps, each with a caption, the tokens that move along the edges, and marks that
- * change what the nodes say. What's drawn is a pure function of (step, progress through
- * it): the state at a moment is the scene's start plus every mark up to that moment, and
- * a token is on its edge while its move runs. So pausing, stepping back and changing the
- * speed only draw another moment.
+ * tables, and steps, each with a caption, the tokens that move along the edges, and marks
+ * that change what the nodes say and what the tables hold. What's drawn is a pure function
+ * of (step, progress through it): the state at a moment is the scene's start plus every
+ * mark up to that moment, and a token is on its edge while its move runs. So pausing,
+ * stepping back and changing the speed only draw another moment.
  *
- * A scene: { id, tab, label, size: [w, h], nodes, edges: { "a>b": path }, groups, start,
- *           stories, steps, quietEdges (draw only the edges the current step uses) }
- * A step: { story, dur, title, text, code, focus: [node ids],
- *           moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
- *           marks: [[moment, { sub, slots, badge, log }], …] }
- * A move along "b>a" when only "a>b" is drawn runs the same edge backwards. */
+ * A scene: { id, tab, hint, heading, lead, label, refDoc, size: [w, h], nodes, edges,
+ *            groups: [[x, y, w, h, label]], tables: { id: { title, store, cols } },
+ *            start: { sub, slots, badge, rows }, stories, steps, quietEdges }
+ * A step:  { story, dur, ref, title, text, code, focus: [node ids], tables: [table ids],
+ *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
+ *            marks: [[moment, { sub, slots, badge, rows, log }], …] }
+ * A move along "b>a" when only "a>b" is drawn runs the same edge backwards. quietEdges
+ * draws only the edges the current step uses. */
 import { $, $$, html, put } from "../../lib/html.js";
 import { icon } from "../../ui/icons.js";
 
 // The same colours as the diagrams in the docs.
 export const KIND = {
   svc: "#2dd4bf", data: "#818cf8", ext: "#c084fc", gpu: "#fb923c", queue: "#38bdf8",
-  start: "#a7ef6f", ask: "#fbbf24", gap: "#fb7185", bad: "#fb7185", ok: "#34d399",
+  start: "#a7ef6f", ask: "#fbbf24", gap: "#fb7185", bad: "#fb7185", ok: "#34d399", step: "#94a3b8",
 };
 
 // The log panel's line types.
@@ -26,20 +28,30 @@ const LOG = {
   llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warn", "#fbbf24"],
   error: ["error", "#fb7185"], app: ["app", "#cbd5e1"],
 };
-const LOG_LINES = 7;
+const LOG_LINES = 9;
 
-/** A node: node(x, y, w, h, kind, title, sub, { slots, idle, link, badge, mono, inline }).
+/** A node: node(x, y, w, h, kind, title, sub, { slots, idle, link, badge, mono, inline, num }).
  * idle: the sub-line that means "not busy"; any other sub-line makes the node glow as busy.
- * link: the scene that shows this part in detail (clicking the node opens it). */
+ * link: the scene that shows this part in detail (clicking the node opens it).
+ * num: a step number, drawn in a circle on the left (the boxes of a numbered walkthrough). */
 export const node = (x, y, w, h, kind, title, sub = "", opts = {}) => ({ x, y, w, h, kind, title, sub, ...opts });
 
-/** Path helpers for a scene: at(id, side, offset) is a point on a node's side. */
+/** Path helpers for a scene. at(id, side, offset) is a point on a node's side; via(a, y, b)
+ * runs from a to b along the horizontal corridor at height y (between rows of boxes). */
 export function geometry(nodes) {
   const at = (id, side, d = 0) => {
     const { x, y, w, h } = nodes[id];
     return { l: [x - w / 2, y + d], r: [x + w / 2, y + d], t: [x + d, y - h / 2], b: [x + d, y + h / 2] }[side];
   };
-  return { at, line: (a, b) => `M${a} L${b}`, curve: (a, c1, c2, b) => `M${a} C${c1} ${c2} ${b}` };
+  const line = (a, b) => `M${a} L${b}`;
+  const curve = (a, c1, c2, b) => `M${a} C${c1} ${c2} ${b}`;
+  const via = (a, y, b) => {
+    const s = Math.sign(b[0] - a[0]) || 1;
+    if (Math.abs(b[0] - a[0]) < 70) return curve(a, [a[0] + 12 * s, a[1]], [b[0] - 12 * s, b[1]], b);
+    return `M${a} C${[a[0] + 14 * s, a[1]]} ${[a[0] + 14 * s, y]} ${[a[0] + 28 * s, y]} L${[b[0] - 28 * s, y]} `
+      + `C${[b[0] - 14 * s, y]} ${[b[0] - 14 * s, b[1]]} ${b}`;
+  };
+  return { at, line, curve, via };
 }
 
 const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
@@ -54,11 +66,12 @@ function apply(s, change) {
 
 /** The state at a moment: the start, every mark of the earlier steps, and this step's up to p. */
 function stateAt(scene, step, p) {
-  const s = { sub: {}, slots: {}, badge: {}, log: [] };
+  const s = { sub: {}, slots: {}, badge: {}, rows: {}, log: [] };
   for (const [id, n] of Object.entries(scene.nodes)) {
     s.sub[id] = n.sub;
     if (n.slots) s.slots[id] = [];
   }
+  for (const id of Object.keys(scene.tables || {})) s.rows[id] = [];
   apply(s, scene.start || {});
   scene.steps.slice(0, step + 1).forEach((st, k) => {
     const marks = [...(st.marks || [])].sort((a, b) => a[0] - b[0]);
@@ -70,18 +83,20 @@ function stateAt(scene, step, p) {
 // ── Drawing ────────────────────────────────────────────────────────────────
 
 function nodeSvg(id, n) {
-  const { x, y, w, h, kind, title, slots } = n;
+  const { x, y, w, h, kind, title, slots, num } = n;
   const top = y - h / 2;
   const gap = 6;
   const sw = slots ? Math.min(78, (w - 24 - (slots - 1) * gap) / slots) : 0;
   const sx = x - (slots * sw + (slots - 1) * gap) / 2;
+  const cx = num ? x + 14 : x;                    // a numbered box centres its text right of the number
   // inline: a one-line row (a table, a service): the title on the left, the line on the right
   const [tx, sx2, ty, sy] = n.inline ? [x - w / 2 + 14, x + w / 2 - 14, y + 5, y + 5]
-    : [x, x, slots ? top + 22 : y - 3, slots ? top + 38 : y + 15];
-  return html`<g class="node${n.link ? " link" : ""}${n.inline ? " inline" : ""}" data-node="${id}" style="--k: ${KIND[kind]}"
-      ${n.link ? html`data-link="${n.link}" tabindex="0" role="link" aria-label="${title}: see it in detail"` : ""}>
+    : [cx, cx, slots ? top + 22 : y - 3, slots ? top + 38 : y + 15];
+  return html`<g class="node${n.link ? " link" : ""}${n.inline ? " inline" : ""}${num ? " numbered" : ""}" data-node="${id}"
+      style="--k: ${KIND[kind]}" ${n.link ? html`data-link="${n.link}" tabindex="0" role="link" aria-label="${title}: see it in detail"` : ""}>
     ${n.link ? html`<title>${title}: click to see it in detail</title>` : ""}
     <rect x="${x - w / 2}" y="${top}" width="${w}" height="${h}" rx="${n.inline ? 10 : 14}" />
+    ${num ? html`<g class="node-num" transform="translate(${x - w / 2 + 20} ${y})"><circle r="13" /><text y="4.5">${num}</text></g>` : ""}
     <text class="node-title" x="${tx}" y="${ty}">${title}</text>
     <text class="node-sub${n.mono ? " mono" : ""}" data-sub="${id}" x="${sx2}" y="${sy}"></text>
     ${slots ? range(slots).map((i) => html`
@@ -102,7 +117,7 @@ function sceneSvg(scene) {
       <rect x="${x}" y="${y}" width="${gw}" height="${gh}" rx="18" /><text x="${x + 16}" y="${y + 22}">${label}</text></g>`)}</g>
     <g class="edges">${Object.entries(scene.edges).map(([id, d]) => html`<path class="edge" data-edge="${id}" d="${d}" />`)}</g>
     <g class="nodes">${Object.entries(scene.nodes).map(([id, n]) => nodeSvg(id, n))}</g>
-    <g class="tokens">${range(9).map(() => html`<g class="token"><rect height="26" rx="13" y="-13" /><text y="4.5"></text></g>`)}</g>
+    <g class="tokens">${range(10).map(() => html`<g class="token"><rect height="26" rx="13" y="-13" /><text y="4.5"></text></g>`)}</g>
   </svg>`;
 }
 
@@ -110,11 +125,25 @@ function stepList(scene) {
   return scene.stories.map((story, s) => html`
     <li class="how-story-head">${story}</li>
     ${scene.steps.map((st, i) => st.story === s ? html`<li><button type="button" class="how-step" data-step="${i}">
-      <span class="how-num">${i + 1}</span><span>${st.title}</span></button></li>` : "")}`);
+      <span class="how-num">${i + 1}</span><span class="how-step-title">${st.title}</span>
+      ${st.ref ? html`<em>${st.ref}</em>` : ""}</button></li>` : "")}`);
 }
 
 const LEGEND = [["svc", "our code"], ["data", "data"], ["ext", "Gemini, outside sites"], ["gpu", "OCR on the GPU"],
                 ["queue", "a task, Redis"], ["ask", "a check"], ["gap", "a gap, a failure"]];
+
+/** One table of the "rows now" panel. Rows or cells that differ from the step's start are lit. */
+function tableHtml(def, rows, before) {
+  const was = new Set(before.map((r) => JSON.stringify(r)));
+  return html`<section class="how-table">
+    <header><b>${def.title}</b><span>${def.store}</span></header>
+    ${rows.length ? html`<table>
+      <thead><tr>${def.cols.map((c) => html`<th>${c}</th>`)}</tr></thead>
+      <tbody>${rows.map((r, i) => html`<tr class="${was.has(JSON.stringify(r)) ? "" : "changed"}">${r.map((cell, j) => html`
+        <td class="${before[i] && before[i][j] === cell ? "" : "lit"}" title="${cell}">${cell}</td>`)}</tr>`)}</tbody>
+    </table>` : html`<p class="how-empty">no rows</p>`}
+  </section>`;
+}
 
 // ── Playing ────────────────────────────────────────────────────────────────
 
@@ -130,10 +159,6 @@ export function play(scene, root) {
           <p class="how-code" id="how-code"></p>
         </div>
         <div class="how-canvas">${sceneSvg(scene)}</div>
-        <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
-          <div class="how-log-head"><b>Underneath</b><span>what the logs, Redis, Postgres and the network see</span></div>
-          <ol id="how-log"></ol>
-        </div>
         <div class="how-bar"><i id="how-progress"></i></div>
         <div class="how-controls">
           <button class="icon-btn" id="how-restart" title="Start again" aria-label="Start again">${icon("refresh")}</button>
@@ -141,7 +166,19 @@ export function play(scene, root) {
           <button class="btn primary sm" id="how-play"></button>
           <button class="icon-btn" id="how-next" title="Next step (→)" aria-label="Next step">${icon("forward")}</button>
           <button class="btn ghost sm" id="how-speed" title="Speed">1×</button>
+          <span class="how-count" id="how-count"></span>
+          <button class="btn ghost sm" id="how-full" title="Full screen (F)">${icon("expand")}Full screen</button>
           <ul class="how-legend">${LEGEND.map(([k, label]) => html`<li style="--k: ${KIND[k]}"><i></i>${label}</li>`)}</ul>
+        </div>
+        <div class="how-panels${scene.tables ? "" : " log-only"}">
+          ${scene.tables ? html`<div class="how-rows" aria-live="polite">
+            <div class="how-panel-head"><b>The rows now</b><span>what this step changed is lit</span></div>
+            <div id="how-tables"></div>
+          </div>` : ""}
+          <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
+            <div class="how-panel-head"><b>Underneath</b><span>the log lines, SQL, Redis commands and requests</span></div>
+            <ol id="how-log"></ol>
+          </div>
         </div>
       </section>
       <aside class="panel how-steps"><ol>${stepList(scene)}</ol></aside>
@@ -149,14 +186,16 @@ export function play(scene, root) {
 
   const steps = scene.steps;
   const total = steps.reduce((n, s) => n + s.dur, 0);
+  const stage = $(".how-stage", root);
   const svg = $(".how-svg", root);
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const pathOf = Object.fromEntries($$(".edge", svg).map((p) => [p.dataset.edge, p]));
   const lengthOf = Object.fromEntries(Object.entries(pathOf).map(([id, p]) => [id, p.getTotalLength()]));
   const tokens = $$(".token", svg);
   const widths = new Map();
-  let step = 0, p = reduced ? 1 : 0, playing = !reduced, speed = 1, last = null, shownStep = -1, shownLog = "";
   const shown = new Map();                        // text element → the text last put in it
+  let step = 0, p = reduced ? 1 : 0, playing = !reduced, speed = 1, last = null;
+  let shownStep = -1, shownLog = "", shownRows = "", before = null;
 
   /** Put text in an SVG text element, cut with "…" to fit `max` pixels. */
   function fit(el, text, max) {
@@ -172,7 +211,7 @@ export function play(scene, root) {
   /** The room a node's sub-line has: the box, less the title when they share the line. */
   const room = Object.fromEntries(Object.entries(scene.nodes).map(([id, n]) => {
     const title = $(`[data-node="${id}"] .node-title`, svg);
-    return [id, n.inline ? n.w - 42 - title.getComputedTextLength() : n.w - 16];
+    return [id, n.inline ? n.w - 42 - title.getComputedTextLength() : n.w - (n.num ? 50 : 16)];
   }));
 
   function edgeFor(name) {
@@ -198,8 +237,19 @@ export function play(scene, root) {
     shownLog = key;
     const recent = lines.slice(-LOG_LINES);
     put($("#how-log", root), html`${recent.map(([type, text], i) => html`
-      <li class="${i === recent.length - 1 ? "new" : ""}" style="--c: ${LOG[type][1]}"><b>${LOG[type][0]}</b><code>${text}</code></li>`)}
+      <li class="${i === recent.length - 1 ? "new" : ""}" style="--c: ${LOG[type][1]}"><b>${LOG[type][0]}</b><code title="${text}">${text}</code></li>`)}
       ${recent.length ? "" : html`<li class="none">Nothing yet: press play.</li>`}`);
+  }
+
+  function showTables(st, s) {
+    if (!scene.tables) return;
+    const ids = st.tables || [];
+    const key = JSON.stringify(ids.map((id) => s.rows[id]));
+    if (key === shownRows) return;
+    shownRows = key;
+    put($("#how-tables", root), ids.length
+      ? html`${ids.map((id) => tableHtml(scene.tables[id], s.rows[id], before.rows[id]))}`
+      : html`<p class="how-empty">No table changes in this step.</p>`);
   }
 
   function draw() {
@@ -207,10 +257,13 @@ export function play(scene, root) {
     const s = stateAt(scene, step, p);
     if (shownStep !== step) {
       shownStep = step;
+      before = stateAt(scene, step, 0);
+      shownRows = "";
       $("#how-story", root).textContent = scene.stories[st.story];
-      $("#how-title", root).textContent = `${step + 1}. ${st.title}`;
+      put($("#how-title", root), html`${st.ref ? html`<span class="how-ref">${scene.refDoc} · ${st.ref}</span>` : ""}${st.title}`);
       $("#how-text", root).textContent = st.text;
       put($("#how-code", root), st.code ? html`<span>In the code</span>${st.code}` : html``);
+      $("#how-count", root).textContent = `step ${step + 1} of ${steps.length}`;
       $$(".how-step", root).forEach((b) => b.classList.toggle("on", +b.dataset.step === step));
       const routes = new Set(st.moves.map(([, name]) => edgeFor(name).id));
       for (const [id, path] of Object.entries(pathOf)) path.classList.toggle("route", routes.has(id));
@@ -233,6 +286,7 @@ export function play(scene, root) {
       $("text", badge).textContent = n || "";
     }
     showLog(s.log);
+    showTables(st, s);
 
     const lit = new Set(st.focus || []);
     const busyEdges = new Map();
@@ -286,6 +340,11 @@ export function play(scene, root) {
     requestAnimationFrame(frame);
   }
 
+  function toggleFull() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else stage.requestFullscreen?.();
+  }
+
   $("#how-play", root).addEventListener("click", () => {
     if (step === steps.length - 1 && p >= 1) return go(0, { play: true });
     playing = !playing;
@@ -295,6 +354,7 @@ export function play(scene, root) {
   $("#how-prev", root).addEventListener("click", () => go(p > 0.15 && !reduced ? step : step - 1));
   $("#how-next", root).addEventListener("click", () => go(step + 1));
   $("#how-restart", root).addEventListener("click", () => go(0, { play: true }));
+  $("#how-full", root).addEventListener("click", toggleFull);
   $("#how-speed", root).addEventListener("click", (e) => {
     speed = speed === 1 ? 2 : speed === 2 ? 0.5 : 1;
     e.currentTarget.textContent = `${speed}×`;
@@ -305,7 +365,9 @@ export function play(scene, root) {
   });
   const open = (e) => {
     const target = e.target.closest("[data-link]");
-    if (target) location.hash = `#/how/${target.dataset.link}`;
+    if (!target) return;
+    if (document.fullscreenElement) document.exitFullscreen();
+    location.hash = `#/how/${target.dataset.link}`;
   };
   svg.addEventListener("click", open);
   svg.addEventListener("keydown", (e) => { if (e.key === "Enter") open(e); });
@@ -315,6 +377,7 @@ export function play(scene, root) {
     if (e.key === " " && !e.target.closest("button, [data-link]")) { e.preventDefault(); $("#how-play", root).click(); }
     if (e.key === "ArrowRight") go(step + 1);
     if (e.key === "ArrowLeft") go(step - 1);
+    if (e.key === "f" || e.key === "F") toggleFull();
   };
   addEventListener("keydown", keys);
 

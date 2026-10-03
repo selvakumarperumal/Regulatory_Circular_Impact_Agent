@@ -2391,8 +2391,10 @@ everything your company sees, and can change their own password here.
 ### How it works
 
 Four animations of the system, one per tab. Each step moves small labelled notes along the
-arrows, changes what each part says, adds the real log lines, SQL statements and Redis
-commands to a log underneath, and names the code that does it.
+arrows and changes what each part says. Under the picture, **The rows now** shows the
+database and Redis rows that step changed (lit), like the tables in the guides, and
+**Underneath** shows the log lines, SQL statements and Redis commands. The caption names the
+code that does it.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
@@ -2400,8 +2402,8 @@ flowchart TD
     subgraph canvas[" "]
         direction TB
         sys["<b>Whole system</b> · 14 steps<br/>one circular, end to end<br/>then a saved policy"]
-        sys -->|"click the watcher"| wa["<b>Watcher</b> · 18 steps<br/>one round, every request<br/>each way it can fail"]
-        sys -->|"click the reader<br/>or a worker"| wo["<b>Worker</b> · 26 steps<br/>taking a task · reading 98<br/>checking it · failures"]
+        sys -->|"click the watcher"| wa["<b>Watcher</b> · 33 steps<br/>the watcher guide's 9 steps<br/>each way it can fail"]
+        sys -->|"click the reader<br/>or a worker"| wo["<b>Worker</b> · 48 steps<br/>INTERNALS.md's 18 steps<br/>with its tables"]
         sys -->|"click the console"| ap["<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -2415,8 +2417,13 @@ flowchart TD
   0.5×). Click any step in the list below the picture to jump to it.
 - **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`), so you
   can send someone straight to one.
-- **The values are real:** circular 98's links and fingerprint, the log lines, the Redis
-  keys and the SQL are what the services actually print and run.
+- **The Worker tab follows [INTERNALS.md](backend/worker/INTERNALS.md)**, and the Watcher tab
+  [how_the_watcher_works.md](how_the_watcher_works.md): their numbered boxes are the guides'
+  steps, each caption names the step it shows, and the example is the guides' own
+  (circular 98; company 1 and company 2). The log lines, Redis commands and SQL are the ones
+  the services print and run.
+- **Full screen** (the button, or F) puts the picture on the left and the rows and the log
+  beside it.
 - With your system set to **reduce motion**, it starts paused and each step shows its end
   state.
 

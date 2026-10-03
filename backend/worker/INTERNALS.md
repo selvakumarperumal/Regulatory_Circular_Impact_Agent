@@ -9,7 +9,9 @@ all the way down. The code is in this folder, and the queue's names are in
 [`common/queue.py`](../common/common/queue.py).
 
 Start with [section 2](#2-step-by-step-everything-the-worker-does): it walks through
-everything the worker does, step 1 to step 18, with the database after each step. The
+everything the worker does, step 1 to step 18, with the database after each step. To watch
+the same 18 steps animated, with these tables filling in, open **How it works → Worker** in
+the console (`#/how/worker`). The
 sections after it are the reference for each piece.
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:

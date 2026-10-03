@@ -227,11 +227,14 @@ a.xbar:hover .name { color: var(--accent); }
 .how-tabs a.on { border-color: rgba(167, 239, 111, 0.45); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(167, 239, 111, 0.15); }
 .how-tabs a.on b { color: var(--accent-strong); }
 
+#view:has(.how-tabs) { max-width: 1800px; }          /* a bigger picture on wide screens */
 .how { display: grid; gap: 20px; }
 .how-stage { padding: 18px 20px 16px; }
 .how-caption { min-height: 132px; }
 .how-story { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
-.how-caption h2 { margin-top: 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
+.how-caption h2 { margin-top: 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.how-ref { padding: 2px 9px; border-radius: 999px; font: 700 10.5px var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+           color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(167, 239, 111, 0.25); }
 .how-caption p { margin-top: 6px; max-width: 88ch; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
 .how-caption .how-code { margin-top: 8px; max-width: none; font: 500 12.5px var(--mono); color: var(--teal); }
 .how-code span { margin-right: 10px; padding: 1px 7px; border-radius: 6px; font: 700 10px var(--sans); letter-spacing: 0.1em;
@@ -241,11 +244,28 @@ a.xbar:hover .name { color: var(--accent); }
   display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line);
   background: radial-gradient(ellipse at 50% 45%, rgba(56, 189, 248, 0.05), transparent 70%), #070b14;
 }
-.how-log { margin-top: 12px; border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; }
-.how-log-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line);
-                font-size: 12px; color: var(--muted); }
-.how-log-head b { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
-.how-log ol { list-style: none; margin: 0; padding: 8px 0; height: 172px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.how-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
+.how-panels.log-only { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1150px) { .how-panels { grid-template-columns: minmax(0, 1fr); } }
+.how-rows, .how-log { border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; min-width: 0; }
+.how-log { display: flex; flex-direction: column; }
+.how-panel-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+                  font-size: 12px; color: var(--muted); }
+.how-panel-head b { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
+#how-tables { display: grid; gap: 12px; padding: 12px 14px 14px; max-height: 360px; overflow: auto; }
+.how-table header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.how-table header b { font: 600 13px var(--mono); color: var(--ink); }
+.how-table header span { font-size: 11px; color: var(--muted); }
+.how-table table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.how-table th { text-align: left; padding: 4px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+                color: var(--muted); border-bottom: 1px solid var(--line); }
+.how-table td { padding: 5px 8px; color: #cbd5e1; font-family: var(--mono); border-bottom: 1px solid rgba(148, 163, 184, 0.07);
+                vertical-align: top; line-height: 1.45; overflow-wrap: anywhere; }
+.how-table tr.changed td { background: rgba(167, 239, 111, 0.04); }
+.how-table td.lit { color: var(--accent-strong); font-weight: 650; }
+.how-empty { margin: 0; padding: 4px 0; font-size: 12.5px; color: var(--muted); }
+.how-log ol { list-style: none; margin: 0; padding: 8px 0; height: 214px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.how-panels:not(.log-only) .how-log ol { flex: 1; height: auto; min-height: 214px; max-height: 420px; }
 .how-log li { display: flex; align-items: baseline; gap: 10px; padding: 1.5px 14px; min-width: 0; opacity: 0.7; }
 .how-log li.new { opacity: 1; background: rgba(255, 255, 255, 0.03); animation: how-line 0.35s ease-out; }
 .how-log li.none { color: var(--muted); font-size: 12.5px; opacity: 1; }
@@ -259,6 +279,7 @@ a.xbar:hover .name { color: var(--accent); }
 .how-controls .btn svg { width: 13px; height: 13px; }
 #how-play { min-width: 98px; }
 #how-speed { min-width: 46px; font-variant-numeric: tabular-nums; }
+.how-count { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .how-legend { list-style: none; margin: 0 0 0 auto; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); }
 .how-legend li { display: flex; align-items: center; gap: 6px; }
 .how-legend i { width: 8px; height: 8px; border-radius: 3px; background: var(--k); box-shadow: 0 0 6px var(--k); }
@@ -280,6 +301,11 @@ a.xbar:hover .name { color: var(--accent); }
 .how-svg .node-sub { font: 500 13px var(--sans); fill: var(--muted); text-anchor: middle; }
 .how-svg .node-sub.mono { font: 500 11.5px var(--mono); }
 .how-svg .node.inline .node-title { text-anchor: start; font-size: 14px; }
+.how-svg .node.numbered .node-title { font-size: 15px; }
+.how-svg .node-num circle { fill: color-mix(in srgb, var(--k) 22%, #0a0f1c); stroke: var(--k); stroke-width: 1.4; }
+.how-svg .node-num text { font: 700 12px var(--sans); fill: color-mix(in srgb, var(--k) 40%, #fff); text-anchor: middle; }
+.how-svg .node.on .node-num circle { fill: var(--k); }
+.how-svg .node.on .node-num text { fill: #0a0f1c; }
 .how-svg .node.inline .node-sub { text-anchor: end; }
 .how-svg .node.busy .node-sub { fill: color-mix(in srgb, var(--k) 70%, var(--ink)); font-weight: 650; }
 .how-svg .node.link { cursor: pointer; }
@@ -310,6 +336,9 @@ a.xbar:hover .name { color: var(--accent); }
   background: transparent; color: var(--ink-2); font: 550 13.5px var(--sans); text-align: left; cursor: pointer;
 }
 .how-step:hover { background: var(--surface-3); color: var(--ink); }
+.how-step-title { min-width: 0; }
+.how-step em { margin-left: auto; flex: none; font: 600 10.5px var(--sans); font-style: normal; color: var(--muted);
+               padding: 1px 7px; border-radius: 999px; background: var(--surface-3); white-space: nowrap; }
 .how-step.on { background: var(--accent-soft); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
 .how-num {
   display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; flex: none;
@@ -317,3 +346,15 @@ a.xbar:hover .name { color: var(--accent); }
 }
 .how-step.on .how-num { background: var(--grad-button); color: var(--accent-ink); }
 @media (prefers-reduced-motion: reduce) { .how-svg .edge.on { animation: none; } .how-log li.new { animation: none; } }
+
+/* Full screen: the picture big on the left, the rows and the log on the right */
+.how-stage:fullscreen { overflow: auto; padding: 22px 26px; background: var(--page);
+                        display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 30%); gap: 0 22px; align-content: start; }
+.how-stage:fullscreen > .how-caption, .how-stage:fullscreen > .how-canvas,
+.how-stage:fullscreen > .how-bar, .how-stage:fullscreen > .how-controls { grid-column: 1; }
+.how-stage:fullscreen > .how-panels { grid-column: 2; grid-row: 1 / span 4; margin-top: 0; grid-template-columns: minmax(0, 1fr); align-content: start; }
+.how-stage:fullscreen .how-svg { max-height: calc(100vh - 250px); }
+.how-stage:fullscreen #how-tables { max-height: 48vh; }
+.how-stage:fullscreen .how-log ol { height: 38vh; max-height: none; }
+@media (max-width: 1100px) { .how-stage:fullscreen { grid-template-columns: minmax(0, 1fr); }
+  .how-stage:fullscreen > .how-panels { grid-column: 1; grid-row: auto; margin-top: 14px; } }

@@ -24,6 +24,7 @@ const PATHS = {
   pause: '<path d="M8 5v14M16 5v14"/>',
   back: '<path d="M18 5L9 12l9 7z"/><path d="M6 5v14"/>',
   forward: '<path d="M6 5l9 7-9 7z"/><path d="M18 5v14"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
 };
 
 export const icon = (name) => new Safe(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" `

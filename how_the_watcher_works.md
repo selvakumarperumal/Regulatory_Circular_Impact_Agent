@@ -8,7 +8,8 @@ PDF, and hands it over to the workers. It doesn't read the circulars or call Gem
 the worker's job.
 
 This guide follows the watcher through one round, step by step, with a picture for each step
-and what changes in the database. The code is in [backend/watcher](backend/watcher).
+and what changes in the database. The code is in [backend/watcher](backend/watcher). To watch
+the same round animated, open **How it works → Watcher** in the console (`#/how/watcher`).
 
 **Reading the diagrams.** Each colour means the same thing in every diagram:
 

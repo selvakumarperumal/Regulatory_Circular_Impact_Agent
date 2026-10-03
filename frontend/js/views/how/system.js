@@ -86,7 +86,7 @@ const steps = [
       ["page 2", "reader>ocr", 0.52, 0.66, "gpu"], ["text", "ocr>reader", 0.68, 0.8, "gpu"],
       ["text", "reader>db", 0.8, 0.94, "data"],
     ],
-    marks: [[0.94, { sub: { db: "circular 98 · text saved" }, log: ["log", "INFO #98 parsed: 2431 chars"] }]],
+    marks: [[0.94, { sub: { db: "circular 98 · text saved" }, log: ["log", "INFO #98 parsed: 12408 chars"] }]],
   },
   {
     story: 0, dur: 5600, focus: ["reader", "gemini"],
@@ -98,7 +98,7 @@ const steps = [
       ["summary", "reader>db", 0.76, 0.92, "data"],
     ],
     marks: [[0.92, { sub: { db: "circular 98 · read" },
-                     log: ["log", "INFO #98 read: addressed to 'The Chairpersons/ CEOs of the Commercial Banks, …'"] }]],
+                     log: ["log", "INFO #98 read: addressed to 'All Regulated Entities…'"] }]],
   },
   {
     story: 0, dur: 5200, focus: ["reader", "main"],
