@@ -11,23 +11,23 @@ Each company signs in to its own console and sees only its own policies and gaps
 library and gap history are data a chatbot will never have.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        sites["RBI · SEBI · IRDAI<br/>websites"] -->|"every hour"| W["watcher"]
+        sites[/"RBI · SEBI · IRDAI<br/>websites"/] -->|"every hour"| W("watcher")
         W -->|PDF| S3[("S3 (Floci)")]
         W -->|"row, status new"| DB[("Postgres<br/>every result")]
         W -->|"circular.read"| QP[["Redis: the PDF lane"]]
-        F["frontend<br/>console :8080<br/>(sign in)"] <--> A["api<br/>FastAPI :8000"]
+        F("frontend<br/>console :8080<br/>(sign in)") <--> A("api<br/>FastAPI :8000")
         A <--> DB
         A -->|"policy.check, …"| QM[["Redis: the main lane"]]
-        QP -->|"one PDF at a time"| R["<b>reader</b><br/>1. OCR each page, once<br/>2. summarise it, once"]
+        QP -->|"one PDF at a time"| R("<b>reader</b><br/>1. OCR each page, once<br/>2. summarise it, once")
         S3 -->|PDF| R
-        R <-->|"page image → text"| O["ocr<br/>Unlimited-OCR on vLLM (GPU)"]
+        R <-->|"page image → text"| O[/"ocr<br/>Unlimited-OCR on vLLM (GPU)"\]
         R -->|"circular.assess,<br/>one per company"| QM
-        QM -->|"each task to one worker,<br/>never behind a PDF"| K["<b>worker × N</b>: the agent<br/>3. for each company: does it apply?<br/>4. find its closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change"]
-        R <-->|"summary, embedding"| G["Gemini<br/>via LangChain"]
+        QM -->|"each task to one worker,<br/>never behind a PDF"| K("<b>worker × N</b>: the agent<br/>3. for each company: does it apply?<br/>4. find its closest policies<br/>5. is each one out of date?<br/>6. open a gap, with a draft change")
+        R <-->|"summary, embedding"| G[/"Gemini<br/>via LangChain"/]
         K <-->|"question → JSON answer"| G
         K <-->|"reads the work,<br/>saves results and gaps"| DB
     end

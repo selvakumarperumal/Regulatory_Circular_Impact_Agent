@@ -60,18 +60,18 @@ twice) and
 the host, one process takes both lanes (`LANES=pdf,main`), with a loop for each.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        watcher["watcher"] -->|"INSERT circular,<br/>XADD circular.read"| P[["Redis: the PDF lane<br/><b>rci:tasks:pdf</b>"]]
-        api["api<br/>(the console)"] -->|"saves the change,<br/>XADD the task"| Q[["Redis: the main lane<br/><b>rci:tasks</b>"]]
-        P <-->|"XREADGROUP, XACK<br/>(group: workers)"| R["<b>reader</b> (one)<br/>LANES=pdf"]
-        Q <-->|"XREADGROUP, XACK<br/>(group: workers)"| K["<b>worker</b> × WORKERS<br/>LANES=main"]
+        watcher("watcher") -->|"INSERT circular,<br/>XADD circular.read"| P[["Redis: the PDF lane<br/><b>rci:tasks:pdf</b>"]]
+        api("api<br/>(the console)") -->|"saves the change,<br/>XADD the task"| Q[["Redis: the main lane<br/><b>rci:tasks</b>"]]
+        P <-->|"XREADGROUP, XACK<br/>(group: workers)"| R("<b>reader</b> (one)<br/>LANES=pdf")
+        Q <-->|"XREADGROUP, XACK<br/>(group: workers)"| K("<b>worker</b> × WORKERS<br/>LANES=main")
         R -->|"XADD circular.assess,<br/>one per company"| Q
         S3[("S3 (Floci)<br/>the PDFs")] -->|"GET the PDF"| R
-        R <-->|"page image → text"| O["ocr<br/>on the GPU"]
-        R <-->|"summary,<br/>embedding"| G["Gemini<br/>via LangChain"]
+        R <-->|"page image → text"| O[/"ocr<br/>on the GPU"\]
+        R <-->|"summary,<br/>embedding"| G[/"Gemini<br/>via LangChain"/]
         K <-->|"questions → JSON,<br/>texts → embeddings"| G
         R <-->|"saves each step"| PG[("Postgres<br/>every result")]
         K <-->|"reads the work,<br/>saves each step"| PG
@@ -125,7 +125,7 @@ reading a PDF takes minutes, so it has a list of its own, taken by the **reader*
 other note takes seconds and goes on the main list, taken by the **workers**:
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -133,10 +133,10 @@ flowchart TD
         ap(["You add a policy<br/>in the console"]) -->|"adds a note"| M
         P[["<b>The PDF list</b><br/>read circular 98"]] -->|"the oldest note<br/>(none yet? it waits)"| r1
         M[["<b>The main list</b><br/>check policy 7"]] -->|"the oldest note<br/>(none yet? it waits)"| w1
-        r1["<b>The reader</b> reads the PDF<br/>and sums it up (minutes),<br/>saving it in Postgres"] --> r2["It adds a note per company,<br/>like 'check circular 98<br/>for company 1', then<br/>crosses this one off"]
+        r1("<b>The reader</b> reads the PDF<br/>and sums it up (minutes),<br/>saving it in Postgres") --> r2(["It adds a note per company,<br/>like 'check circular 98<br/>for company 1', then<br/>crosses this one off"])
         r2 -->|"new notes"| M
         r2 -->|"back for the<br/>next PDF"| P
-        w1["<b>A worker</b> asks Gemini<br/>(seconds), saving the<br/>answer in Postgres"] --> w2["It crosses the note off"]
+        w1("<b>A worker</b> asks Gemini<br/>(seconds), saving the<br/>answer in Postgres") --> w2(["It crosses the note off"])
         w2 -->|"back for the<br/>next note"| M
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -178,33 +178,33 @@ Each step has a picture, a few lines in plain words, and what changes in the dat
 one go deeper.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         subgraph loop["The worker itself"]
             direction TB
-            s1(["1. Start up"]) --> s2["2. Wait for a task"]
-            s2 --> s3["3. Take it, mark it<br/>as its own"]
+            s1(["1. Start up"]) --> s2("2. Wait for a task")
+            s2 --> s3("3. Take it, mark it<br/>as its own")
         end
         s3 --> kind{"Which task?"}
         subgraph read["the reader, on the PDF lane: once for every company"]
             direction TB
-            s4{"4. Skip it<br/>or read it?"} --> s5["5. Turn the PDF<br/>into text"]
-            s5 --> s6["6. Summarise it"]
-            s6 --> s7["7. Turn it into<br/>numbers"]
-            s7 --> s8["8. A to-do for<br/>each company"]
+            s4{"4. Skip it<br/>or read it?"} --> s5[/"5. Turn the PDF<br/>into text"\]
+            s5 --> s6[/"6. Summarise it"/]
+            s6 --> s7[/"7. Turn it into<br/>numbers"/]
+            s7 --> s8[("8. A to-do for<br/>each company")]
         end
         subgraph judge["a worker, on the main lane: once per company"]
             direction TB
-            s10["10. Does it apply<br/>to this company?"] --> s11["11. Find the<br/>closest policies"]
-            s11 --> s12["12. Is each policy<br/>out of date?"]
-            s12 --> s13["13. Mark it done"]
+            s10[/"10. Does it apply<br/>to this company?"/] --> s11("11. Find the<br/>closest policies")
+            s11 --> s12[/"12. Is each policy<br/>out of date?"/]
+            s12 --> s13(["13. Mark it done"])
         end
         subgraph other["the other tasks"]
             direction TB
-            s14["14. A policy was<br/>added or edited"]
-            s15["15. A description<br/>added or changed"]
+            s14("14. A policy was<br/>added or edited")
+            s15("15. A description<br/>added or changed")
         end
         kind -->|"read a circular"| s4
         kind -->|"check it for<br/>a company"| s10
@@ -216,7 +216,7 @@ flowchart TD
         s15 --> s9
         s9[["9. Finish: put the next<br/>tasks on their lane, then<br/>back to step 2"]]
         s16[["16. Every change<br/>queues its task"]]
-        s17["17. Something fails:<br/>wait, retry or give up"]
+        s17>"17. Something fails:<br/>wait, retry or give up"]
         s18["18. A worker dies:<br/>another carries on"]
         s9 ~~~ s16
         s9 ~~~ s17
@@ -277,16 +277,16 @@ flowchart TD
 When the worker program starts, it gets ready before it takes any work.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["The worker starts"]) --> b["Read the settings:<br/>which lanes to take?"]
+        a(["The worker starts"]) --> b("Read the settings:<br/>which lanes to take?")
         b -->|"a name that<br/>isn't a lane"| x
-        b --> c["Make sure the database<br/>tables exist"]
+        b --> c("Make sure the database<br/>tables exist")
         c --> d{"Can it talk<br/>to Gemini?"}
         d -->|"wrong key or<br/>model name"| x(["Stop, with a<br/>clear error"])
-        d -->|"yes, or Gemini<br/>is only busy"| e["Connect to Redis<br/>and pick a name"]
+        d -->|"yes, or Gemini<br/>is only busy"| e("Connect to Redis<br/>and pick a name")
         e --> f(["A loop per lane:<br/>each goes to step 2"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -360,14 +360,14 @@ Each time a loop is free, it looks in three places on its lane, in this order (`
 the lane's stream, `rci:tasks:pdf` or `rci:tasks`):
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         w(["The worker is free"]) --> q1{"1. Anything still on<br/><b>my</b> pending list?"}
         q1 -->|"yes"| t(["Take it: step 3"])
         q1 -->|"no"| q2{"2. Anything on <b>another</b><br/>worker's pending list,<br/>untouched for 5 minutes?"}
-        q2 -->|"yes"| mv["Redis moves it to<br/>my pending list"]
+        q2 -->|"yes"| mv[["Redis moves it to<br/>my pending list"]]
         mv --> t
         q2 -->|"no"| q3{"3. A task nobody<br/>has had yet?<br/>wait up to 5 seconds"}
         q3 -->|"yes: Redis writes<br/>my name on it"| t
@@ -498,7 +498,7 @@ statuses mean "don't touch it": **skipped** and **failed**. They come from diffe
 explained below.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -533,7 +533,7 @@ flowchart TD
 #### Where "skipped" comes from
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -577,14 +577,14 @@ flowchart TD
 #### Where "failed" comes from
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["Reading circular 98:<br/>steps 5, 6 or 7"]) --> e["An error the worker can't<br/>wait out, or the same<br/>hiccup 3 times"]
-        e --> g["Give up (step 17):<br/>status failed,<br/>the error saved on the circular,<br/>the task copied to rci:dead"]
+        a(["Reading circular 98:<br/>steps 5, 6 or 7"]) --> e>"An error the worker can't<br/>wait out, or the same<br/>hiccup 3 times"]
+        e --> g>"Give up (step 17):<br/>status failed,<br/>the error saved on the circular,<br/>the task copied to rci:dead"]
         g --> st(["It stays failed: nothing<br/>retries it by itself"])
-        st -->|"you fix the cause,<br/>then press Reprocess"| rp["Status back to parsed (text<br/>kept) or new; error cleared"]
+        st -->|"you fix the cause,<br/>then press Reprocess"| rp("Status back to parsed (text<br/>kept) or new; error cleared")
         rp --> again(["Read again, from<br/>what was saved"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -633,18 +633,18 @@ The circular is a PDF, often a scan. The worker sends each page as a picture to 
 model on the GPU that reads text from images. It **saves each page the moment it's read**.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         a{"Another circular has<br/>the same PDF?"} -->|"yes"| cp["Copy its text<br/>(no OCR)"]
-        a -->|"no"| dl["Download the PDF"]
+        a -->|"no"| dl("Download the PDF")
         dl --> pg{"For each page<br/>(up to 20):<br/>what is it?"}
         pg -->|"saved before"| sk["Skip it"]
         pg -->|"blank"| em["Save it as empty"]
-        pg -->|"not read yet"| ocr["OCR on the GPU"]
-        ocr --> sp["Save the page"]
-        sk --> jn["All pages in: join them<br/>into the circular's text"]
+        pg -->|"not read yet"| ocr[/"OCR on the GPU"\]
+        ocr --> sp[("Save the page")]
+        sk --> jn(["All pages in: join them<br/>into the circular's text"])
         em --> jn
         sp --> jn
         cp --> jn
@@ -711,14 +711,14 @@ flowchart TD
 **Gemini** reads the text and answers three questions about it.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         t(["The circular's text"]) --> tw{"Another circular with<br/>the same PDF has<br/>a summary?"}
         tw -->|"yes"| cp["Copy it<br/>(no Gemini call)"]
-        tw -->|"no"| g["Ask Gemini:<br/>1. who is it for?<br/>2. what does it change?<br/>3. what must be done?"]
-        g --> s["Save the answers"]
+        tw -->|"no"| g[/"Ask Gemini:<br/>1. who is it for?<br/>2. what does it change?<br/>3. what must be done?"/]
+        g --> s[("Save the answers")]
         cp --> s
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -773,12 +773,12 @@ similar things get similar numbers. In [step 11](#step-11-find-the-closest-polic
 worker compares these numbers to find related policies quickly, without asking Gemini.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        s["Title + summary +<br/>obligations"] --> g["Gemini's embedding<br/>model"]
-        g --> e["768 numbers:<br/>[0.021, -0.013, …]"]
+        s[("Title + summary +<br/>obligations")] --> g[/"Gemini's embedding<br/>model"/]
+        g --> e[("768 numbers:<br/>[0.021, -0.013, …]")]
         e --> r(["The circular is read"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -819,12 +819,12 @@ one row per company, called an **assessment**, which says "not checked yet", and
 task per company.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        c(["Circular 98 is read"]) --> a1["Company 1:<br/>pending"]
-        c --> a2["Company 2:<br/>pending"]
+        c(["Circular 98 is read"]) --> a1[("Company 1:<br/>pending")]
+        c --> a2[("Company 2:<br/>pending")]
         a1 --> t1[["New task: check 98<br/>for company 1"]]
         a2 --> t2[["New task: check 98<br/>for company 2"]]
     end
@@ -863,14 +863,14 @@ flowchart TD
 Every task ends the same way, whatever job it was. Four small things, in this order:
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        d(["The job is done"]) --> u["1. Stop touching<br/>the task"]
-        u --> k["2. Remove its<br/>'already queued' mark"]
+        d(["The job is done"]) --> u("1. Stop touching<br/>the task")
+        u --> k("2. Remove its<br/>'already queued' mark")
         k --> n[["3. Put the next tasks<br/>on their lane"]]
-        n --> a["4. XACK: Redis takes it<br/>off the pending list"]
+        n --> a(["4. XACK: Redis takes it<br/>off the pending list"])
         a --> b(["Back to step 2"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -934,7 +934,7 @@ From here on the work is **per company**. Gemini reads the company's description
 start of the circular, and says whether the circular is meant for this company.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -942,7 +942,7 @@ flowchart TD
         d -->|"yes"| n(["Nothing to do"])
         d -->|"no"| p{"Has the company<br/>described itself?"}
         p -->|"no"| nc["Not checked yet:<br/>asked later, step 15"]
-        p -->|"yes"| g["Ask Gemini:<br/>does it apply to us?"]
+        p -->|"yes"| g[/"Ask Gemini:<br/>does it apply to us?"/]
         g -->|"yes"| s11(["Step 11"])
         g -->|"no"| s13(["Step 13"])
         nc --> s13
@@ -992,12 +992,12 @@ numbers: the circular's embedding ([step 7](#step-7-turn-the-summary-into-number
 each policy's. Only the **3 closest** policies go on to step 12.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        p(["Company 1's<br/>RBI policies"]) --> sc["Score each one:<br/>how close is it<br/>to the circular?"]
-        sc --> top["Keep the<br/>top 3"]
+        p(["Company 1's<br/>RBI policies"]) --> sc("Score each one:<br/>how close is it<br/>to the circular?")
+        sc --> top("Keep the<br/>top 3")
         top --> q{"Asked about<br/>this one before?"}
         q -->|"yes"| sk(["Skip it: the<br/>answer is saved"])
         q -->|"no"| s12(["Step 12"])
@@ -1041,14 +1041,14 @@ the policy still meet what the circular asks?** If not, the worker opens a **gap
 for the policy's owner, with what's missing and a draft of the new wording.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        p(["POL-KYC"]) --> g["Ask Gemini: is this<br/>policy out of date?"]
-        g -->|"no"| up["Save the answer:<br/>up to date"]
-        g -->|"yes"| od["Save the answer:<br/>out of date"]
-        od --> gap["Open a gap:<br/>what's missing,<br/>a draft fix, a due date"]
+        p(["POL-KYC"]) --> g[/"Ask Gemini: is this<br/>policy out of date?"/]
+        g -->|"no"| up(["Save the answer:<br/>up to date"])
+        g -->|"yes"| od>"Save the answer:<br/>out of date"]
+        od --> gap>"Open a gap:<br/>what's missing,<br/>a draft fix, a due date"]
         up --> nx(["Next policy"])
         gap --> nx
     end
@@ -1103,12 +1103,12 @@ When a company's check is over, its assessment becomes **done**, and the task is
 ([step 9](#step-9-finish-the-task)).
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a["Company 1: 3 answers<br/>saved, 1 gap opened"] --> d1["Assessment:<br/>done"]
-        b["Company 2: it<br/>doesn't apply"] --> d2["Assessment:<br/>done"]
+        a("Company 1: 3 answers<br/>saved, 1 gap opened") --> d1(["Assessment:<br/>done"])
+        b("Company 2: it<br/>doesn't apply") --> d2(["Assessment:<br/>done"])
         d1 --> f(["Step 9: finish"])
         d2 --> f
     end
@@ -1155,14 +1155,14 @@ When someone saves a policy in the console, the api puts a `policy.check` task o
 The worker then checks the policy against the company's recent circulars.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        s(["A policy is saved<br/>in the console"]) --> e["Turn it into numbers<br/>(if new or changed)"]
-        e --> c["Find the company's recent<br/>circulars that apply to it"]
-        c --> m["For each one:<br/>steps 11 and 12"]
-        m --> d["Mark the policy<br/>checked"]
+        s(["A policy is saved<br/>in the console"]) --> e[/"Turn it into numbers<br/>(if new or changed)"/]
+        e --> c("Find the company's recent<br/>circulars that apply to it")
+        c --> m("For each one:<br/>steps 11 and 12")
+        m --> d[("Mark the policy<br/>checked")]
         d --> q{"Edited again<br/>meanwhile?"}
         q -->|"yes"| ag(["Check it<br/>once more"])
         q -->|"no"| f(["Step 9: finish"])
@@ -1217,13 +1217,13 @@ same description, or only a new name, queues nothing. **Signing up queues nothin
 a new company has no description and no policies, so there's nothing to judge yet.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         a(["The description is added<br/>or changed, and saved"]) --> q[["company.refresh"]]
-        q --> r["Answers given before the<br/>change go back to pending"]
-        r --> t["A to-do for each circular read<br/>in the last 30 days it lacks"]
+        q --> r[("Answers given before the<br/>change go back to pending")]
+        r --> t[("A to-do for each circular read<br/>in the last 30 days it lacks")]
         t --> s(["Steps 10 to 13, for each<br/>pending one, this company only"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -1289,14 +1289,14 @@ needs a worker puts its task on its lane, the moment the change is saved. `enque
 the lane: the PDF lane for `circular.read`, the main lane for the rest.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        w["watcher: a new circular"] --> p[["the PDF lane:<br/>rci:tasks:pdf"]]
-        a["api: a description added<br/>or changed, a policy saved,<br/>Reprocess"] --> q[["the main lane:<br/>rci:tasks"]]
+        w("watcher: a new circular") --> p[["the PDF lane:<br/>rci:tasks:pdf"]]
+        a("api: a description added<br/>or changed, a policy saved,<br/>Reprocess") --> q[["the main lane:<br/>rci:tasks"]]
         a -.->|"Reprocess an<br/>unread circular"| p
-        k["reader or worker: the next<br/>steps of a task it finished"] --> q
+        k("reader or worker: the next<br/>steps of a task it finished") --> q
         m["manage.py requeue:<br/>only after Redis lost its data"] -.-> q
         m -.-> p
         p --> y(["the reader"])
@@ -1345,15 +1345,15 @@ The rule is: **a change is only finished when its task is on the list.** Nobody 
 lost task and moves on.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         e(["Redis can't take the task"]) --> who{"Who was queueing it?"}
-        who -->|"the watcher"| wa["Delete the circular's row:<br/>the next round tries again"]
-        who -->|"the api: a new policy,<br/>or a description change"| ac["Undo it: delete the policy,<br/>or put the old description<br/>back. 503: try again"]
-        who -->|"the api: a policy<br/>saved, Reprocess"| ae["503: saved, try again.<br/>Saving again queues it"]
-        who -->|"the worker, queueing<br/>its next tasks"| wo["No XACK: the task<br/>runs again, and queues<br/>them again"]
+        who -->|"the watcher"| wa("Delete the circular's row:<br/>the next round tries again")
+        who -->|"the api: a new policy,<br/>or a description change"| ac("Undo it: delete the policy,<br/>or put the old description<br/>back. 503: try again")
+        who -->|"the api: a policy<br/>saved, Reprocess"| ae("503: saved, try again.<br/>Saving again queues it")
+        who -->|"the worker, queueing<br/>its next tasks"| wo("No XACK: the task<br/>runs again, and queues<br/>them again")
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1401,14 +1401,14 @@ database **rollback**). Everything saved before it stays saved. Then it sorts th
 one of three kinds.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         e(["A step failed"]) --> k{"What kind<br/>of problem?"}
         k -->|"a service is down<br/>or busy"| w["<b>Wait</b> 60 seconds,<br/>then try again, as long<br/>as it takes. The task stays<br/>on my pending list"]
-        k -->|"a hiccup"| r["<b>Retry</b> at once, up to<br/>3 tries. The task stays<br/>on my pending list"]
-        k -->|"anything else"| g["<b>Give up</b>:<br/>give_up()"]
+        k -->|"a hiccup"| r("<b>Retry</b> at once, up to<br/>3 tries. The task stays<br/>on my pending list")
+        k -->|"anything else"| g>"<b>Give up</b>:<br/>give_up()"]
         r -->|"the 3rd try fails"| g
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -1440,13 +1440,13 @@ sees them. The rules are in `failures.py`.
 #### What giving up writes
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         g(["give_up()"]) --> t{"Which task?"}
-        t -->|"circular.read"| c["circulars: status failed,<br/>error saved (every company<br/>sees it)"]
-        t -->|"circular.assess"| a["assessments: status failed,<br/>error saved (this<br/>company only)"]
+        t -->|"circular.read"| c>"circulars: status failed,<br/>error saved (every company<br/>sees it)"]
+        t -->|"circular.assess"| a>"assessments: status failed,<br/>error saved (this<br/>company only)"]
         t -->|"policy.check or<br/>company.refresh"| n["nothing in Postgres"]
         c --> d[["A copy in rci:dead: the task,<br/>its id, the error"]]
         a --> d
@@ -1496,15 +1496,15 @@ Nothing reads `rci:dead` back: it's a record for whoever investigates.
 #### How failed work is run again
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        f1["A failed circular"] -->|"fix the cause,<br/>press Reprocess"| a1["status parsed (text kept)<br/>or new; error cleared"]
+        f1>"A failed circular"] -->|"fix the cause,<br/>press Reprocess"| a1("status parsed (text kept)<br/>or new; error cleared")
         a1 --> t1[["circular.read"]]
-        f2["A failed company check"] -->|"press Reprocess<br/>on the circular"| a2["assessment pending;<br/>its 'up to date'<br/>answers cleared"]
+        f2>"A failed company check"] -->|"press Reprocess<br/>on the circular"| a2("assessment pending;<br/>its 'up to date'<br/>answers cleared")
         a2 --> t2[["circular.assess"]]
-        f3["A failed policy check"] -->|"save the policy<br/>again"| a3["every save queues<br/>a new check"]
+        f3>"A failed policy check"] -->|"save the policy<br/>again"| a3("every save queues<br/>a new check")
         a3 --> t3[["policy.check"]]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -1544,14 +1544,14 @@ If a worker crashes in the middle of a task, the task isn't lost: it never got i
 far is saved in Postgres.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         d(["A worker dies<br/>in the middle of a task"]) --> q{"Does its container<br/>come back with the<br/>same name?"}
-        q -->|"yes: Docker restarted it"| s["Step 2, first place:<br/>it finds the task on<br/>its own pending list"]
+        q -->|"yes: Docker restarted it"| s("Step 2, first place:<br/>it finds the task on<br/>its own pending list")
         q -->|"no: gone, or replaced<br/>by up --build"| i["The task's idle time<br/>grows: nobody touches it"]
-        i --> o["At 5 minutes, another worker<br/>on the same lane: its XAUTOCLAIM<br/>moves it to its own pending list"]
+        i --> o("At 5 minutes, another worker<br/>on the same lane: its XAUTOCLAIM<br/>moves it to its own pending list")
         s --> c(["Carry on from the<br/>last saved step"])
         o --> c
     end
@@ -1602,17 +1602,17 @@ flowchart TD
 ## 3. The files
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TB
     subgraph canvas[" "]
         direction TB
-        main["<b>main.py</b><br/>a loop per lane: serve, next_task,<br/>run_task, keep_claimed, give_up"]
-        pipeline["<b>pipeline.py</b><br/>one function per task type,<br/>OCR, matching, embeddings"]
+        main("<b>main.py</b><br/>a loop per lane: serve, next_task,<br/>run_task, keep_claimed, give_up")
+        pipeline("<b>pipeline.py</b><br/>one function per task type,<br/>OCR, matching, embeddings")
         queue[["<b>common/queue.py</b><br/>the lanes, connect,<br/>enqueue with its dedupe key"]]
         failures["<b>failures.py</b><br/>wait, retry or give up"]
-        llm["<b>llm.py</b><br/>the three Gemini questions,<br/>embeddings"]
-        ocr["<b>ocr.py</b><br/>PDF pages → text"]
-        storage["<b>storage.py</b><br/>PDFs from S3"]
+        llm[/"<b>llm.py</b><br/>the three Gemini questions,<br/>embeddings"/]
+        ocr[/"<b>ocr.py</b><br/>PDF pages → text"\]
+        storage[("<b>storage.py</b><br/>PDFs from S3")]
         common[("<b>common/models.py, db.py</b><br/>the tables, engine, init_db")]
         main --> pipeline
         main --> queue
@@ -1705,14 +1705,14 @@ sequenceDiagram
 ## 5. The task loop
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        start(["serve(lane): forever"]) --> join["XGROUP CREATE<br/>&lt;lane&gt; workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)"]
-        join --> next["next_task()"]
+        start(["serve(lane): forever"]) --> join("XGROUP CREATE<br/>&lt;lane&gt; workers 0 MKSTREAM<br/>(BUSYGROUP: it exists, fine)")
+        join --> next("next_task()")
         next --> got{"A task?"}
-        got -->|"yes"| run["run_task(): do it,<br/>XACK unless it's to be retried"]
+        got -->|"yes"| run[/"run_task(): do it,<br/>XACK unless it's to be retried"/]
         got -->|"no, and --once"| stop(["exit"])
         got -->|"no"| join
         run --> join
@@ -1761,14 +1761,14 @@ flowchart TD
 `next_task()` looks in three places on its lane, in order, and takes one task:
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 STREAMS &lt;lane&gt; <b>0</b>"] -->|"one of mine,<br/>never acknowledged"| r1(["retry it"])
-        a -->|"none"| b["XAUTOCLAIM &lt;lane&gt; workers &lt;me&gt;<br/><b>300000</b> 0-0 COUNT 1"]
+        a[["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 STREAMS &lt;lane&gt; <b>0</b>"]] -->|"one of mine,<br/>never acknowledged"| r1(["retry it"])
+        a -->|"none"| b[["XAUTOCLAIM &lt;lane&gt; workers &lt;me&gt;<br/><b>300000</b> 0-0 COUNT 1"]]
         b -->|"one idle 5 min<br/>(its worker died)"| r2(["take it over"])
-        b -->|"none"| c["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 BLOCK 5000 STREAMS &lt;lane&gt; <b>&gt;</b>"]
+        b -->|"none"| c[["XREADGROUP GROUP workers &lt;me&gt;<br/>COUNT 1 BLOCK 5000 STREAMS &lt;lane&gt; <b>&gt;</b>"]]
         c -->|"a new one"| r3(["do it"])
         c -->|"5 s, nothing"| r4(["None"])
     end
@@ -1804,15 +1804,15 @@ flowchart TD
 are no locks: the consumer group gave this task to this worker only.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        t(["run_task(task)"]) --> fn["TASKS[type](session, **ids)<br/>read_circular · assess ·<br/>check_policy · refresh_company"]
-        fn -->|"returns follow-up tasks"| del["DEL its dedupe key"]
+        t(["run_task(task)"]) --> fn("TASKS[type](session, **ids)<br/>read_circular · assess ·<br/>check_policy · refresh_company")
+        fn -->|"returns follow-up tasks"| del[["DEL its dedupe key"]]
         del --> xadd[["enqueue each follow-up<br/>(circular.assess, or policy.check<br/>for a policy edited meanwhile)"]]
         xadd --> ack(["XACK"])
-        fn -.->|"raised"| fail["should_wait / should_retry /<br/>give_up (section 17)"]
+        fn -.->|"raised"| fail>"should_wait / should_retry /<br/>give_up (section 17)"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -1849,17 +1849,17 @@ flowchart TD
 ## 8. The tables it uses
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
     subgraph canvas[" "]
         direction LR
-        CO["<b>companies</b><br/>read: profile"]
-        CI["<b>circulars</b> (shared)<br/>written: status, text, addressed_to,<br/>summary, requirements, embedding,<br/>embedding_model, error"]
-        AS["<b>assessments</b><br/>inserted: one per company and circular<br/>written: status, applicable,<br/>applies_reason, error"]
-        PO["<b>policies</b> (per company)<br/>written: embeddings,<br/>embedding_model, checked_at"]
-        CT["<b>controls</b><br/>read, for the prompt"]
-        PC["<b>policy_checks</b><br/>inserted: one per verdict"]
-        GA["<b>gaps</b> (per company)<br/>inserted: one per out-of-date policy"]
+        CO(["<b>companies</b><br/>read: profile"])
+        CI[("<b>circulars</b> (shared)<br/>written: status, text, addressed_to,<br/>summary, requirements, embedding,<br/>embedding_model, error")]
+        AS("<b>assessments</b><br/>inserted: one per company and circular<br/>written: status, applicable,<br/>applies_reason, error")
+        PO[("<b>policies</b> (per company)<br/>written: embeddings,<br/>embedding_model, checked_at")]
+        CT[("<b>controls</b><br/>read, for the prompt")]
+        PC(["<b>policy_checks</b><br/>inserted: one per verdict"])
+        GA>"<b>gaps</b> (per company)<br/>inserted: one per out-of-date policy"]
         GE["<b>gap_events</b><br/>inserted: 'agent opened'"]
         OP["<b>ocr_pages</b><br/>inserted: one per page OCR'd<br/>deleted: once the text is saved"]
         CI -.->|"same sha256"| OP
@@ -1913,7 +1913,7 @@ so a (circular, policy) pair is always one company's.
 ## 9. Two statuses
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TB
     subgraph canvas[" "]
         direction TB
@@ -1980,15 +1980,15 @@ work. What's left is the same **work** queued twice (a double Reprocess, two qui
 a policy, a task re-run after a crash queueing its follow-ups again, `manage.py requeue`). `enqueue` prevents it with a key per task:
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         add(["enqueue(kind, **ids)"]) --> nx{"SET rci:queued:&lt;task&gt;<br/>1 NX EX 86400"}
         nx -->|"OK"| xadd[["XADD to its lane"]]
         nx -->|"nil: queued or running"| skip(["dropped"])
-        xadd --> w["a worker: XREADGROUP,<br/>does the work"]
-        w --> del["DEL rci:queued:&lt;task&gt;"]
+        xadd --> w("a worker: XREADGROUP,<br/>does the work")
+        w --> del("DEL rci:queued:&lt;task&gt;")
         del --> ack(["XACK"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -2075,21 +2075,21 @@ sequenceDiagram
 Inside `ocr_text()` and `ocr.pages()`:
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        pdf["PDF bytes"] --> pages["First 20 pages<br/>(OCR_MAX_PAGES)"]
+        pdf[("PDF bytes")] --> pages["First 20 pages<br/>(OCR_MAX_PAGES)"]
         pages --> saved{"In ocr_pages already?<br/>(same sha256, same page)"}
         saved -->|"yes: read before a retry,<br/>a restart or a takeover"| reuse["use the saved text,<br/>no OCR"]
         saved -->|"no"| blank{"Blank page?<br/>no text layer, images<br/>or drawings"}
         blank -->|"yes"| drop["text is empty,<br/>nothing sent"]
-        blank -->|"no"| png["Render a PNG<br/>at 200 DPI"]
-        png --> post["One chat request to the<br/>ocr service (600 s timeout)"]
-        post --> clean["remove_det: strip markers,<br/>drop images, footers, '[No text]'"]
-        clean --> save["INSERT INTO ocr_pages,<br/>COMMIT"]
+        blank -->|"no"| png[/"Render a PNG<br/>at 200 DPI"\]
+        png --> post[/"One chat request to the<br/>ocr service (600 s timeout)"\]
+        post --> clean("remove_det: strip markers,<br/>drop images, footers, '[No text]'")
+        clean --> save[("INSERT INTO ocr_pages,<br/>COMMIT")]
         drop --> save
-        save --> join["Join the pages:<br/>circulars.text"]
+        save --> join(["Join the pages:<br/>circulars.text"])
         reuse --> join
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -2195,14 +2195,14 @@ circular says who it's for. Without a description the assessment is marked `done
 **What a verdict writes** (`judge_policy`):
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart LR
     subgraph canvas[" "]
         direction LR
-        ask["Gemini's answer"] --> imp{"impacted and<br/>missing_from_policy<br/>not empty?"}
-        imp -->|"no"| up["policy_checks row<br/>impacted = false"]
-        imp -->|"yes"| down["policy_checks row<br/>impacted = true"]
-        down --> gap["gaps row: title, impact, draft_change,<br/>affected_controls (real codes only),<br/>severity, owner, status 'open',<br/>due_date = today + 7 / 30 / 60 days"]
+        ask[/"Gemini's answer"/] --> imp{"impacted and<br/>missing_from_policy<br/>not empty?"}
+        imp -->|"no"| up(["policy_checks row<br/>impacted = false"])
+        imp -->|"yes"| down>"policy_checks row<br/>impacted = true"]
+        down --> gap>"gaps row: title, impact, draft_change,<br/>affected_controls (real codes only),<br/>severity, owner, status 'open',<br/>due_date = today + 7 / 30 / 60 days"]
         gap --> ev["gap_events row:<br/>agent, opened, note = what's missing"]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -2332,14 +2332,14 @@ to do: every change that needs a worker queues its task, right after the change 
 committed. `enqueue()` puts `circular.read` on `rci:tasks:pdf` and the rest on `rci:tasks`.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        W["watcher<br/>fetch_new()"] -->|"circular.read"| P[["rci:tasks:pdf"]]
-        A["api<br/>database.enqueue()"] -->|"company.refresh, policy.check,<br/>circular.assess"| Q[["rci:tasks"]]
+        W("watcher<br/>fetch_new()") -->|"circular.read"| P[["rci:tasks:pdf"]]
+        A("api<br/>database.enqueue()") -->|"company.refresh, policy.check,<br/>circular.assess"| Q[["rci:tasks"]]
         A -->|"circular.read<br/>(Reprocess)"| P
-        K["reader or worker<br/>run_task(): follow-ups"] -->|"circular.assess,<br/>policy.check"| Q
+        K("reader or worker<br/>run_task(): follow-ups") -->|"circular.assess,<br/>policy.check"| Q
         M["manage.py requeue<br/>(a person, after Redis<br/>lost its data)"] -.-> P
         M -.-> Q
         P --> Y(["XREADGROUP:<br/>the reader"])
@@ -2463,18 +2463,18 @@ the api made meanwhile.
 Every error goes through `run_task()`, with the rules in `failures.py`:
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        err["the task raised"] --> rb["ROLLBACK the work session"]
+        err>"the task raised"] --> rb["ROLLBACK the work session"]
         rb --> down{"should_wait?<br/>can't connect (OCR loading),<br/>Gemini 429 (quota)"}
         down -->|"yes"| wait["sleep RETRY_SECONDS (60),<br/><b>no XACK</b>: the task is<br/>this worker's next one"]
         down -->|"no"| retry{"should_retry?<br/>5xx, timeout, dropped connection,<br/>BadReply, IntegrityError"}
         retry -->|"yes"| count{"tries for this task id<br/>reached MAX_TRIES (3)?"}
         count -->|"no"| again["<b>no XACK</b>: retried<br/>straight away"]
         count -->|"yes"| give
-        retry -->|"no: a 400,<br/>'OCR found no text', …"| give["give_up(): circular or assessment<br/>status 'failed', error saved, COMMIT;<br/>XADD rci:dead the task + error"]
+        retry -->|"no: a 400,<br/>'OCR found no text', …"| give>"give_up(): circular or assessment<br/>status 'failed', error saved, COMMIT;<br/>XADD rci:dead the task + error"]
         give --> ack(["DEL its key, XACK"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1

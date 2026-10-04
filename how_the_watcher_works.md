@@ -42,17 +42,17 @@ regulators' mailboxes, takes out anything new, files a copy, writes it in the re
 drops a note in the analysts' in-tray saying "there's a new one to read".
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        rbi["RBI<br/>website"] --> W["<b>watcher</b><br/>once an hour"]
-        sebi["SEBI<br/>website"] --> W
-        irdai["IRDAI<br/>website"] --> W
+        rbi[/"RBI<br/>website"/] --> W("<b>watcher</b><br/>once an hour")
+        sebi[/"SEBI<br/>website"/] --> W
+        irdai[/"IRDAI<br/>website"/] --> W
         W -->|"the PDF"| S3[("S3<br/>a copy of every PDF")]
         W -->|"a new row,<br/>status new"| DB[("Postgres<br/>the register")]
         W -->|"a note: read<br/>circular 98"| Q[["Redis<br/>the to-do list"]]
-        Q --> K["the workers<br/>read it next"]
+        Q --> K("the workers<br/>read it next")
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef data fill:#1c1a47,stroke:#818cf8,color:#e0e7ff
@@ -107,16 +107,16 @@ Here's the whole round at a glance. The steps below follow one circular through 
 circular 98**, "Designation of terrorist organisation…", published this morning.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        s1(["1. Wake up"]) --> s2["2. Get each regulator's<br/>list of circulars"]
-        s2 --> s3["3. Skip the ones<br/>it already knows"]
-        s3 --> s4["4. Find the PDF link<br/>of each new one"]
-        s4 --> s5["5. Download it, and check<br/>it's really a PDF"]
-        s5 --> s6["6. Store it in S3,<br/>named by its fingerprint"]
-        s6 --> s7["7. Add a row in Postgres:<br/>status new"]
+        s1(["1. Wake up"]) --> s2("2. Get each regulator's<br/>list of circulars")
+        s2 --> s3("3. Skip the ones<br/>it already knows")
+        s3 --> s4("4. Find the PDF link<br/>of each new one")
+        s4 --> s5("5. Download it, and check<br/>it's really a PDF")
+        s5 --> s6[("6. Store it in S3,<br/>named by its fingerprint")]
+        s6 --> s7[("7. Add a row in Postgres:<br/>status new")]
         s7 --> s8[["8. Put a task on the<br/>to-do list for the workers"]]
         s8 --> s9(["9. Write a summary,<br/>sleep until the next round"])
     end
@@ -144,12 +144,12 @@ The watcher is a loop. In Docker it does one round, sleeps 60 minutes, and start
 forever. Run by hand, it does one round and stops.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["The watcher starts"]) --> b["Make sure the database<br/>tables exist"]
-        b --> c["Do one round:<br/>RBI, then SEBI, then IRDAI"]
+        a(["The watcher starts"]) --> b("Make sure the database<br/>tables exist")
+        b --> c("Do one round:<br/>RBI, then SEBI, then IRDAI")
         c --> d{"INTERVAL_MINUTES<br/>more than 0?"}
         d -->|"yes (Docker: 60)"| e["Sleep that long"]
         e --> c
@@ -187,14 +187,14 @@ in `sources.py`. All three return the same thing: a list of **items**, each with
 link, a date and an ID.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["For each regulator"]) --> rbi["RBI: its RSS feed<br/>(about 10 items)"]
-        a --> sebi["SEBI: three listing pages<br/>(about 90 items)"]
-        a --> irdai["IRDAI: its circulars table<br/>(about 20 items)"]
-        rbi --> item["The same list for all three:<br/>title, link, date, ID"]
+        a(["For each regulator"]) --> rbi[/"RBI: its RSS feed<br/>(about 10 items)"/]
+        a --> sebi[/"SEBI: three listing pages<br/>(about 90 items)"/]
+        a --> irdai[/"IRDAI: its circulars table<br/>(about 20 items)"/]
+        rbi --> item("The same list for all three:<br/>title, link, date, ID")
         sebi --> item
         irdai --> item
     end
@@ -232,7 +232,7 @@ Most of the list is old news. The watcher asks Postgres for every `source_key` i
 has for this regulator, and keeps only the items that aren't there.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -274,16 +274,16 @@ The item's link usually points to a web page about the circular, not to the PDF 
 watcher opens that page and looks for the PDF.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         a(["The item's link"]) --> b{"Does it already<br/>end in .pdf?"}
         b -->|"yes (IRDAI)"| c(["That's the PDF"])
-        b -->|"no (RBI, SEBI)"| d["Open the page and list<br/>every .pdf link on it"]
+        b -->|"no (RBI, SEBI)"| d("Open the page and list<br/>every .pdf link on it")
         d --> e{"Any found?"}
-        e -->|"no"| h["Error: no PDF link.<br/>Tried again next round"]
-        e -->|"yes"| f["Unwrap viewer links,<br/>skip Hindi versions"]
+        e -->|"no"| h>"Error: no PDF link.<br/>Tried again next round"]
+        e -->|"yes"| f("Unwrap viewer links,<br/>skip Hindi versions")
         f --> g(["The first English PDF"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -316,13 +316,13 @@ For circular 98: `https://rbidocs.rbi.org.in/rdocs/notification/PDFs/NT98DESIGNA
 ### Step 5: Download it, and check it's really a PDF
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["The PDF link"]) --> b["Download it<br/>(politely: section 5)"]
+        a(["The PDF link"]) --> b("Download it<br/>(politely: section 5)")
         b --> c{"Do the first bytes<br/>say %PDF?"}
-        c -->|"no: an error page<br/>dressed up as a file"| d["Error: not a PDF.<br/>Tried again next round"]
+        c -->|"no: an error page<br/>dressed up as a file"| d>"Error: not a PDF.<br/>Tried again next round"]
         c -->|"yes"| e(["A real PDF: step 6"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -354,12 +354,12 @@ The watcher computes the PDF's **fingerprint** (its `sha256`) and stores the fil
 under that name, in a folder per regulator.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["The PDF's bytes"]) --> b["Compute its fingerprint:<br/>3f9a…c1 (64 characters)"]
-        b --> c["File name:<br/>rbi/3f9a…c1.pdf"]
+        a(["The PDF's bytes"]) --> b("Compute its fingerprint:<br/>3f9a…c1 (64 characters)")
+        b --> c[("File name:<br/>rbi/3f9a…c1.pdf")]
         c --> d[("S3 bucket rci")]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -397,7 +397,7 @@ flowchart TD
 Only once the PDF is safely in S3 does the watcher add the circular to the database.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -473,11 +473,11 @@ sequenceDiagram
 After each regulator, the watcher writes one summary line. After all three, it sleeps.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a(["RBI, SEBI and<br/>IRDAI are done"]) --> b["One line per regulator:<br/>seen, new, failed"]
+        a(["RBI, SEBI and<br/>IRDAI are done"]) --> b("One line per regulator:<br/>seen, new, failed")
         b --> c["Sleep 60 minutes"]
         c --> d(["Next round: step 1"])
     end
@@ -513,13 +513,13 @@ INFO sleeping 60 minutes
 ### RBI: the notifications RSS feed
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a["rbi.org.in/notifications_rss.xml"] --> b["Read each entry<br/>(feedparser)"]
-        b --> c["Fix the title: RBI escapes<br/>special characters twice"]
-        c --> d["Fix the date: RBI sends<br/>Thu, 24 Sep 2026 17:15:00<br/>with no time zone (it's IST)"]
+        a[/"rbi.org.in/notifications_rss.xml"/] --> b("Read each entry<br/>(feedparser)")
+        b --> c("Fix the title: RBI escapes<br/>special characters twice")
+        c --> d("Fix the date: RBI sends<br/>Thu, 24 Sep 2026 17:15:00<br/>with no time zone (it's IST)")
         d --> e(["Item: ID from ?Id=13650<br/>in the link"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -549,14 +549,14 @@ SEBI's RSS feed holds only its latest 30 items, mostly orders, so it misses circ
 watcher reads SEBI's listing pages instead.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        p1["Circulars<br/>(latest 25)"] --> rows["Each table row with a<br/>/legal/… link"]
-        p2["Master circulars<br/>(latest 25)"] --> rows
-        p3["Regulations<br/>(latest 25)"] --> rows
-        rows --> date["The date: Sep 09, 2026 in the<br/>first cell, or Last amended on …<br/>in a regulation's title"]
+        p1[/"Circulars<br/>(latest 25)"/] --> rows("Each table row with a<br/>/legal/… link")
+        p2[/"Master circulars<br/>(latest 25)"/] --> rows
+        p3[/"Regulations<br/>(latest 25)"/] --> rows
+        rows --> date("The date: Sep 09, 2026 in the<br/>first cell, or Last amended on …<br/>in a regulation's title")
         date --> e(["Item: ID is the<br/>link's path"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -582,12 +582,12 @@ flowchart TD
 ### IRDAI: the circulars table
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        a["irdai.gov.in/circulars"] --> b["Each table row with a<br/>document-detail link<br/>and a PDF link"]
-        b --> c["Title: the Short Description<br/>column. Date: the first<br/>dd-mm-yyyy in the row"]
+        a[/"irdai.gov.in/circulars"/] --> b("Each table row with a<br/>document-detail link<br/>and a PDF link")
+        b --> c("Title: the Short Description<br/>column. Date: the first<br/>dd-mm-yyyy in the row")
         c --> d(["Item: ID from ?documentId=…,<br/>link = the English PDF itself"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -621,18 +621,18 @@ Every request goes through one small HTTP client, so the watcher never hammers a
 site.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         a(["A request"]) --> b["Wait 1.5 seconds first,<br/>always"]
-        b --> c["Send it, as a normal<br/>web browser"]
+        b --> c("Send it, as a normal<br/>web browser")
         c --> d{"How did it go?"}
         d -->|"OK"| e(["Done"])
         d -->|"busy (429), server error<br/>(5xx) or network trouble"| t{"Tried 3 times<br/>already?"}
         t -->|"no"| g["Wait 2 s<br/>(then 4 s)"]
         g --> b
-        t -->|"yes"| f["Give up on this one:<br/>tried again next round"]
+        t -->|"yes"| f>"Give up on this one:<br/>tried again next round"]
         d -->|"anything else,<br/>like 404"| f
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -674,7 +674,7 @@ The watcher's rule is simple: **a circular is either saved completely, or not at
 failure just means "try again next round".
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
@@ -724,14 +724,14 @@ The watcher's job ends with the task. From there the workers take over: OCR read
 Gemini summarises it, and each company finds out whether it applies to them.
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
         a[("circular 98:<br/>status new")] --> b{"A worker checks: published<br/>in the last 30 days?"}
         b -->|"no"| c["Marked skipped:<br/>no OCR, no Gemini"]
-        b -->|"yes"| d["OCR reads the PDF,<br/>page by page"]
-        d --> e["Gemini summarises it, and<br/>each company checks it"]
+        b -->|"yes"| d[/"OCR reads the PDF,<br/>page by page"\]
+        d --> e[/"Gemini summarises it, and<br/>each company checks it"/]
         e --> f(["Gaps for the policy owners"])
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
@@ -823,12 +823,12 @@ uv run python main.py --only RBI    # just RBI
 ## 10. The code, file by file
 
 ```mermaid
-%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0}, "themeVariables": {"darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
+%%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
 flowchart TD
     subgraph canvas[" "]
         direction TB
-        main["<b>main.py</b><br/>the loop: one round,<br/>then sleep"] --> sources["<b>sources.py</b><br/>RBI, SEBI, IRDAI readers,<br/>find the PDF link"]
-        main --> storage["<b>storage.py</b><br/>put the PDF in S3"]
+        main("<b>main.py</b><br/>the loop: one round,<br/>then sleep") --> sources[/"<b>sources.py</b><br/>RBI, SEBI, IRDAI readers,<br/>find the PDF link"/]
+        main --> storage[("<b>storage.py</b><br/>put the PDF in S3")]
         main --> models[("<b>common/models.py</b><br/>the circulars table")]
         main --> queue[["<b>common/queue.py</b><br/>add a task"]]
         sources --> fetch["<b>fetch.py</b><br/>polite HTTP"]
