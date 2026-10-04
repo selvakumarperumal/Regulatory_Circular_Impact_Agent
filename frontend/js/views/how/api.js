@@ -150,7 +150,7 @@ const steps = [
     moves: [["committed", "save>enq", 0.03, 0.25, "queue"], ["SET NX · XADD", "enq>lane", 0.32, 0.72, "queue"]],
     marks: [[0.72, { slots: { lane: ["POL-AML"] },
                      log: [["redis", "SET rci:queued:company_id=1:policy_id=11:type=policy.check 1 NX EX 86400 → OK", "A mark in Redis: “check policy 11 is queued”, so the same check can't be queued twice. It expires after a day."],
-                           ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type policy.check company_id 1 policy_id 11", "A note on the main lane: check policy 11 for company 1. A free worker picks it up within moments."]] }]],
+                           ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type policy.check company_id 1 policy_id 11", "The api puts a to-do note on the main lane, the queue the workers take their tasks from. It says: check policy 11 for company 1. A free worker picks it up within moments."]] }]],
   },
   {
     story: 1, dur: 6000, focus: ["enq", "resp", "page"],
@@ -213,7 +213,7 @@ const steps = [
                log: [["sql", "UPDATE policies SET text = '…', version = 2, embeddings = NULL, updated_at = now() WHERE id = 11", "Editing the text makes version 2. Its old numbers are cleared, so the worker will compute new ones."],
                      ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (…, 'system', 'policy_updated', 'POL-AML updated to v2')  (each open gap)", "Each of the policy's open gaps gets a history line saying the policy changed, so its owner knows."],
                      ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
-      [0.95, { slots: { lane: ["POL-AML"] }, log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11", "When a policy is saved, the api puts a note on the main lane: check policy 11 for company 1."] }],
+      [0.95, { slots: { lane: ["POL-AML"] }, log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11", "When a policy is saved, the api puts a to-do note on the main lane, the workers' queue. It says: check policy 11 for company 1."] }],
     ],
   },
   {

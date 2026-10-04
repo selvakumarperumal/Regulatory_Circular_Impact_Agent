@@ -195,7 +195,7 @@ const steps = [
     marks: [
       [0.4, { rows: { marks: [MARK_READ] }, sub: { marks: "circular.read 98" },
               log: ["redis", "SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400 → OK", "A mark in Redis: “read 98 is already queued”. NX means only if there's no mark yet, so the same task can't be queued twice. It expires after a day."] }],
-      [0.82, { slots: { pdf: ["read 98"] }, log: ["redis", "XADD rci:tasks:pdf * type circular.read circular_id 98 → 1790831159691-0", "The note read 98 is added to the PDF lane. Redis gives it an id made of the time and a counter."] }],
+      [0.82, { slots: { pdf: ["read 98"] }, log: ["redis", "XADD rci:tasks:pdf * type circular.read circular_id 98 → 1790831159691-0", "The to-do note “read circular 98” goes on the PDF lane, the reader's queue. Redis gives it an id made of the time and a counter."] }],
     ],
   },
   {
@@ -400,8 +400,8 @@ const steps = [
               sub: { marks: "circular.assess 98 ×2" },
               log: ["redis", "SET rci:queued:circular_id=98:company_id=1:type=circular.assess 1 NX EX 86400 → OK  (and company 2)", "Marks for the next tasks, check 98 for company 1 and for company 2, so neither can be queued twice."] }],
       [0.86, { slots: { main: ["98 · 1", "98 · 2"] },
-               log: [["redis", "XADD rci:tasks * type circular.assess company_id 1 circular_id 98", "The note check 98 for company 1 goes on the main lane."],
-                     ["redis", "XADD rci:tasks * type circular.assess company_id 2 circular_id 98", "And the note check 98 for company 2."]] }],
+               log: [["redis", "XADD rci:tasks * type circular.assess company_id 1 circular_id 98", "The reader puts a to-do note on the main lane, the workers' queue: check circular 98 for company 1."],
+                     ["redis", "XADD rci:tasks * type circular.assess company_id 2 circular_id 98", "And a second note, the same but for company 2. One note per company, so two workers can do them at the same time."]] }],
     ],
   },
   {
@@ -559,7 +559,7 @@ const steps = [
     marks: [
       [0.04, { rows: { policies: [["POL-AML", "1", "(none yet)", "(empty)"]] } }],
       [0.36, { slots: { main: ["POL-AML"] }, sub: { marks: "policy.check 11" },
-               log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11", "When a policy is saved, the api puts a note on the main lane: check policy 11 for company 1."] }],
+               log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11", "When a policy is saved, the api puts a to-do note on the main lane, the workers' queue. It says: check policy 11 for company 1."] }],
       [0.66, { slots: { main: [] }, sub: { w1: "POL-AML" } }],
     ],
   },

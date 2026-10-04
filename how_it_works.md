@@ -2396,7 +2396,14 @@ database and Redis rows that step changed (lit), like the tables in the guides, 
 **Underneath** explains each thing that happens behind the scenes in plain words (say, "A mark
 in Redis: read 98 is already queued, so the same task can't be queued twice"), with the real
 log line, SQL statement or Redis command in small print under it. This step's lines are bright,
-earlier ones faded. The caption names the code that does it.
+earlier ones faded. The newest line is opened up: the real line in full, then **piece by
+piece**, each part of it with what that part means. For
+`XADD rci:tasks MAXLEN ~ 100000 * type circular.assess company_id 1 circular_id 98` that's:
+XADD adds a note to the end of a lane; `rci:tasks` is the main lane, the workers' queue;
+`MAXLEN ~ 100000` keeps only about the newest 100,000 notes; `*` lets Redis pick the note's
+id; `type circular.assess` says what to do; `company_id 1` and `circular_id 98` say for whom
+and about what. Click any older line to open it the same way (the animation pauses). The
+caption names the code that does it.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%

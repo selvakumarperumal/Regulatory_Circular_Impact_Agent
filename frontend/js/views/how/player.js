@@ -12,12 +12,15 @@
  *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
  *            marks: [[moment, { sub, slots, badge, rows, log }], …] }
  * A log line: [type, the real log line, SQL or command, what it means in plain words]. The
- * panel under the picture shows the plain words first, the real line under them.
+ * panel under the picture shows the plain words first, the real line under them. The line
+ * that's open shows the real line in full and then each of its parts with what it means
+ * (explain.js); a line may bring its own parts as a fourth element, [[part, meaning], …].
  * A move along "b>a" when only "a>b" is drawn runs the same edge backwards. quietEdges
  * draws only the edges the current step uses, plus the backbone ones, faintly and with an
  * arrow. Each kind of part has its own shape, as in a flowchart (SHAPE below). */
 import { $, $$, html, put } from "../../lib/html.js";
 import { icon } from "../../ui/icons.js";
+import { explain } from "./explain.js";
 
 // The same colours as the diagrams in the docs.
 export const KIND = {
@@ -31,7 +34,7 @@ const LOG = {
   llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warning", "#fbbf24"],
   error: ["error", "#fb7185"], app: ["app", "#cbd5e1"],
 };
-const LOG_LINES = 6;
+const LOG_LINES = 8;
 
 /** A node: node(x, y, w, h, kind, title, sub, { slots, idle, link, badge, mono, inline, num, shape }).
  * idle: the sub-line that means "not busy"; any other sub-line makes the node glow as busy.
@@ -286,7 +289,7 @@ export function play(scene, root) {
             <div id="how-tables"></div>
           </div>` : ""}
           <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
-            <div class="how-panel-head"><b>Underneath</b><span>what happens behind the scenes, in plain words, with the real log line or command</span></div>
+            <div class="how-panel-head"><b>Underneath</b><span>what the programs really do, in plain words. The newest line is taken apart piece by piece; click any line to open it</span></div>
             <ol id="how-log"></ol>
           </div>
         </div>
@@ -306,6 +309,7 @@ export function play(scene, root) {
   const shown = new Map();                        // text element → the text last put in it
   let step = 0, p = reduced ? 1 : 0, playing = !reduced, speed = 1, last = null;
   let shownStep = -1, shownLog = "", shownRows = "", before = null;
+  let chosen = -1, logLength = 0;                 // the log line opened by a click, or -1: this step's newest
 
   /** Put text in an SVG text element, cut with "…" to fit `max` pixels. */
   function fit(el, text, max) {
@@ -347,17 +351,40 @@ export function play(scene, root) {
     $("rect", token).setAttribute("x", -w / 2);
   }
 
-  /** The latest lines: what each means, then the real line. This step's lines are bright. */
+  /** The latest lines: what each means, then the real line. This step's lines are bright. One
+   * line is open: the one clicked, else this step's newest. It shows the real line in full
+   * and then each of its parts with what that part means. */
   function showLog(lines, fresh) {
-    const key = `${lines.length} ${fresh} ${lines.at(-1)?.[1] ?? ""}`;
+    if (lines.length !== logLength) chosen = -1;
+    logLength = lines.length;
+    const newest = lines.length - 1;
+    const open = chosen >= 0 ? chosen : newest >= fresh ? newest : -1;
+    const key = `${lines.length} ${fresh} ${open} ${lines.at(-1)?.[1] ?? ""}`;
     if (key === shownLog) return;
     shownLog = key;
     const first = Math.max(0, lines.length - LOG_LINES);
-    const recent = lines.slice(first);
-    put($("#how-log", root), html`${recent.map(([type, text, why], i) => html`
-      <li class="${first + i >= fresh ? `now${i === recent.length - 1 ? " new" : ""}` : ""}" style="--c: ${LOG[type][1]}">
-        <b>${LOG[type][0]}</b><div>${why ? html`<p>${why}</p>` : ""}<code title="${text}">${text}</code></div></li>`)}
-      ${recent.length ? "" : html`<li class="none">Nothing yet: press play.</li>`}`);
+    const row = ([type, text, why, own], at) => {
+      const cls = `${at >= fresh ? "now" : ""}${at === newest && at >= fresh ? " new" : ""}${at === open ? " open" : ""}`;
+      const head = html`<b>${LOG[type][0]}</b>`;
+      if (at !== open) {
+        return html`<li class="${cls}" style="--c: ${LOG[type][1]}"><button type="button" class="how-line" data-line="${at}"
+          title="Open this line piece by piece">${head}<div>${why ? html`<p>${why}</p>` : ""}<code>${text}</code></div></button></li>`;
+      }
+      const pieces = own ?? explain(type, text);
+      return html`<li class="${cls}" style="--c: ${LOG[type][1]}"><div class="how-line" tabindex="-1">${head}<div>
+        ${why ? html`<p>${why}</p>` : ""}
+        <div class="how-real"><small>The real line</small><code>${text}</code></div>
+        ${pieces.length ? html`<small class="how-sub">Piece by piece</small>
+          <dl class="how-pieces">${pieces.map(([part, meaning]) => html`<dt>${part}</dt><dd>${meaning}</dd>`)}</dl>` : ""}
+      </div></div></li>`;
+    };
+    const ol = $("#how-log", root);
+    put(ol, html`${lines.slice(first).map((line, i) => row(line, first + i))}
+      ${lines.length ? "" : html`<li class="none">Nothing yet: press play.</li>`}`);
+    // Show the open line whole: its end at the panel's bottom, or its start if it's taller
+    const li = $("li.open", ol);
+    if (li) ol.scrollTop = li.offsetHeight > ol.clientHeight ? li.offsetTop : li.offsetTop + li.offsetHeight - ol.clientHeight;
+    else ol.scrollTop = ol.scrollHeight;
   }
 
   function showTables(st, s) {
@@ -488,6 +515,15 @@ export function play(scene, root) {
   $("#how-speed", root).addEventListener("click", (e) => {
     speed = speed === 1 ? 2 : speed === 2 ? 0.5 : 1;
     e.currentTarget.textContent = `${speed}×`;
+  });
+  $("#how-log", root).addEventListener("click", (e) => {
+    const line = e.target.closest("[data-line]");
+    if (!line) return;
+    chosen = +line.dataset.line;                  // open it, and pause so it can be read
+    playing = false;
+    last = null;
+    draw();
+    $("li.open .how-line", root)?.focus({ preventScroll: true });   // the clicked button was redrawn
   });
   $(".how-steps", root).addEventListener("click", (e) => {
     const b = e.target.closest(".how-step");

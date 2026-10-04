@@ -249,7 +249,7 @@ const steps = [
       [0.86, { slots: { lane: ["read 98"] },
                rows: { redis: [["mark", "rci:queued:circular_id=98:type=circular.read · gone in a day at most"],
                                ["PDF lane", "read 98: type circular.read, circular_id 98"]] },
-               log: [["redis", "XADD rci:tasks:pdf MAXLEN ~ 100000 * type circular.read circular_id 98", "A note goes on the PDF lane: read circular 98. The note carries only the number; the data stays in Postgres."],
+               log: [["redis", "XADD rci:tasks:pdf MAXLEN ~ 100000 * type circular.read circular_id 98", "The watcher puts a to-do note on the PDF lane, the queue only the reader takes from. It says: read circular 98. The note holds only that number; the circular itself stays in Postgres."],
                      ["log", "INFO RBI new: Designation of terrorist organisation…", "The watcher notes in its log that RBI has a circular it has never seen, with its title."]] }],
     ],
   },

@@ -174,7 +174,7 @@ const steps = [
     moves: [["mark", "watcher>marks", 0.05, 0.4, "queue"], ["read 98", "watcher>pdf", 0.46, 0.86, "queue"]],
     marks: [[0.4, { sub: { marks: "read 98" }, log: ["redis", "SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400 → OK", "A mark in Redis: “read 98 is already queued”. NX means only if there's no mark yet, so the same task can't be queued twice. It expires after a day."] }],
             [0.86, { slots: { pdf: ["read 98"] }, sub: { watcher: "every 60 min" },
-                     log: ["redis", "XADD rci:tasks:pdf MAXLEN ~ 100000 * type circular.read circular_id 98", "A note goes on the PDF lane: read circular 98. The note carries only the number; the data stays in Postgres."] }]],
+                     log: ["redis", "XADD rci:tasks:pdf MAXLEN ~ 100000 * type circular.read circular_id 98", "The watcher puts a to-do note on the PDF lane, the queue only the reader takes from. It says: read circular 98. The note holds only that number; the circular itself stays in Postgres."] }]],
   },
   {
     story: 0, dur: 6400, focus: ["pdf", "reader", "pending"], tables: [],
@@ -231,8 +231,9 @@ const steps = [
             ["98 · B", "reader>main", 0.42, 0.7, "queue"], ["XACK", "reader>pending", 0.76, 0.95, "ok"]],
     marks: [
       [0.28, { rows: { assessments: [A95, B95, ...AB98("pending", "pending")] }, sub: { assessments: "98: A, B pending" } }],
-      [0.6, { slots: { main: ["98 · A"] }, sub: { marks: "check 98 · A, B" } }],
-      [0.7, { slots: { main: ["98 · A", "98 · B"] }, log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type circular.assess company_id 1 circular_id 98", "A note on the main lane: check circular 98 for company 1. Each company gets its own note, so different workers can do them at the same time."] }],
+      [0.6, { slots: { main: ["98 · A"] }, sub: { marks: "check 98 · A, B" },
+              log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type circular.assess company_id 1 circular_id 98", "The reader puts a to-do note on the main lane, the queue the workers take their tasks from. It says: check circular 98 for company 1 (A in the picture). The note holds only these numbers; the worker reads the rest from Postgres."] }],
+      [0.7, { slots: { main: ["98 · A", "98 · B"] }, log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type circular.assess company_id 2 circular_id 98", "A second note, the same but for company 2 (B). One note per company, so two workers can check A and B at the same time."] }],
       [0.95, { sub: { reader: W, pending: "who has what" }, log: ["redis", "XACK rci:tasks:pdf workers 1790831160001-0", "The reader tells Redis the task is finished (XACK means acknowledge). The note leaves the pending list for good and is never handed out again."] }],
     ],
   },
@@ -404,7 +405,7 @@ const steps = [
     code: "enqueue_or_undo() · api/database.py",
     moves: [["mark + XADD", "api>main", 0.06, 0.5, "queue"], ["201 Created", "api>nginx", 0.56, 0.74, "ok"], ["saved", "nginx>polpage", 0.78, 0.96, "ok"]],
     marks: [[0.3, { sub: { marks: "check POL-AML" }, log: ["redis", "SET rci:queued:company_id=1:policy_id=11:type=policy.check 1 NX EX 86400 → OK", "A mark in Redis: “check policy 11 is queued”, so the same check can't be queued twice. It expires after a day."] }],
-            [0.5, { slots: { main: ["POL-AML"] }, log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type policy.check company_id 1 policy_id 11", "A note on the main lane: check policy 11 for company 1. A free worker picks it up within moments."] }],
+            [0.5, { slots: { main: ["POL-AML"] }, log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type policy.check company_id 1 policy_id 11", "The api puts a to-do note on the main lane, the queue the workers take their tasks from. It says: check policy 11 for company 1. A free worker picks it up within moments."] }],
             [0.96, { sub: { polpage: "AML: waiting" }, log: ["app", "toast: POL-AML saved and queued: a worker is checking it now", "The page shows a short message (a toast) and opens the policy's page, which says Waiting for the worker."] }]],
   },
   {
@@ -624,7 +625,7 @@ const steps = [
     marks: [[0, { sub: { polpage: "your library", circpage: "the list", main: "rci:tasks", marks: "no duplicates", pending: "who has what" } }],
             [0.5, { rows: { assessments: [A95, B95, ...AB98("pending", "done", ["", "no"]), ...C2("done", "done", ["no", "yes"])] } }],
             [0.6, { rows: { checks: CHECKS_KEPT } }],
-            [0.9, { slots: { main: ["98 · A"] }, log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type circular.assess company_id 1 circular_id 98", "A note on the main lane: check circular 98 for company 1. Each company gets its own note, so different workers can do them at the same time."] }]],
+            [0.9, { slots: { main: ["98 · A"] }, log: ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type circular.assess company_id 1 circular_id 98", "The api puts one to-do note on the main lane, for your company only: check circular 98 again for company 1 (A). Company 2 (B) gets no note, so its result stays as it was."] }]],
   },
   {
     story: 6, dur: 8800, focus: ["main", "w1", "chat", "checks", "assessments"], tables: ["assessments", "checks"],
