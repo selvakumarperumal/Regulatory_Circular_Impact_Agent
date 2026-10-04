@@ -56,7 +56,7 @@ const steps = [
     text: "The login form posts your email and password to /api/auth/login. nginx strips /api and passes the request on to the api container.",
     code: "loginPage() · frontend/js/views/auth.js · location /api/ · frontend/nginx.conf",
     moves: [["POST /auth/login", "page>nginx", 0.05, 0.42, "start"], ["POST", "nginx>app", 0.52, 0.88, "start"]],
-    marks: [[0.42, { log: ["http", "POST /api/auth/login  {\"email\": \"you@company.com\", \"password\": \"…\"}  → nginx → api:8000 /auth/login"] }]],
+    marks: [[0.42, { log: ["http", "POST /api/auth/login  {\"email\": \"you@company.com\", \"password\": \"…\"}  → nginx → api:8000 /auth/login", "The login form sends your email and password. nginx passes the request to the api, taking /api off the address."] }]],
   },
   {
     story: 0, dur: 6200, focus: ["valid", "handler", "pg"],
@@ -67,8 +67,8 @@ const steps = [
             ["SELECT user", "handler>pg", 0.45, 0.62, "data"], ["scrypt hash", "pg>handler", 0.66, 0.84, "data"]],
     marks: [
       [0.4, { sub: { handler: "log_in()" } }],
-      [0.62, { log: ["sql", "SELECT * FROM users WHERE email = 'you@company.com'"] }],
-      [0.9, { log: ["app", "scrypt(password, salt, n=2^14, r=8, p=1) matches the stored hash"] }],
+      [0.62, { log: ["sql", "SELECT * FROM users WHERE email = 'you@company.com'", "The api looks you up by your email."] }],
+      [0.9, { log: ["app", "scrypt(password, salt, n=2^14, r=8, p=1) matches the stored hash", "Your password is scrambled the same slow way as when you signed up, and the results are compared. The password itself is never stored."] }],
     ],
   },
   {
@@ -78,7 +78,7 @@ const steps = [
     code: "issue_token(), signing_key() · api/auth.py",
     moves: [["token", "handler>resp", 0.05, 0.32, "ok"], ["200 + token", "resp>nginx", 0.38, 0.62, "ok"],
             ["200 + token", "nginx>page", 0.66, 0.92, "ok"]],
-    marks: [[0.32, { log: ["http", `200 OK  {"user": {…}, "company": {…}, "token": "${TOKEN}"}`] }]],
+    marks: [[0.32, { log: ["http", `200 OK  {"user": {…}, "company": {…}, "token": "${TOKEN}"}`, "Login worked. The answer includes a token: a signed pass the page sends with every request from now on."] }]],
   },
   {
     story: 0, dur: 5400, focus: ["page", "storage"],
@@ -99,7 +99,7 @@ const steps = [
             ["POST", "nginx>app", 0.68, 0.95, "start"]],
     marks: [
       [0.02, { sub: { page: "Policies · New policy" } }],
-      [0.62, { log: ["http", `POST /api/policies  Authorization: Bearer ${TOKEN}  {"code": "POL-AML", "title": "Anti-Money Laundering Policy", "regulators": ["RBI"], …}`] }],
+      [0.62, { log: ["http", `POST /api/policies  Authorization: Bearer ${TOKEN}  {"code": "POL-AML", "title": "Anti-Money Laundering Policy", "regulators": ["RBI"], …}`, "Saving the new policy: its fields as JSON, plus your token so the api knows who you are."] }],
     ],
   },
   {
@@ -110,8 +110,8 @@ const steps = [
     moves: [["Bearer eyJ…", "app>auth", 0.03, 0.26, "ask"], ["user 1?", "auth>pg", 0.32, 0.55, "data"],
             ["user · company 1", "pg>auth", 0.6, 0.86, "data"]],
     marks: [
-      [0.3, { log: ["app", "jwt.decode(token, key, HS256) → {sub: '1', exp: in 11 h 58 min}"] }],
-      [0.55, { log: ["sql", "SELECT * FROM users WHERE id = 1"] }],
+      [0.3, { log: ["app", "jwt.decode(token, key, HS256) → {sub: '1', exp: in 11 h 58 min}", "The api checks the token's signature with its secret key: genuine, it's user 1's, and valid for almost 12 more hours."] }],
+      [0.55, { log: ["sql", "SELECT * FROM users WHERE id = 1", "It loads user 1, and with it your company. Everything after this touches only your company's rows."] }],
       [0.86, { sub: { auth: "user 1 · company 1" } }],
     ],
   },
@@ -139,8 +139,8 @@ const steps = [
     moves: [["Policy", "handler>save", 0.03, 0.25, "svc"], ["INSERT", "save>pg", 0.3, 0.6, "data"],
             ["id 11", "pg>save", 0.66, 0.92, "data"]],
     marks: [[0.6, { sub: { pg: "POL-AML v1 · id 11" },
-                    log: [["sql", "INSERT INTO policies (company_id, code, title, owner, regulators, text, version) VALUES (1, 'POL-AML', 'Anti-Money Laundering Policy', …, 1) → id 11"],
-                          ["sql", "COMMIT"]] }]],
+                    log: [["sql", "INSERT INTO policies (company_id, code, title, owner, regulators, text, version) VALUES (1, 'POL-AML', 'Anti-Money Laundering Policy', …, 1) → id 11", "The policy is saved: id 11, version 1, for company 1."],
+                          ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }]],
   },
   {
     story: 1, dur: 6800, focus: ["save", "enq", "lane"],
@@ -149,8 +149,8 @@ const steps = [
     code: "enqueue_or_undo(), enqueue() · api/database.py · enqueue() · common/queue.py",
     moves: [["committed", "save>enq", 0.03, 0.25, "queue"], ["SET NX · XADD", "enq>lane", 0.32, 0.72, "queue"]],
     marks: [[0.72, { slots: { lane: ["POL-AML"] },
-                     log: [["redis", "SET rci:queued:company_id=1:policy_id=11:type=policy.check 1 NX EX 86400 → OK"],
-                           ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type policy.check company_id 1 policy_id 11"]] }]],
+                     log: [["redis", "SET rci:queued:company_id=1:policy_id=11:type=policy.check 1 NX EX 86400 → OK", "A mark in Redis: “check policy 11 is queued”, so the same check can't be queued twice. It expires after a day."],
+                           ["redis", "XADD rci:tasks MAXLEN ~ 100000 * type policy.check company_id 1 policy_id 11", "A note on the main lane: check policy 11 for company 1. A free worker picks it up within moments."]] }]],
   },
   {
     story: 1, dur: 6000, focus: ["enq", "resp", "page"],
@@ -160,7 +160,7 @@ const steps = [
     moves: [["201", "enq>resp", 0.03, 0.28, "ok"], ["201 Created", "resp>nginx", 0.33, 0.6, "ok"],
             ["POL-AML", "nginx>page", 0.65, 0.92, "ok"]],
     marks: [
-      [0.28, { log: ["http", "INFO \"POST /policies HTTP/1.1\" 201 Created"] }],
+      [0.28, { log: ["http", "INFO \"POST /policies HTTP/1.1\" 201 Created", "The api's own log line: the request worked and created something (201 Created)."] }],
       [0.92, { sub: { page: "POL-AML · Waiting…", poll: "every 3 s" } }],
     ],
   },
@@ -173,7 +173,7 @@ const steps = [
     marks: [
       [0.03, { slots: { lane: [] } }],
       [0.3, { sub: { worker: "checking POL-AML" } }],
-      [0.6, { log: [["log", "INFO embedded POL-AML (1 chunks) with gemini-embedding-001"], ["log", "INFO POL-AML checked, gaps opened: none"]] }],
+      [0.6, { log: [["log", "INFO embedded POL-AML (1 chunks) with gemini-embedding-001", "A worker turned the policy into numbers. It's short, so it's one piece."], ["log", "INFO POL-AML checked, gaps opened: none", "The worker's summary: the policy is checked against recent circulars, and no gaps were needed."]] }],
       [0.92, { sub: { worker: "waiting", pg: "POL-AML v1 · checked" } }],
     ],
   },
@@ -190,8 +190,8 @@ const steps = [
     ],
     marks: [
       [0.34, { sub: { handler: "get_policy()" } }],
-      [0.56, { log: ["sql", "SELECT * FROM policies WHERE id = 11 AND company_id = 1 → checked_at 10:02:41, updated_at 10:02:38"] }],
-      [0.98, { sub: { page: "POL-AML · Checked ✓", poll: "off" }, log: ["app", "toast: POL-AML checked by the worker"] }],
+      [0.56, { log: ["sql", "SELECT * FROM policies WHERE id = 11 AND company_id = 1 → checked_at 10:02:41, updated_at 10:02:38", "The page's 3-second check: checked_at is now later than updated_at, so the worker is done and the page shows Checked."] }],
+      [0.98, { sub: { page: "POL-AML · Checked ✓", poll: "off" }, log: ["app", "toast: POL-AML checked by the worker", "The page has been asking every 3 seconds. Now it sees the check is done and shows this message."] }],
     ],
   },
 
@@ -210,10 +210,10 @@ const steps = [
     marks: [
       [0.3, { sub: { handler: "update_policy()", page: "POL-AML · edit" } }],
       [0.68, { sub: { pg: "POL-AML v2 · re-embed" },
-               log: [["sql", "UPDATE policies SET text = '…', version = 2, embeddings = NULL, updated_at = now() WHERE id = 11"],
-                     ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (…, 'system', 'policy_updated', 'POL-AML updated to v2')  (each open gap)"],
-                     ["sql", "COMMIT"]] }],
-      [0.95, { slots: { lane: ["POL-AML"] }, log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11"] }],
+               log: [["sql", "UPDATE policies SET text = '…', version = 2, embeddings = NULL, updated_at = now() WHERE id = 11", "Editing the text makes version 2. Its old numbers are cleared, so the worker will compute new ones."],
+                     ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (…, 'system', 'policy_updated', 'POL-AML updated to v2')  (each open gap)", "Each of the policy's open gaps gets a history line saying the policy changed, so its owner knows."],
+                     ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
+      [0.95, { slots: { lane: ["POL-AML"] }, log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11", "When a policy is saved, the api puts a note on the main lane: check policy 11 for company 1."] }],
     ],
   },
   {
@@ -231,9 +231,9 @@ const steps = [
       [0.02, { slots: { lane: [] } }],
       [0.3, { sub: { handler: "set_company()", page: "Company · Save" } }],
       [0.68, { sub: { pg: "company 1 · described" },
-               log: [["sql", "UPDATE companies SET profile = '…', updated_at = now() WHERE id = 1"], ["sql", "COMMIT"]] }],
+               log: [["sql", "UPDATE companies SET profile = '…', updated_at = now() WHERE id = 1", "The company's new description is saved."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
       [0.95, { slots: { lane: ["refresh 1"] },
-               log: [["redis", "XADD rci:tasks * type company.refresh company_id 1"], ["http", "200 OK  {\"company\": {…}, \"checking\": true}"]] }],
+               log: [["redis", "XADD rci:tasks * type company.refresh company_id 1", "A company.refresh note is queued, so recent circulars are judged again against the new description."], ["http", "200 OK  {\"company\": {…}, \"checking\": true}", "The answer: the description is saved, and the circulars are being checked again."]] }],
     ],
   },
   {
@@ -253,9 +253,9 @@ const steps = [
       [0.34, { sub: { handler: "update_gap()", page: "Gaps · gap 5" } }],
       [0.9, { sub: { worker: "waiting" } }],
       [0.72, { sub: { pg: "gap 5 · in_progress" },
-               log: [["sql", "UPDATE gaps SET status = 'in_progress', updated_at = now() WHERE id = 5 AND company_id = 1"],
-                     ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (5, 'you@company.com', 'status', 'open -> in_progress')"],
-                     ["sql", "COMMIT"]] }],
+               log: [["sql", "UPDATE gaps SET status = 'in_progress', updated_at = now() WHERE id = 5 AND company_id = 1", "The gap's status becomes in progress. The company_id part makes sure you can only change your own company's gaps."],
+                     ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (5, 'you@company.com', 'status', 'open -> in_progress')", "A history line records who changed what: you moved it from open to in progress."],
+                     ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
     ],
   },
   {
@@ -271,11 +271,11 @@ const steps = [
     ],
     marks: [
       [0.02, { sub: { handler: "create_policy()", page: "Policies · New policy" } }],
-      [0.18, { sub: { pg: "POL-SAN v1 · id 12" }, log: [["sql", "INSERT INTO policies (…) VALUES (1, 'POL-SAN', …) → id 12"], ["sql", "COMMIT"]] }],
-      [0.44, { log: ["redis", "SET rci:queued:company_id=1:policy_id=12:type=policy.check … → Error 111: Connection refused"] }],
-      [0.72, { sub: { pg: "POL-SAN deleted again" }, log: [["sql", "DELETE FROM policies WHERE id = 12"], ["sql", "COMMIT"]] }],
+      [0.18, { sub: { pg: "POL-SAN v1 · id 12" }, log: [["sql", "INSERT INTO policies (…) VALUES (1, 'POL-SAN', …) → id 12", "The new policy POL-SAN is saved as usual…"], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
+      [0.44, { log: ["redis", "SET rci:queued:company_id=1:policy_id=12:type=policy.check … → Error 111: Connection refused", "The api tries to set the mark in Redis, but Redis doesn't answer (error 111: connection refused)."] }],
+      [0.72, { sub: { pg: "POL-SAN deleted again" }, log: [["sql", "DELETE FROM policies WHERE id = 12", "…but Redis can't take its task, so the policy is deleted again. Nothing is saved without its task."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
       [0.99, { sub: { page: "503 · try again" },
-               log: ["http", "503 Service Unavailable  {\"detail\": \"The task queue is unavailable, so nothing was saved: try again\"}"] }],
+               log: ["http", "503 Service Unavailable  {\"detail\": \"The task queue is unavailable, so nothing was saved: try again\"}", "The api answers 503 with a plain message, and the page shows it: try again once Redis is back."] }],
     ],
   },
 ];

@@ -114,7 +114,7 @@ const steps = [
     marks: [
       [0.22, { sub: { fetch: "waiting 1.5 s…" } }],
       [0.36, { sub: { fetch: "GET the RSS feed" } }],
-      [0.52, { log: ["http", "GET https://www.rbi.org.in/notifications_rss.xml → 200 OK"] }],
+      [0.52, { log: ["http", "GET https://www.rbi.org.in/notifications_rss.xml → 200 OK", "The watcher downloads RBI's feed of new notifications (about the 10 newest). 200 OK means it worked."] }],
       [0.95, { sub: { fetch: IDLE_FETCH } }],
     ],
   },
@@ -146,7 +146,7 @@ const steps = [
     code: "run_source() · watcher/main.py",
     moves: [["10 items", "s2>s3", 0.03, 0.18, "svc"], ["SELECT ids", "s3>pg", 0.24, 0.48, "data"], ["9 known", "pg>s3", 0.54, 0.78, "data"]],
     marks: [
-      [0.48, { log: ["sql", "SELECT source_key FROM circulars WHERE source = 'RBI'"] }],
+      [0.48, { log: ["sql", "SELECT source_key FROM circulars WHERE source = 'RBI'", "The watcher asks Postgres which RBI circulars it already has, so it can skip them."] }],
       [0.8, { rows: { items: ITEMS("new", "yes: skip", "yes: skip", "yes: skip") }, sub: { s3: "1 new: id=13650" } }],
     ],
   },
@@ -166,7 +166,7 @@ const steps = [
             ["HTML", "rbipage>fetch", 0.58, 0.72, "ext"], ["HTML", "fetch>s4", 0.76, 0.92, "svc"]],
     marks: [
       [0.36, { sub: { fetch: "waiting 1.5 s…" } }],
-      [0.54, { log: ["http", "GET https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=13650&Mode=0 → 200 OK"] }],
+      [0.54, { log: ["http", "GET https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=13650&Mode=0 → 200 OK", "It opens the circular's own web page, to find the link to its PDF."] }],
       [0.72, { sub: { fetch: IDLE_FETCH } }],
     ],
   },
@@ -190,7 +190,7 @@ const steps = [
             ["the bytes", "rbidocs>fetch", 0.58, 0.74, "ext"], ["the bytes", "fetch>s5", 0.78, 0.94, "svc"]],
     marks: [
       [0.36, { sub: { fetch: "waiting 1.5 s…" } }],
-      [0.54, { log: ["http", `GET ${PDF} → 200 OK`] }],
+      [0.54, { log: ["http", `GET ${PDF} → 200 OK`, "It downloads the PDF itself from RBI's PDF server."] }],
       [0.74, { sub: { fetch: IDLE_FETCH } }],
     ],
   },
@@ -217,7 +217,7 @@ const steps = [
     code: "put_pdf() · watcher/storage.py",
     moves: [["the PDF", "s6>s3obj", 0.1, 0.6, "data"]],
     marks: [[0.6, { rows: { s3: [["rci", "rbi/3f9a…c1.pdf", "application/pdf"]] }, sub: { s3obj: "rbi/3f9a…c1.pdf" },
-                    log: ["s3", "PUT s3://rci/rbi/3f9a…c1.pdf (application/pdf)"] }]],
+                    log: ["s3", "PUT s3://rci/rbi/3f9a…c1.pdf (application/pdf)", "The PDF is saved in S3, named by its fingerprint (the sha256 of its bytes), so the same file is never stored twice."] }]],
   },
   {
     story: 0, ref: "step 7", dur: 7400, focus: ["s7", "pg"], tables: ["circulars"],
@@ -226,8 +226,8 @@ const steps = [
     code: "fetch_new() · watcher/main.py · Circular · common/models.py",
     moves: [["S3 done", "s6>s7", 0.02, 0.16, "data"], ["INSERT", "s7>pg", 0.22, 0.62, "data"]],
     marks: [[0.62, { rows: { circulars: [ROW_98] }, sub: { pg: "98 · RBI · id=13650 · new" },
-                     log: [["sql", "INSERT INTO circulars (source, source_key, title, detail_url, pdf_url, published_at, sha256, s3_key, status) VALUES ('RBI', 'id=13650', 'Designation of terrorist organisation…', …, 'new') → id 98"],
-                           ["sql", "COMMIT"]] }]],
+                     log: [["sql", "INSERT INTO circulars (source, source_key, title, detail_url, pdf_url, published_at, sha256, s3_key, status) VALUES ('RBI', 'id=13650', 'Designation of terrorist organisation…', …, 'new') → id 98", "A new circulars row with everything known so far: its links, date, fingerprint and where the PDF is. Status new: not read yet."],
+                           ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }]],
   },
   {
     story: 0, ref: "step 7", dur: 6800, focus: ["s6", "s7", "s8"], tables: ["circulars"],
@@ -245,12 +245,12 @@ const steps = [
     marks: [
       [0.48, { sub: { marks: "circular_id=98:type=circular.read" },
                rows: { redis: [["mark", "rci:queued:circular_id=98:type=circular.read · gone in a day at most"]] },
-               log: ["redis", "SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400 → OK"] }],
+               log: ["redis", "SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400 → OK", "A mark in Redis: “read 98 is already queued”. NX means only if there's no mark yet, so the same task can't be queued twice. It expires after a day."] }],
       [0.86, { slots: { lane: ["read 98"] },
                rows: { redis: [["mark", "rci:queued:circular_id=98:type=circular.read · gone in a day at most"],
                                ["PDF lane", "read 98: type circular.read, circular_id 98"]] },
-               log: [["redis", "XADD rci:tasks:pdf MAXLEN ~ 100000 * type circular.read circular_id 98"],
-                     ["log", "INFO RBI new: Designation of terrorist organisation…"]] }],
+               log: [["redis", "XADD rci:tasks:pdf MAXLEN ~ 100000 * type circular.read circular_id 98", "A note goes on the PDF lane: read circular 98. The note carries only the number; the data stays in Postgres."],
+                     ["log", "INFO RBI new: Designation of terrorist organisation…", "The watcher notes in its log that RBI has a circular it has never seen, with its title."]] }],
     ],
   },
   {
@@ -267,7 +267,7 @@ const steps = [
     text: "After each regulator, one line in the log: how many items its list had, how many were new, how many failed. Here: seen=10 new=1 failed=0.",
     code: "run_source() · watcher/main.py",
     moves: [["RBI done", "s8>s9", 0.1, 0.4, "ok"]],
-    marks: [[0.45, { sub: { s9: "RBI: seen=10 new=1 failed=0" }, log: ["log", "INFO RBI: seen=10 new=1 failed=0"] }]],
+    marks: [[0.45, { sub: { s9: "RBI: seen=10 new=1 failed=0" }, log: ["log", "INFO RBI: seen=10 new=1 failed=0", "RBI's summary for this round: 10 circulars on its list, 1 new one saved, nothing failed."] }]],
   },
 
   // ── The three regulators, one by one ──
@@ -285,8 +285,8 @@ const steps = [
                  ["SEBI", "3 listing pages: circulars, master circulars, regulations", "25 on each", "found on each circular's page"],
                  ["IRDAI", "its circulars table", "the whole table", "in the row itself"],
                ] } }],
-      [0.56, { log: [["http", "GET https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&smid=0&ssid=7 → 200 OK (circulars)"],
-                     ["http", "GET …&ssid=6 → 200 OK (master circulars)"], ["http", "GET …&ssid=3 → 200 OK (regulations)"]] }],
+      [0.56, { log: [["http", "GET https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&smid=0&ssid=7 → 200 OK (circulars)", "SEBI's first listing page: its circulars."],
+                     ["http", "GET …&ssid=6 → 200 OK (master circulars)", "SEBI's second listing page: master circulars, the long combined versions."], ["http", "GET …&ssid=3 → 200 OK (regulations)", "SEBI's third listing page: regulations."]] }],
     ],
   },
   {
@@ -305,7 +305,7 @@ const steps = [
             ["HTML", "irdai>fetch", 0.6, 0.78, "ext"], ["20 items", "fetch>s2", 0.8, 0.96, "svc"]],
     marks: [
       [0.02, { sub: { s1: "round: IRDAI", s2: "IRDAI: 20 items" } }],
-      [0.56, { log: ["http", "GET https://irdai.gov.in/circulars → 200 OK"] }],
+      [0.56, { log: ["http", "GET https://irdai.gov.in/circulars → 200 OK", "IRDAI's circulars page: a table where each row links its PDF."] }],
     ],
   },
   {
@@ -315,7 +315,7 @@ const steps = [
     code: "sebi(), irdai() · watcher/sources.py",
     moves: [["no links found", "fetch>fail", 0.2, 0.7, "bad"]],
     marks: [[0.02, { rows: { failures: [FAIL.layout] } }], [0.7, { sub: { fail: "layout changed?" },
-                    log: ["error", "ERROR IRDAI: listing failed: IRDAI: no circular links found; page layout may have changed"] }]],
+                    log: ["error", "ERROR IRDAI: listing failed: IRDAI: no circular links found; page layout may have changed", "The page loaded, but no circular links were where they should be. IRDAI probably changed its page design, so its reader in sources.py needs updating."] }]],
   },
   {
     story: 1, ref: "step 9", dur: 7400, focus: ["s9", "s1"], tables: [],
@@ -325,7 +325,7 @@ const steps = [
     moves: [["all three done", "s8>s9", 0.05, 0.25, "ok"], ["in 60 minutes", "s9>s1", 0.45, 0.95, "start"]],
     marks: [
       [0.25, { sub: { s9: "sleeping 60 minutes", fail: "retried next round" },
-               log: [["log", "INFO SEBI: seen=92 new=0 failed=0"], ["log", "INFO IRDAI: seen=20 new=0 failed=0"], ["log", "INFO sleeping 60 minutes"]] }],
+               log: [["log", "INFO SEBI: seen=92 new=0 failed=0", "SEBI's summary: 92 circulars listed, none new this round."], ["log", "INFO IRDAI: seen=20 new=0 failed=0", "IRDAI's summary: 20 listed, none new."], ["log", "INFO sleeping 60 minutes", "The round is done. The watcher sleeps for an hour, then starts the next one."]] }],
       [0.95, { sub: { s1: "next round in 60 min" } }],
     ],
   },
@@ -342,7 +342,7 @@ const steps = [
       [0.02, { sub: { s1: "round: SEBI" }, rows: { failures: [FAIL.down] } }],
       [0.34, { sub: { fetch: "503: wait 2 s, then 4 s" } }],
       [0.95, { sub: { fetch: IDLE_FETCH, fail: "SEBI: next round" },
-               log: ["error", "ERROR SEBI: listing failed: Server error '503 Service Unavailable' for url 'https://www.sebi.gov.in/sebiweb/home/HomeAction.do?…'"] }],
+               log: ["error", "ERROR SEBI: listing failed: Server error '503 Service Unavailable' for url 'https://www.sebi.gov.in/sebiweb/home/HomeAction.do?…'", "SEBI's site answered 503: it's down for now. Nothing is lost; the next round tries again."] }],
     ],
   },
   {
@@ -353,7 +353,7 @@ const steps = [
     moves: [["GET the page", "s4>fetch", 0.03, 0.2, "svc"], ["GET", "fetch>rbipage", 0.24, 0.4, "ext"], ["HTML, no PDF", "rbipage>fetch", 0.44, 0.6, "bad"],
             ["no PDF link", "s4>fail", 0.66, 0.92, "bad"]],
     marks: [[0.02, { rows: { failures: [FAIL.nolink] } }], [0.92, { sub: { fail: "no PDF link" },
-                     log: ["warn", "WARNING RBI failed (https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=…): no PDF link on https://www.rbi.org.in/…"] }]],
+                     log: ["warn", "WARNING RBI failed (https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=…): no PDF link on https://www.rbi.org.in/…", "This circular's page has no PDF link (yet). It isn't saved, and the watcher tries it again every round."] }]],
   },
   {
     story: 2, ref: "going wrong", dur: 7600, focus: ["s5", "fail"], tables: ["failures"],
@@ -365,7 +365,7 @@ const steps = [
       [0.02, { rows: { failures: [FAIL.html] } }],
       [0.36, { sub: { s5: "✗ <!DOCTYPE html> …" } }],
       [0.84, { sub: { fail: "not a PDF" },
-               log: ["warn", "WARNING IRDAI failed (https://irdai.gov.in/…): not a PDF: https://irdai.gov.in/…"] }],
+               log: ["warn", "WARNING IRDAI failed (https://irdai.gov.in/…): not a PDF: https://irdai.gov.in/…", "The download turned out to be a web page, not a PDF (it doesn't start with %PDF). Not saved; tried again next round."] }],
     ],
   },
   {
@@ -377,7 +377,7 @@ const steps = [
     marks: [
       [0.02, { sub: { s5: "✓ it starts with %PDF" }, rows: { failures: [FAIL.floci] } }],
       [0.88, { sub: { fail: "S3 is down" },
-               log: ["warn", "WARNING RBI failed (…): Could not connect to the endpoint URL: \"http://host.docker.internal:4566/rci/rbi/…\""] }],
+               log: ["warn", "WARNING RBI failed (…): Could not connect to the endpoint URL: \"http://host.docker.internal:4566/rci/rbi/…\"", "S3 (Floci, on your machine) isn't running, so the PDF can't be stored. Nothing is saved; start Floci and the next round catches up."] }],
     ],
   },
   {
@@ -390,12 +390,12 @@ const steps = [
     marks: [
       [0.02, { rows: { failures: [FAIL.redis] } }],
       [0.2, { rows: { circulars: [ROW_98, ["99", "RBI", "id=13651", "(the next circular)", "8c41…e7", "rbi/8c41…e7.pdf", "new"]] },
-              sub: { pg: "99 · new" }, log: [["sql", "INSERT INTO circulars (…) VALUES ('RBI', 'id=13651', …) → id 99"], ["sql", "COMMIT"]] }],
-      [0.44, { log: ["redis", "SET rci:queued:circular_id=99:type=circular.read … → Error 111: Connection refused"] }],
+              sub: { pg: "99 · new" }, log: [["sql", "INSERT INTO circulars (…) VALUES ('RBI', 'id=13651', …) → id 99", "The watcher saves circular 99's row, as usual."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
+      [0.44, { log: ["redis", "SET rci:queued:circular_id=99:type=circular.read … → Error 111: Connection refused", "But Redis is down, so the mark, and with it the task, can't be added."] }],
       [0.7, { rows: { circulars: [ROW_98] }, sub: { pg: "99 deleted again" },
-              log: [["sql", "DELETE FROM circulars WHERE id = 99"], ["sql", "COMMIT"]] }],
+              log: [["sql", "DELETE FROM circulars WHERE id = 99", "So the watcher deletes the row again: a circular is never saved without its task. Next round it tries again from the start."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
       [0.94, { sub: { fail: "Redis is down" },
-               log: ["warn", "WARNING RBI failed (https://www.rbi.org.in/…?Id=13651…): Error 111 connecting to redis:6379. Connection refused."] }],
+               log: ["warn", "WARNING RBI failed (https://www.rbi.org.in/…?Id=13651…): Error 111 connecting to redis:6379. Connection refused.", "The watcher's log: this circular failed because Redis can't be reached. It will be retried next round."] }],
     ],
   },
   {
@@ -405,7 +405,7 @@ const steps = [
     code: "run_source() · watcher/main.py",
     moves: [["SELECT ✗", "s3>pg", 0.1, 0.5, "bad"]],
     marks: [[0.02, { rows: { failures: [FAIL.postgres] } }], [0.5, { sub: { s1: "restarting until Postgres is back", fail: "Postgres is down" },
-                    log: ["error", "psycopg.OperationalError: connection to server at \"postgres\" failed … (the container exits; Docker starts it again)"] }]],
+                    log: ["error", "psycopg.OperationalError: connection to server at \"postgres\" failed … (the container exits; Docker starts it again)", "The watcher can't reach Postgres at all, so it stops. Docker starts it again, and once Postgres is back the next round catches up."] }]],
   },
   {
     story: 2, ref: "going wrong", dur: 8000, focus: ["fail", "s1", "s3"], tables: ["failures"],
@@ -446,7 +446,7 @@ const steps = [
     text: "docker compose restart watcher starts a round at once. Only one watcher ever runs: two would both download the same new circular, and the database would refuse the second copy.",
     code: "watcher: replicas 1 · docker-compose.yml",
     moves: [["restart: a round now", "s1>s2", 0.3, 0.8, "start"]],
-    marks: [[0.2, { sub: { s1: "a round now" }, log: ["app", "docker compose restart watcher"] }]],
+    marks: [[0.2, { sub: { s1: "a round now" }, log: ["app", "docker compose restart watcher", "Restarting the watcher's container starts a round straight away, instead of waiting for the hour."] }]],
   },
 ];
 

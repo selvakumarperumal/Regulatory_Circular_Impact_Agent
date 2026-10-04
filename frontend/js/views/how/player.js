@@ -11,6 +11,8 @@
  * A step:  { story, dur, ref, title, text, code, focus: [node ids], tables: [table ids],
  *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
  *            marks: [[moment, { sub, slots, badge, rows, log }], …] }
+ * A log line: [type, the real log line, SQL or command, what it means in plain words]. The
+ * panel under the picture shows the plain words first, the real line under them.
  * A move along "b>a" when only "a>b" is drawn runs the same edge backwards. quietEdges
  * draws only the edges the current step uses, plus the backbone ones, faintly and with an
  * arrow. Each kind of part has its own shape, as in a flowchart (SHAPE below). */
@@ -23,13 +25,13 @@ export const KIND = {
   start: "#a7ef6f", ask: "#fbbf24", gap: "#fb7185", bad: "#fb7185", ok: "#34d399", step: "#94a3b8",
 };
 
-// The log panel's line types.
+// The log panel's line types. Each line is [type, the real text, what it means in plain words].
 const LOG = {
-  http: ["HTTP", "#a7ef6f"], sql: ["SQL", "#818cf8"], redis: ["Redis", "#38bdf8"], s3: ["S3", "#a5b4fc"],
-  llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warn", "#fbbf24"],
+  http: ["request", "#a7ef6f"], sql: ["Postgres", "#818cf8"], redis: ["Redis", "#38bdf8"], s3: ["S3", "#a5b4fc"],
+  llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warning", "#fbbf24"],
   error: ["error", "#fb7185"], app: ["app", "#cbd5e1"],
 };
-const LOG_LINES = 9;
+const LOG_LINES = 6;
 
 /** A node: node(x, y, w, h, kind, title, sub, { slots, idle, link, badge, mono, inline, num, shape }).
  * idle: the sub-line that means "not busy"; any other sub-line makes the node glow as busy.
@@ -284,7 +286,7 @@ export function play(scene, root) {
             <div id="how-tables"></div>
           </div>` : ""}
           <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
-            <div class="how-panel-head"><b>Underneath</b><span>the log lines, SQL, Redis commands and requests</span></div>
+            <div class="how-panel-head"><b>Underneath</b><span>what happens behind the scenes, in plain words, with the real log line or command</span></div>
             <ol id="how-log"></ol>
           </div>
         </div>
@@ -345,13 +347,16 @@ export function play(scene, root) {
     $("rect", token).setAttribute("x", -w / 2);
   }
 
-  function showLog(lines) {
-    const key = lines.length + (lines.at(-1)?.[1] ?? "");
+  /** The latest lines: what each means, then the real line. This step's lines are bright. */
+  function showLog(lines, fresh) {
+    const key = `${lines.length} ${fresh} ${lines.at(-1)?.[1] ?? ""}`;
     if (key === shownLog) return;
     shownLog = key;
-    const recent = lines.slice(-LOG_LINES);
-    put($("#how-log", root), html`${recent.map(([type, text], i) => html`
-      <li class="${i === recent.length - 1 ? "new" : ""}" style="--c: ${LOG[type][1]}"><b>${LOG[type][0]}</b><code title="${text}">${text}</code></li>`)}
+    const first = Math.max(0, lines.length - LOG_LINES);
+    const recent = lines.slice(first);
+    put($("#how-log", root), html`${recent.map(([type, text, why], i) => html`
+      <li class="${first + i >= fresh ? `now${i === recent.length - 1 ? " new" : ""}` : ""}" style="--c: ${LOG[type][1]}">
+        <b>${LOG[type][0]}</b><div>${why ? html`<p>${why}</p>` : ""}<code title="${text}">${text}</code></div></li>`)}
       ${recent.length ? "" : html`<li class="none">Nothing yet: press play.</li>`}`);
   }
 
@@ -399,7 +404,7 @@ export function play(scene, root) {
       badge.classList.toggle("show", Boolean(n));
       $("text", badge).textContent = n || "";
     }
-    showLog(s.log);
+    showLog(s.log, before.log.length);
     showTables(st, s);
 
     const lit = new Set(st.focus || []);

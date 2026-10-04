@@ -174,9 +174,9 @@ const steps = [
     marks: [
       [0.02, { sub: { reader: "starting…", w1: "starting…", w2: "starting…" } }],
       [0.9, { sub: { reader: W, w1: W, w2: W },
-              log: [["log", `INFO worker ${READER}: lanes pdf, using gemini-3.5-flash, waiting for tasks`],
-                    ["log", `INFO worker ${W1}: lanes main, using gemini-3.5-flash, waiting for tasks`],
-                    ["log", `INFO worker ${W2}: lanes main, using gemini-3.5-flash, waiting for tasks`]] }],
+              log: [["log", `INFO worker ${READER}: lanes pdf, using gemini-3.5-flash, waiting for tasks`, "The reader starts. It's named after its container, takes notes only from the PDF lane, and is ready."],
+                    ["log", `INFO worker ${W1}: lanes main, using gemini-3.5-flash, waiting for tasks`, "Worker 1 starts: it takes notes from the main lane."],
+                    ["log", `INFO worker ${W2}: lanes main, using gemini-3.5-flash, waiting for tasks`, "Worker 2 starts the same way, so two checks can run at once."]] }],
     ],
   },
   {
@@ -194,8 +194,8 @@ const steps = [
     moves: [["SET mark", "watcher>pdf", 0.06, 0.4, "queue"], ["read 98", "watcher>pdf", 0.46, 0.82, "queue"]],
     marks: [
       [0.4, { rows: { marks: [MARK_READ] }, sub: { marks: "circular.read 98" },
-              log: ["redis", "SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400 → OK"] }],
-      [0.82, { slots: { pdf: ["read 98"] }, log: ["redis", "XADD rci:tasks:pdf * type circular.read circular_id 98 → 1790831159691-0"] }],
+              log: ["redis", "SET rci:queued:circular_id=98:type=circular.read 1 NX EX 86400 → OK", "A mark in Redis: “read 98 is already queued”. NX means only if there's no mark yet, so the same task can't be queued twice. It expires after a day."] }],
+      [0.82, { slots: { pdf: ["read 98"] }, log: ["redis", "XADD rci:tasks:pdf * type circular.read circular_id 98 → 1790831159691-0", "The note read 98 is added to the PDF lane. Redis gives it an id made of the time and a counter."] }],
     ],
   },
   {
@@ -206,8 +206,8 @@ const steps = [
     moves: [["XGROUP CREATE", "reader>pdf", 0.04, 0.26, "queue"], ["XREADGROUP 0", "reader>pending", 0.34, 0.6, "queue"],
             ["none", "pending>reader", 0.66, 0.92, "queue"]],
     marks: [
-      [0.26, { log: ["redis", "XGROUP CREATE rci:tasks:pdf workers 0 MKSTREAM → BUSYGROUP (it exists: fine)"] }],
-      [0.6, { log: ["redis", `XREADGROUP GROUP workers ${READER} COUNT 1 STREAMS rci:tasks:pdf 0 → (nothing)`] }],
+      [0.26, { log: ["redis", "XGROUP CREATE rci:tasks:pdf workers 0 MKSTREAM → BUSYGROUP (it exists: fine)", "The reader makes sure the lane has its group of readers. BUSYGROUP means the group already exists, which is fine."] }],
+      [0.6, { log: ["redis", `XREADGROUP GROUP workers ${READER} COUNT 1 STREAMS rci:tasks:pdf 0 → (nothing)`, "First it looks at its own pending list: a task it took before but never finished, say after a crash. Nothing there."] }],
     ],
   },
   {
@@ -216,7 +216,7 @@ const steps = [
     text: "Then XAUTOCLAIM: a task on another worker's pending list that nobody has touched for 5 minutes belongs to a worker that died, and moves here. None.",
     code: "next_task(), CLAIM_IDLE_SECONDS · worker/main.py",
     moves: [["XAUTOCLAIM 5 min", "reader>pending", 0.06, 0.42, "queue"], ["none", "pending>reader", 0.52, 0.88, "queue"]],
-    marks: [[0.42, { log: ["redis", `XAUTOCLAIM rci:tasks:pdf workers ${READER} 300000 0-0 COUNT 1 → (nothing)`] }]],
+    marks: [[0.42, { log: ["redis", `XAUTOCLAIM rci:tasks:pdf workers ${READER} 300000 0-0 COUNT 1 → (nothing)`, "Then it looks for a task another worker left idle for 5 minutes (300,000 ms), maybe because it died. None."] }]],
   },
   {
     story: 0, ref: "step 2", dur: 7000, focus: ["pdf", "reader", "pending"], tables: ["pdfPending"],
@@ -227,7 +227,7 @@ const steps = [
     marks: [
       [0.38, { slots: { pdf: [] } }],
       [0.72, { sub: { reader: "read 98", pending: "98 → e02f…-1 · 0 s" }, rows: { pdfPending: [PENDING_98("0 s")] },
-               log: ["redis", `XREADGROUP GROUP workers ${READER} COUNT 1 BLOCK 5000 STREAMS rci:tasks:pdf > → 1790831159691-0 {type: circular.read, circular_id: 98}`] }],
+               log: ["redis", `XREADGROUP GROUP workers ${READER} COUNT 1 BLOCK 5000 STREAMS rci:tasks:pdf > → 1790831159691-0 {type: circular.read, circular_id: 98}`, "Then it waits up to 5 seconds for a brand-new note. It gets read 98, and Redis notes that the reader now has it."] }],
     ],
   },
   {
@@ -243,7 +243,7 @@ const steps = [
       [0.56, { rows: { heartbeat: [["10:00:00", "Redis hands the task to e02f…-1", "0 s"], ["10:00:59", "still reading page 2", "59 s"],
                                    ["10:01:00", "the helper touches it", "0 s"]],
                        pdfPending: [PENDING_98("0 s")] }, sub: { pending: "98 → e02f…-1 · 0 s" },
-               log: ["redis", `XCLAIM rci:tasks:pdf workers ${READER} 0 1790831159691-0 JUSTID`] }],
+               log: ["redis", `XCLAIM rci:tasks:pdf workers ${READER} 0 1790831159691-0 JUSTID`, "Every minute while it works, the reader touches the note to say “still mine, I'm alive”, so nobody takes it over."] }],
       [0.9, { rows: { heartbeat: [["10:00:00", "Redis hands the task to e02f…-1", "0 s"], ["10:00:59", "still reading page 2", "59 s"],
                                   ["10:01:00", "the helper touches it", "0 s"], ["10:02:00", "the helper touches it again", "0 s"]] } }],
     ],
@@ -263,7 +263,7 @@ const steps = [
     text: "It reads circular 98's row. Older than 30 days (LOOKBACK_DAYS): skipped, no OCR, no Gemini. Marked failed: left alone. 98 is new and published today, so it's read.",
     code: "read_circular(), cutoff() · worker/pipeline.py",
     moves: [["status? date?", "s4>circulars", 0.05, 0.4, "data"], ["new · today", "circulars>s4", 0.5, 0.88, "data"]],
-    marks: [[0.4, { log: ["sql", "SELECT * FROM circulars WHERE id = 98 → status 'new', published today"] }]],
+    marks: [[0.4, { log: ["sql", "SELECT * FROM circulars WHERE id = 98 → status 'new', published today", "The reader loads circular 98. It's new and published today, so it's worth reading."] }]],
   },
   {
     story: 1, ref: "step 4", dur: 7400, focus: ["s4", "s17", "circulars"], tables: ["circulars"],
@@ -272,7 +272,7 @@ const steps = [
     code: "read_circular() · worker/pipeline.py · give_up() · worker/main.py",
     moves: [["41: 90 days old", "s4>circulars", 0.12, 0.55, "ask"]],
     marks: [[0.55, { rows: { circulars: [CIRC_NEW, OLD] },
-                     log: [["sql", "UPDATE circulars SET status = 'skipped' WHERE id = 41"], ["sql", "COMMIT"]] }]],
+                     log: [["sql", "UPDATE circulars SET status = 'skipped' WHERE id = 41", "An example of a skip: circular 41 is older than 30 days, so it's marked skipped and never sent to OCR or Gemini."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }]],
   },
   {
     story: 1, ref: "step 5", dur: 6800, focus: ["s5", "circulars"], tables: ["circulars"],
@@ -280,7 +280,7 @@ const steps = [
     text: "If another circular has the same fingerprint (sha256) and its text already, the text is just copied: no OCR at all. Circular 98's PDF is new.",
     code: "twin() · worker/pipeline.py",
     moves: [["read it", "s4>s5", 0.03, 0.2, "ask"], ["same sha256?", "s5>circulars", 0.26, 0.56, "data"], ["none", "circulars>s5", 0.62, 0.92, "data"]],
-    marks: [[0.56, { log: ["sql", `SELECT * FROM circulars WHERE sha256 = '${SHA}' AND id <> 98 AND text IS NOT NULL → (none)`] }]],
+    marks: [[0.56, { log: ["sql", `SELECT * FROM circulars WHERE sha256 = '${SHA}' AND id <> 98 AND text IS NOT NULL → (none)`, "Was this exact PDF (same fingerprint) read before under another number? Then its text could be copied for free. No."] }]],
   },
   {
     story: 1, ref: "step 5", dur: 7000, focus: ["s5", "ocrpages", "s3"], tables: ["ocrPages"],
@@ -290,8 +290,8 @@ const steps = [
     moves: [["saved pages?", "s5>ocrpages", 0.03, 0.24, "data"], ["none", "ocrpages>s5", 0.28, 0.46, "data"],
             ["GET", "s5>s3", 0.52, 0.7, "data"], ["PDF, 3 pages", "s3>s5", 0.74, 0.94, "data"]],
     marks: [
-      [0.24, { log: ["sql", `SELECT page, text FROM ocr_pages WHERE sha256 = '${SHA}' → (none)`] }],
-      [0.7, { log: ["s3", `GET s3://rci/rbi/${SHA}.pdf`] }],
+      [0.24, { log: ["sql", `SELECT page, text FROM ocr_pages WHERE sha256 = '${SHA}' → (none)`, "Were some of its pages read before, by a reader that stopped half-way? None, so it starts at page 1."] }],
+      [0.7, { log: ["s3", `GET s3://rci/rbi/${SHA}.pdf`, "The reader downloads the PDF from S3."] }],
     ],
   },
   {
@@ -301,9 +301,9 @@ const steps = [
     code: "pages(), ocr_page(), remove_det() · worker/ocr.py",
     moves: [["page 1", "s5>ocr", 0.04, 0.3, "gpu"], ["text", "ocr>s5", 0.36, 0.6, "gpu"], ["save page 1", "s5>ocrpages", 0.66, 0.9, "data"]],
     marks: [
-      [0.3, { log: ["ocr", "POST http://ocr:8000/v1/chat/completions  page 1 as a 200 DPI PNG, \"<image>document parsing.\""] }],
+      [0.3, { log: ["ocr", "POST http://ocr:8000/v1/chat/completions  page 1 as a 200 DPI PNG, \"<image>document parsing.\"", "Page 1 becomes a picture and goes to the OCR model on the GPU, with the instruction to read the document. Back comes its text."] }],
       [0.9, { rows: { ocrPages: [[SHA, "0", "RESERVE BANK OF INDIA …"]] }, sub: { ocrpages: "3f9a… · 1 page" },
-              log: [["sql", `INSERT INTO ocr_pages (sha256, page, text) VALUES ('${SHA}', 0, 'RESERVE BANK OF INDIA …')`], ["sql", "COMMIT"]] }],
+              log: [["sql", `INSERT INTO ocr_pages (sha256, page, text) VALUES ('${SHA}', 0, 'RESERVE BANK OF INDIA …')`, "Page 1's text is saved at once (pages count from 0). If the reader stops now, this page is never read again."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
     ],
   },
   {
@@ -315,10 +315,10 @@ const steps = [
             ["page 3: blank", "s5>ocrpages", 0.76, 0.94, "data"]],
     marks: [
       [0.7, { rows: { ocrPages: [[SHA, "0", "RESERVE BANK OF INDIA …"], [SHA, "1", "2. Regulated entities shall …"]] }, sub: { ocrpages: "3f9a… · 2 pages" },
-              log: [["ocr", "POST http://ocr:8000/v1/chat/completions  page 2"], ["sql", `INSERT INTO ocr_pages … VALUES ('${SHA}', 1, '2. Regulated entities shall …')`]] }],
+              log: [["ocr", "POST http://ocr:8000/v1/chat/completions  page 2", "Page 2 goes to OCR the same way. One page at a time, so even a huge PDF never overloads the GPU."], ["sql", `INSERT INTO ocr_pages … VALUES ('${SHA}', 1, '2. Regulated entities shall …')`, "Page 2's text is saved the same way."]] }],
       [0.94, { rows: { ocrPages: [[SHA, "0", "RESERVE BANK OF INDIA …"], [SHA, "1", "2. Regulated entities shall …"], [SHA, "2", "\"\" (blank)"]] },
                sub: { ocrpages: "3f9a… · 3 pages" },
-               log: [["app", "page 3: no text, images or drawings → blank, not sent to the GPU"], ["sql", `INSERT INTO ocr_pages … VALUES ('${SHA}', 2, '')`]] }],
+               log: [["app", "page 3: no text, images or drawings → blank, not sent to the GPU", "Page 3 is empty, with nothing on it to read, so it isn't sent to the GPU at all."], ["sql", `INSERT INTO ocr_pages … VALUES ('${SHA}', 2, '')`, "Page 3 is saved as blank, so a restart won't look at it again."]] }],
     ],
   },
   {
@@ -327,7 +327,7 @@ const steps = [
     text: "Each page is saved before the next, so had the reader stopped on page 3, the next try would start at page 3, not page 1. A saved page never goes to the GPU again.",
     code: "ocr_text() · worker/pipeline.py",
     moves: [["pages 1-2 saved: skip", "ocrpages>s5", 0.15, 0.6, "data"]],
-    marks: [[0.6, { log: ["log", "INFO #98: 2 pages OCR'd before, carrying on   (what the log would say after a restart)"] }]],
+    marks: [[0.6, { log: ["log", "INFO #98: 2 pages OCR'd before, carrying on   (what the log would say after a restart)", "What the log would say if the reader had stopped and restarted: 2 pages were already read, so it carries on from page 3."] }]],
   },
   {
     story: 1, ref: "step 5", dur: 7000, focus: ["s5", "circulars", "ocrpages"], tables: ["circulars", "ocrPages"],
@@ -338,8 +338,8 @@ const steps = [
     marks: [[0.66, {
       rows: { circulars: [["98", "parsed", TEXT, "", "", "", ""], OLD], ocrPages: [] },
       sub: { circulars: "98 · parsed", ocrpages: "empty" },
-      log: [["sql", "UPDATE circulars SET text = 'RESERVE BANK OF INDIA …', status = 'parsed' WHERE id = 98"],
-            ["sql", `DELETE FROM ocr_pages WHERE sha256 = '${SHA}'`], ["sql", "COMMIT"], ["log", "INFO #98 parsed: 12408 chars"]],
+      log: [["sql", "UPDATE circulars SET text = 'RESERVE BANK OF INDIA …', status = 'parsed' WHERE id = 98", "The pages are joined into one text and saved on circular 98. Its status becomes parsed: the text is ready."],
+            ["sql", `DELETE FROM ocr_pages WHERE sha256 = '${SHA}'`, "The saved pages aren't needed any more, so they're deleted."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."], ["log", "INFO #98 parsed: 12408 chars", "The reader's log: circular 98's text is ready, 12,408 characters from all its pages joined together."]],
     }]],
   },
   {
@@ -350,10 +350,10 @@ const steps = [
     moves: [["summarise it", "s5>s6", 0.02, 0.16, "ext"], ["the text", "s6>chat", 0.2, 0.44, "ext"], ["JSON answer", "chat>s6", 0.5, 0.72, "ext"],
             ["save", "s6>circulars", 0.76, 0.94, "data"]],
     marks: [
-      [0.72, { log: ["llm", "summarize(98) → {addressed_to: 'All Regulated Entities… NBFCs…', summary: 'RBI designates a new terrorist organisation…', requirements: […]}"] }],
+      [0.72, { log: ["llm", "summarize(98) → {addressed_to: 'All Regulated Entities… NBFCs…', summary: 'RBI designates a new terrorist organisation…', requirements: […]}", "Gemini answers three questions in a fixed shape: who it's for, a short summary, and every obligation in it."] }],
       [0.94, { rows: { circulars: [SUMMED, OLD] }, sub: { circulars: "98 · summary saved" },
-               log: [["sql", "UPDATE circulars SET addressed_to = …, summary = …, requirements = … WHERE id = 98"], ["sql", "COMMIT"],
-                     ["log", "INFO #98 read: addressed to 'All Regulated Entities…'"]] }],
+               log: [["sql", "UPDATE circulars SET addressed_to = …, summary = …, requirements = … WHERE id = 98", "Gemini's answers are saved on circular 98, once, for every company to use."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."],
+                     ["log", "INFO #98 read: addressed to 'All Regulated Entities…'", "The reader's log: circular 98 is now fully read, and it's addressed to all regulated entities."]] }],
     ],
   },
   {
@@ -364,9 +364,9 @@ const steps = [
     moves: [["into numbers", "s6>s7", 0.02, 0.16, "ext"], ["title + summary", "s7>emb", 0.2, 0.44, "ext"], ["768 numbers", "emb>s7", 0.5, 0.72, "ext"],
             ["save", "s7>circulars", 0.76, 0.94, "data"]],
     marks: [
-      [0.72, { log: ["llm", "embed([title + summary + obligations], RETRIEVAL_QUERY) → [0.021, -0.013, …] (768 numbers)"] }],
+      [0.72, { log: ["llm", "embed([title + summary + obligations], RETRIEVAL_QUERY) → [0.021, -0.013, …] (768 numbers)", "Gemini turns the circular's title, summary and obligations into 768 numbers that describe its meaning."] }],
       [0.94, { rows: { circulars: [READ, OLD] }, sub: { circulars: "98 · read" },
-               log: [["sql", "UPDATE circulars SET embedding = […], status = 'read' WHERE id = 98"], ["sql", "COMMIT"]] }],
+               log: [["sql", "UPDATE circulars SET embedding = […], status = 'read' WHERE id = 98", "The numbers are saved and circular 98 is now read: it will never be OCR'd or summarised again."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
     ],
   },
   {
@@ -377,8 +377,8 @@ const steps = [
     moves: [["a to-do each", "s7>s8", 0.02, 0.14, "data"], ["which companies?", "s8>companies", 0.18, 0.4, "data"], ["1 and 2", "companies>s8", 0.44, 0.62, "data"],
             ["2 rows", "s8>assessments", 0.68, 0.92, "data"]],
     marks: [[0.92, { rows: { assessments: [A1("pending"), A2("pending")] }, sub: { assessments: "98: 1 and 2 pending" },
-                     log: [["sql", "INSERT INTO assessments (company_id, circular_id, status) VALUES (1, 98, 'pending'), (2, 98, 'pending') ON CONFLICT DO NOTHING"],
-                           ["sql", "COMMIT"]] }]],
+                     log: [["sql", "INSERT INTO assessments (company_id, circular_id, status) VALUES (1, 98, 'pending'), (2, 98, 'pending') ON CONFLICT DO NOTHING", "A to-do for each company: check 98 for company 1 and for company 2, both pending. One that already exists is left alone."],
+                           ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }]],
   },
   {
     story: 1, ref: "step 9", dur: 7200, focus: ["s9", "reader", "marks"], tables: ["marks"],
@@ -386,7 +386,7 @@ const steps = [
     text: "Every task ends the same way. The helper stops touching it. Then its mark is deleted, so the same task can be queued again later, by Reprocess for example.",
     code: "run_task() · worker/main.py",
     moves: [["finish", "s8>s9", 0.02, 0.16, "queue"], ["finish", "s9>reader", 0.2, 0.46, "queue"], ["DEL mark", "reader>marks", 0.54, 0.86, "queue"]],
-    marks: [[0.86, { rows: { marks: [] }, sub: { marks: "none" }, log: ["redis", "DEL rci:queued:circular_id=98:type=circular.read"] }]],
+    marks: [[0.86, { rows: { marks: [] }, sub: { marks: "none" }, log: ["redis", "DEL rci:queued:circular_id=98:type=circular.read", "The read 98 mark is deleted: the task is done, so it may be queued again some day, for example by Reprocess."] }]],
   },
   {
     story: 1, ref: "step 9", dur: 7600, focus: ["reader", "marks", "main"], tables: ["marks"],
@@ -398,10 +398,10 @@ const steps = [
       [0.4, { rows: { marks: [["rci:queued:circular_id=98:company_id=1:type=circular.assess", "in a day at most"],
                               ["rci:queued:circular_id=98:company_id=2:type=circular.assess", "in a day at most"]] },
               sub: { marks: "circular.assess 98 ×2" },
-              log: ["redis", "SET rci:queued:circular_id=98:company_id=1:type=circular.assess 1 NX EX 86400 → OK  (and company 2)"] }],
+              log: ["redis", "SET rci:queued:circular_id=98:company_id=1:type=circular.assess 1 NX EX 86400 → OK  (and company 2)", "Marks for the next tasks, check 98 for company 1 and for company 2, so neither can be queued twice."] }],
       [0.86, { slots: { main: ["98 · 1", "98 · 2"] },
-               log: [["redis", "XADD rci:tasks * type circular.assess company_id 1 circular_id 98"],
-                     ["redis", "XADD rci:tasks * type circular.assess company_id 2 circular_id 98"]] }],
+               log: [["redis", "XADD rci:tasks * type circular.assess company_id 1 circular_id 98", "The note check 98 for company 1 goes on the main lane."],
+                     ["redis", "XADD rci:tasks * type circular.assess company_id 2 circular_id 98", "And the note check 98 for company 2."]] }],
     ],
   },
   {
@@ -411,7 +411,7 @@ const steps = [
     code: "run_task() · worker/main.py",
     moves: [["XACK", "reader>pending", 0.12, 0.6, "ok"]],
     marks: [[0.6, { rows: { pdfPending: [] }, sub: { reader: W, pending: NOBODY },
-                    log: ["redis", "XACK rci:tasks:pdf workers 1790831159691-0"] }]],
+                    log: ["redis", "XACK rci:tasks:pdf workers 1790831159691-0", "The reader says the task is finished (acknowledge). Redis takes it off the pending list for good."] }]],
   },
 
   // ── Checking it for one company (steps 10 to 13), the workers ──
@@ -427,8 +427,8 @@ const steps = [
       [0.43, { sub: { w1: "98 · company 1", w2: "98 · company 2", pending: "2 on the main lane" },
                rows: { mainPending: [["1790831161204-0", "circular.assess, 1 · 98", W1, "0 s", "1"],
                                      ["1790831161207-0", "circular.assess, 2 · 98", W2, "0 s", "1"]] },
-               log: [["redis", `XREADGROUP GROUP workers ${W1} COUNT 1 BLOCK 5000 STREAMS rci:tasks > → {type: circular.assess, company_id: 1, circular_id: 98}`],
-                     ["redis", `XREADGROUP GROUP workers ${W2} … > → {type: circular.assess, company_id: 2, circular_id: 98}`]] }],
+               log: [["redis", `XREADGROUP GROUP workers ${W1} COUNT 1 BLOCK 5000 STREAMS rci:tasks > → {type: circular.assess, company_id: 1, circular_id: 98}`, "Worker 1 takes the first note from the main lane: check 98 for company 1."],
+                     ["redis", `XREADGROUP GROUP workers ${W2} … > → {type: circular.assess, company_id: 2, circular_id: 98}`, "At the same moment worker 2 takes the other note, for company 2. Each note goes to exactly one worker."]] }],
     ],
   },
   {
@@ -439,11 +439,11 @@ const steps = [
     moves: [["descriptions", "s10>companies", 0.02, 0.22, "data"], ["applies? ×2", "s10>chat", 0.26, 0.48, "ext"],
             ["yes · no", "chat>s10", 0.52, 0.72, "ext"], ["answers", "s10>assessments", 0.76, 0.94, "data"]],
     marks: [
-      [0.72, { log: [["llm", `check_applicability(company 1, 98) → {applies_to_company: true, reason: '${WHY1}'}`],
-                     ["llm", `check_applicability(company 2, 98) → {applies_to_company: false, reason: '${WHY2}'}`]] }],
+      [0.72, { log: [["llm", `check_applicability(company 1, 98) → {applies_to_company: true, reason: '${WHY1}'}`, "Gemini reads company 1's description and the start of the circular: yes, it applies, and it says why."],
+                     ["llm", `check_applicability(company 2, 98) → {applies_to_company: false, reason: '${WHY2}'}`, "For company 2, a stock broker: no, it doesn't apply, and it says why."]] }],
       [0.94, { rows: { assessments: [A1("pending", "true", WHY1), A2("pending", "false", WHY2)] }, sub: { assessments: "98: 1 yes · 2 no" },
-               log: [["sql", "UPDATE assessments SET applicable = true, applies_reason = '…' WHERE company_id = 1 AND circular_id = 98"],
-                     ["sql", "UPDATE assessments SET applicable = false, … WHERE company_id = 2 AND circular_id = 98"], ["sql", "COMMIT"]] }],
+               log: [["sql", "UPDATE assessments SET applicable = true, applies_reason = '…' WHERE company_id = 1 AND circular_id = 98", "Company 1's answer and reason are saved at once, so this question is never paid for twice."],
+                     ["sql", "UPDATE assessments SET applicable = false, … WHERE company_id = 2 AND circular_id = 98", "Company 2's answer is saved too. Its check ends here."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
     ],
   },
   {
@@ -461,10 +461,10 @@ const steps = [
     moves: [["company 1 goes on", "s10>s11", 0.02, 0.16, "data"], ["RBI policies?", "s11>policies", 0.2, 0.42, "data"],
             ["4 + their numbers", "policies>s11", 0.48, 0.72, "data"]],
     marks: [
-      [0.42, { log: ["sql", "SELECT * FROM policies WHERE company_id = 1 → 4 tagged RBI, all embedded with gemini-embedding-001"] }],
+      [0.42, { log: ["sql", "SELECT * FROM policies WHERE company_id = 1 → 4 tagged RBI, all embedded with gemini-embedding-001", "Worker 1 loads company 1's policies: 4 answer to RBI, and each already has its numbers."] }],
       [0.8, { rows: { scores: [["POL-KYC", "0.82", "yes"], ["POL-DRP", "0.58", "yes"], ["POL-DLP", "0.55", "yes"], ["POL-IT", "0.31", "no: not in the top 3"]] },
               sub: { s11: "KYC DRP DLP" },
-              log: ["app", "cosine(98, each policy's best chunk): POL-KYC 0.82 · POL-DRP 0.58 · POL-DLP 0.55 · POL-IT 0.31"] }],
+              log: ["app", "cosine(98, each policy's best chunk): POL-KYC 0.82 · POL-DRP 0.58 · POL-DLP 0.55 · POL-IT 0.31", "Plain arithmetic, no Gemini: how close each policy's numbers are to the circular's (1 means the same meaning). The 3 closest go on to Gemini."] }],
     ],
   },
   {
@@ -475,8 +475,8 @@ const steps = [
     moves: [["asked before?", "s11>checks", 0.04, 0.26, "data"], ["no", "checks>s11", 0.3, 0.48, "data"],
             ["a gap from 98?", "s11>gaps", 0.54, 0.74, "data"], ["no", "gaps>s11", 0.78, 0.96, "data"]],
     marks: [
-      [0.26, { log: ["sql", "SELECT policy_id, policy_version FROM policy_checks WHERE circular_id = 98 → (none)"] }],
-      [0.74, { log: ["sql", "SELECT policy_id FROM gaps WHERE circular_id = 98 → (none)"] }],
+      [0.26, { log: ["sql", "SELECT policy_id, policy_version FROM policy_checks WHERE circular_id = 98 → (none)", "Was any of these policies, at this version, judged against 98 before? No, so all 3 will be asked."] }],
+      [0.74, { log: ["sql", "SELECT policy_id FROM gaps WHERE circular_id = 98 → (none)", "Does any policy already have a gap for 98? No. A policy with a gap is never asked again."] }],
     ],
   },
   {
@@ -487,9 +487,9 @@ const steps = [
     moves: [["the top 3", "s11>s12", 0.02, 0.14, "ext"], ["controls", "s12>policies", 0.18, 0.36, "data"],
             ["POL-KYC v1?", "s12>chat", 0.42, 0.64, "ext"], ["out of date · high", "chat>s12", 0.68, 0.92, "gap"]],
     marks: [
-      [0.36, { log: ["sql", "SELECT * FROM controls WHERE policy_id = 9"] }],
+      [0.36, { log: ["sql", "SELECT * FROM controls WHERE policy_id = 9", "It loads POL-KYC's controls, the regular checks that put it into practice, so Gemini can say which ones must change."] }],
       [0.92, { sub: { s12: "KYC: out of date" },
-               log: ["llm", "assess(98, POL-KYC v1) → {impacted: true, severity: 'high', missing_from_policy: 'The policy does not require reporting to FIU-IND…', draft_change: 'Add clause 2A: …'}"] }],
+               log: ["llm", "assess(98, POL-KYC v1) → {impacted: true, severity: 'high', missing_from_policy: 'The policy does not require reporting to FIU-IND…', draft_change: 'Add clause 2A: …'}", "Gemini compares the circular's obligations with POL-KYC and its controls: out of date, high, what's missing, and a draft of new wording."] }],
     ],
   },
   {
@@ -502,10 +502,10 @@ const steps = [
       rows: { checks: [KYC], gaps: [["gaps", "company 1 · POL-KYC · high · Head of Compliance · due in 7 days · draft \"Add clause 2A: …\""],
                                     ["gap_events", "agent · opened · \"The policy does not require reporting to FIU-IND…\""]] },
       sub: { checks: "98 × POL-KYC: yes", gaps: "POL-KYC · high" },
-      log: [["sql", "INSERT INTO policy_checks (circular_id, policy_id, policy_version, similarity, impacted) VALUES (98, 9, 1, 0.82, true)"],
-            ["sql", "INSERT INTO gaps (company_id, circular_id, policy_id, severity, owner, due_date, draft_change, …) VALUES (1, 98, 9, 'high', …, today + 7, …)"],
-            ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (…, 'agent', 'opened', 'The policy does not require reporting to FIU-IND…')"],
-            ["sql", "COMMIT"], ["log", "INFO #98 vs POL-KYC v1 (0.82): GAP"]],
+      log: [["sql", "INSERT INTO policy_checks (circular_id, policy_id, policy_version, similarity, impacted) VALUES (98, 9, 1, 0.82, true)", "The verdict is saved: circular 98 against POL-KYC version 1, closeness 0.82, out of date."],
+            ["sql", "INSERT INTO gaps (company_id, circular_id, policy_id, severity, owner, due_date, draft_change, …) VALUES (1, 98, 9, 'high', …, today + 7, …)", "In the same save, a gap for POL-KYC's owner: severity high, due in 7 days, with the draft wording."],
+            ["sql", "INSERT INTO gap_events (gap_id, actor, action, note) VALUES (…, 'agent', 'opened', 'The policy does not require reporting to FIU-IND…')", "And the gap's first history line: opened by the agent, with what's missing."],
+            ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."], ["log", "INFO #98 vs POL-KYC v1 (0.82): GAP", "The log line for that verdict: POL-KYC v1 scored 0.82 for closeness (1 would mean the same meaning), and it has a gap."]],
     }]],
   },
   {
@@ -516,9 +516,9 @@ const steps = [
     moves: [["POL-DRP v1?", "s12>chat", 0.02, 0.18, "ext"], ["up to date", "chat>s12", 0.2, 0.36, "ok"], ["verdict", "s12>checks", 0.38, 0.5, "data"],
             ["POL-DLP v1?", "s12>chat", 0.54, 0.7, "ext"], ["up to date", "chat>s12", 0.72, 0.86, "ok"], ["verdict", "s12>checks", 0.88, 0.98, "data"]],
     marks: [
-      [0.5, { rows: { checks: [KYC, DRP] }, log: ["log", "INFO #98 vs POL-DRP v1 (0.58): up to date"] }],
+      [0.5, { rows: { checks: [KYC, DRP] }, log: ["log", "INFO #98 vs POL-DRP v1 (0.58): up to date", "POL-DRP was close enough to ask about (0.58), and Gemini says it's already up to date. No gap."] }],
       [0.98, { rows: { checks: [KYC, DRP, DLP] }, sub: { checks: "98: 3 verdicts", s12: "a verdict, a gap" },
-               log: ["log", "INFO #98 vs POL-DLP v1 (0.55): up to date"] }],
+               log: ["log", "INFO #98 vs POL-DLP v1 (0.55): up to date", "POL-DLP (closeness 0.55) is up to date: its verdict is saved, but there's no gap."] }],
     ],
   },
   {
@@ -530,12 +530,12 @@ const steps = [
             ["DEL · XACK", "w1>pending", 0.7, 0.92, "ok"], ["DEL · XACK", "w2>pending", 0.72, 0.94, "ok"]],
     marks: [
       [0.42, { rows: { assessments: [A1("done", "true", WHY1), A2("done", "false", WHY2)] }, sub: { assessments: "98: both done" },
-               log: [["sql", "UPDATE assessments SET status = 'done' WHERE circular_id = 98 AND company_id IN (1, 2)"], ["sql", "COMMIT"],
-                     ["log", "INFO #98 for company 1: applies: True, gaps opened: ['POL-KYC']"],
-                     ["log", "INFO #98 for company 2: applies: False, gaps opened: none"]] }],
+               log: [["sql", "UPDATE assessments SET status = 'done' WHERE circular_id = 98 AND company_id IN (1, 2)", "Both companies' checks of circular 98 are marked done."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."],
+                     ["log", "INFO #98 for company 1: applies: True, gaps opened: ['POL-KYC']", "The worker's summary for company 1: the circular applies, and one gap was opened, for POL-KYC."],
+                     ["log", "INFO #98 for company 2: applies: False, gaps opened: none", "The summary for company 2: it doesn't apply, so no gaps."]] }],
       [0.94, { rows: { mainPending: [] }, sub: { w1: W, w2: W, pending: NOBODY, marks: "none", s11: "top 3, no Gemini" },
-               log: [["redis", "DEL rci:queued:circular_id=98:company_id=1:type=circular.assess  (and company 2's)"],
-                     ["redis", "XACK rci:tasks workers 1790831161204-0 1790831161207-0"]] }],
+               log: [["redis", "DEL rci:queued:circular_id=98:company_id=1:type=circular.assess  (and company 2's)", "The two marks are deleted: these tasks are finished."],
+                     ["redis", "XACK rci:tasks workers 1790831161204-0 1790831161207-0", "Each worker tells Redis its note is finished, and both leave the pending list for good."]] }],
     ],
   },
   {
@@ -559,7 +559,7 @@ const steps = [
     marks: [
       [0.04, { rows: { policies: [["POL-AML", "1", "(none yet)", "(empty)"]] } }],
       [0.36, { slots: { main: ["POL-AML"] }, sub: { marks: "policy.check 11" },
-               log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11"] }],
+               log: ["redis", "XADD rci:tasks * type policy.check company_id 1 policy_id 11", "When a policy is saved, the api puts a note on the main lane: check policy 11 for company 1."] }],
       [0.66, { slots: { main: [] }, sub: { w1: "POL-AML" } }],
     ],
   },
@@ -571,8 +571,8 @@ const steps = [
     moves: [["the text", "policies>s14", 0.03, 0.22, "data"], ["2 chunks", "s14>emb", 0.28, 0.5, "ext"], ["2 × 768 numbers", "emb>s14", 0.54, 0.74, "ext"],
             ["save", "s14>policies", 0.78, 0.95, "data"]],
     marks: [[0.95, { rows: { policies: [["POL-AML", "1", "[[0.012, …], [0.031, …]]", "(empty)"]] },
-                     log: [["sql", "UPDATE policies SET embeddings = […], embedding_model = 'gemini-embedding-001' WHERE id = 11"], ["sql", "COMMIT"],
-                           ["log", "INFO embedded POL-AML (2 chunks) with gemini-embedding-001"]] }]],
+                     log: [["sql", "UPDATE policies SET embeddings = […], embedding_model = 'gemini-embedding-001' WHERE id = 11", "The policy is cut into pieces of 5,000 characters, each turned into numbers, and saved with the model's name."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."],
+                           ["log", "INFO embedded POL-AML (2 chunks) with gemini-embedding-001", "The worker cut the policy into 2 pieces and turned each into numbers with Gemini's embedding model."]] }]],
   },
   {
     story: 3, ref: "step 14", dur: 8400, focus: ["s14", "assessments", "chat", "checks"], tables: ["checks"],
@@ -582,7 +582,7 @@ const steps = [
     moves: [["apply, 30 days", "s14>assessments", 0.02, 0.2, "data"], ["98, …", "assessments>s14", 0.23, 0.38, "data"],
             ["POL-AML v1?", "s14>chat", 0.44, 0.64, "ext"], ["up to date", "chat>s14", 0.68, 0.84, "ok"], ["verdict", "s14>checks", 0.86, 0.98, "data"]],
     marks: [[0.98, { rows: { checks: [KYC, DRP, DLP, ["98", "POL-AML", "1", "0.71", "no"]] }, sub: { checks: "98: 4 verdicts" },
-                     log: ["log", "INFO #98 vs POL-AML v1 (0.71): up to date"] }]],
+                     log: ["log", "INFO #98 vs POL-AML v1 (0.71): up to date", "POL-AML is compared with circular 98 (closeness 0.71): it already covers what 98 asks. No gap."] }]],
   },
   {
     story: 3, ref: "step 14", dur: 7000, focus: ["s14", "policies", "w1"], tables: ["policies"],
@@ -592,8 +592,8 @@ const steps = [
     moves: [["checked_at", "s14>policies", 0.08, 0.5, "ok"]],
     marks: [[0.5, { rows: { policies: [["POL-AML", "1", "[[0.012, …], [0.031, …]]", "2026-10-01 10:15"]] },
                     sub: { w1: W, marks: "none" },
-                    log: [["sql", "UPDATE policies SET checked_at = '2026-10-01 10:15' WHERE id = 11"], ["sql", "COMMIT"],
-                          ["log", "INFO POL-AML checked, gaps opened: none"], ["redis", "DEL … · XACK rci:tasks workers …"]] }]],
+                    log: [["sql", "UPDATE policies SET checked_at = '2026-10-01 10:15' WHERE id = 11", "checked_at is stamped. The console sees it's newer than the last save and shows Checked."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."],
+                          ["log", "INFO POL-AML checked, gaps opened: none", "The worker's summary: the policy is checked against recent circulars, and no gaps were needed."], ["redis", "DEL … · XACK rci:tasks workers …", "The mark is deleted and the note acknowledged: this task is finished."]] }]],
   },
   {
     story: 3, ref: "step 15", dur: 7400, focus: ["api", "main", "w2", "s15"], tables: ["assessments"],
@@ -602,7 +602,7 @@ const steps = [
     code: "set_company() · api/routes/company.py",
     moves: [["company.refresh", "api>main", 0.04, 0.36, "queue"], ["refresh 2", "main>w2", 0.44, 0.66, "queue"],
             ["refresh_company(2)", "w2>s15", 0.7, 0.94, "svc"]],
-    marks: [[0.36, { slots: { main: ["refresh 2"] }, log: ["redis", "XADD rci:tasks * type company.refresh company_id 2"] }],
+    marks: [[0.36, { slots: { main: ["refresh 2"] }, log: ["redis", "XADD rci:tasks * type company.refresh company_id 2", "Company 2's description changed, so the api queues company.refresh: decide again which circulars apply to it."] }],
             [0.66, { slots: { main: [] }, sub: { w2: "refresh 2" } }]],
   },
   {
@@ -615,8 +615,8 @@ const steps = [
     marks: [[0.86, {
       rows: { assessments: [A1("done", "true", WHY1), ["2", "98", "pending", "(cleared)", ""], ["2", "97", "pending", "(cleared)", ""],
                             ["2", "99", "done", "true", "answered after the change: kept"]] },
-      log: [["sql", "UPDATE assessments SET status = 'pending', applicable = NULL, applies_reason = NULL WHERE company_id = 2 AND status <> 'pending' AND updated_at < (company 2's updated_at)"],
-            ["sql", "COMMIT"]],
+      log: [["sql", "UPDATE assessments SET status = 'pending', applicable = NULL, applies_reason = NULL WHERE company_id = 2 AND status <> 'pending' AND updated_at < (company 2's updated_at)", "Company 2's answers from before the change go back to pending. Only “does it apply?” is asked again; texts and summaries are kept."],
+            ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]],
     }]],
   },
   {
@@ -629,7 +629,7 @@ const steps = [
       [0.3, { rows: { assessments: [A1("done", "true", WHY1), ["2", "98", "pending", "(cleared)", ""], ["2", "97", "pending", "(cleared)", ""],
                                     ["2", "99", "done", "true", "answered after the change: kept"], ["2", "96", "pending", "", "added: read in the last 30 days"]] } }],
       [0.94, { slots: { main: ["98 · 2", "97 · 2", "96 · 2"] }, sub: { w2: W },
-               log: ["redis", "XADD rci:tasks * type circular.assess company_id 2 circular_id 98  (and 97, 96)"] }],
+               log: ["redis", "XADD rci:tasks * type circular.assess company_id 2 circular_id 98  (and 97, 96)", "One check per recent circular is queued for company 2."] }],
     ],
   },
 
@@ -672,7 +672,7 @@ const steps = [
     text: "Redis keeps the lanes on disk, so a restart loses nothing. If its data is deleted, run manage.py requeue once: it queues again everything Postgres shows unfinished.",
     code: "requeue() · api/manage.py",
     moves: [["requeue", "api>pdf", 0.1, 0.5, "queue"], ["requeue", "api>main", 0.2, 0.6, "queue"]],
-    marks: [[0.6, { log: [["app", "cd backend/api && uv run python manage.py requeue"], ["app", "3 unfinished: 3 queued, 0 already queued"]] }]],
+    marks: [[0.6, { log: [["app", "cd backend/api && uv run python manage.py requeue", "If Redis ever loses its data, this command looks in Postgres for unfinished work and queues it again."], ["app", "3 unfinished: 3 queued, 0 already queued", "It found 3 unfinished jobs and queued all 3; none were already waiting."]] }]],
   },
   {
     story: 4, ref: "step 17", dur: 8400, focus: ["s5", "ocr", "s17", "pending"], tables: ["kinds", "pdfPending"],
@@ -687,7 +687,7 @@ const steps = [
                                ["Retry", "a timeout; a 5xx; not the asked-for JSON; the same answer saved first", "again at once, up to 3 tries"],
                                ["Give up", "Gemini 400; no text in the PDF; the PDF missing from S3", "give_up(): failed, a copy in rci:dead, XACK"]],
                        pdfPending: [["1790831170001-0", "circular.read, circular 100", READER, "0 s", "1"]] } }],
-      [0.6, { log: ["warn", "WARNING OCR or Gemini unavailable ([Errno 111] Connection refused); retrying"] }],
+      [0.6, { log: ["warn", "WARNING OCR or Gemini unavailable ([Errno 111] Connection refused); retrying", "The worker can't reach OCR (connection refused: it's still starting). It keeps the task, waits a minute and tries again."] }],
       [0.88, { sub: { reader: "read 100 · in 60 s" } }],
     ],
   },
@@ -700,7 +700,7 @@ const steps = [
             ["try 2 of 3", "s17>pending", 0.66, 0.9, "queue"]],
     marks: [[0.62, { rows: { pdfPending: [["1790831170001-0", "circular.read, circular 100", READER, "0 s", "2"]] },
                      sub: { reader: "read 100 · try 2" },
-                     log: ["warn", "WARNING {'type': 'circular.read', 'circular_id': '100'} failed (BadReply: not the asked-for JSON); trying again"] }]],
+                     log: ["warn", "WARNING {'type': 'circular.read', 'circular_id': '100'} failed (BadReply: not the asked-for JSON); trying again", "Gemini answered in the wrong shape. That's a hiccup, so the worker tries again at once, up to 3 times."] }]],
   },
   {
     story: 4, ref: "step 17", dur: 9000, focus: ["s17", "circulars", "dead", "marks", "pending"], tables: ["dead", "pdfPending"],
@@ -711,14 +711,14 @@ const steps = [
             ["copy", "s17>dead", 0.5, 0.68, "bad"], ["DEL mark", "s17>marks", 0.7, 0.82, "queue"], ["XACK", "s17>pending", 0.84, 0.97, "ok"]],
     marks: [
       [0.46, { sub: { circulars: "100 · failed" },
-               log: [["error", "ERROR {'type': 'circular.read', 'circular_id': '100'} failed for good"],
-                     ["sql", "UPDATE circulars SET status = 'failed', error = 'ValueError: OCR found no text in the PDF' WHERE id = 100"], ["sql", "COMMIT"]] }],
+               log: [["error", "ERROR {'type': 'circular.read', 'circular_id': '100'} failed for good", "Reading circular 100 failed in a way that waiting won't fix, so the worker gives up on this task."],
+                     ["sql", "UPDATE circulars SET status = 'failed', error = 'ValueError: OCR found no text in the PDF' WHERE id = 100", "Circular 100 is marked failed, with the reason, so the console can show Failed and Why it failed."], ["sql", "COMMIT", "Postgres saves everything so far for good, all together. Until this line nothing was saved, so a failure would have undone it all."]] }],
       [0.68, { sub: { dead: "circular.read 100" },
                rows: { dead: [["type", "circular.read"], ["circular_id", "100"], ["stream", "rci:tasks:pdf (the lane it came from)"],
-                              ["task_id", "1790831170001-0"], ["error", "ValueError: OCR found no text in the PDF"]] },
-               log: ["redis", "XADD rci:dead * type circular.read circular_id 100 stream rci:tasks:pdf task_id 1790831170001-0 error 'ValueError: OCR found no text in the PDF'"] }],
+                              ["task_id", "1790831170001-0"], ["error", "ValueError: OCR found no text in the PDF", "The reason: OCR found no text on any page, so there's nothing to read. Waiting or retrying wouldn't help."]] },
+               log: ["redis", "XADD rci:dead * type circular.read circular_id 100 stream rci:tasks:pdf task_id 1790831170001-0 error 'ValueError: OCR found no text in the PDF'", "A copy of the task goes to rci:dead with its lane, its id and the error, so nothing fails silently."] }],
       [0.97, { rows: { pdfPending: [] }, sub: { reader: W, pending: NOBODY },
-               log: [["redis", "DEL rci:queued:circular_id=100:type=circular.read"], ["redis", "XACK rci:tasks:pdf workers 1790831170001-0"]] }],
+               log: [["redis", "DEL rci:queued:circular_id=100:type=circular.read", "Its mark is deleted, so you can queue it again with Reprocess."], ["redis", "XACK rci:tasks:pdf workers 1790831170001-0", "And the note is acknowledged: finished, even though it failed, so it isn't handed out over and over."]] }],
     ],
   },
   {
@@ -762,8 +762,8 @@ const steps = [
                               ["after the check was done", "has nothing to do"]] } }],
       [0.78, { sub: { reader: "101: from page 3", pending: "101 → c9f5…-1" },
                rows: { pdfPending: [["1790831180002-0", "circular.read, circular 101", "c9f550b306ee-1", "0 s", "2"]] },
-               log: [["redis", "XAUTOCLAIM rci:tasks:pdf workers c9f550b306ee-1 300000 0-0 COUNT 1 → 1790831180002-0"],
-                     ["log", "INFO #101: 2 pages OCR'd before, carrying on"]] }],
+               log: [["redis", "XAUTOCLAIM rci:tasks:pdf workers c9f550b306ee-1 300000 0-0 COUNT 1 → 1790831180002-0", "A new reader takes over the task its crashed predecessor left idle for 5 minutes."],
+                     ["log", "INFO #101: 2 pages OCR'd before, carrying on", "It finds 2 pages already read and saved, so it carries on from page 3. Nothing is read twice."]] }],
     ],
   },
 ];

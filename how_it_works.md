@@ -2393,8 +2393,10 @@ everything your company sees, and can change their own password here.
 Four animations of the system, one per tab. Each step moves small labelled notes along the
 arrows and changes what each part says. Under the picture, **The rows now** shows the
 database and Redis rows that step changed (lit), like the tables in the guides, and
-**Underneath** shows the log lines, SQL statements and Redis commands. The caption names the
-code that does it.
+**Underneath** explains each thing that happens behind the scenes in plain words (say, "A mark
+in Redis: read 98 is already queued, so the same task can't be queued twice"), with the real
+log line, SQL statement or Redis command in small print under it. This step's lines are bright,
+earlier ones faded. The caption names the code that does it.
 
 ```mermaid
 %%{init: {"theme": "base", "flowchart": {"diagramPadding": 0, "nodeSpacing": 58, "rankSpacing": 58, "curve": "basis"}, "themeVariables": {"fontSize": "14px", "darkMode": true, "primaryColor": "#16213a", "primaryTextColor": "#e6edf7", "primaryBorderColor": "#475a7a", "lineColor": "#8b9bb4", "secondaryColor": "#1b2436", "tertiaryColor": "#101a2e", "edgeLabelBackground": "#0f172a", "textColor": "#e2e8f0", "clusterBkg": "#0f1728", "clusterBorder": "#2b3a55", "titleColor": "#c4b5fd", "nodeTextColor": "#e6edf7"}}}%%
