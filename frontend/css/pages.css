@@ -231,6 +231,23 @@ a.xbar:hover .name { color: var(--accent); }
 .how { display: grid; gap: 20px; }
 .how-stage { padding: 18px 20px 16px; }
 .how-caption { min-height: 132px; }
+.how-caption.with-py { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 0 24px; align-items: start; }
+.how-py { margin: 0; border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; min-width: 0; }
+.how-py figcaption { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--line);
+                     font-size: 12px; color: var(--muted); }
+.how-py figcaption b { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #fcd34d; }
+.how-py figcaption button { margin-left: auto; }
+.how-py pre { margin: 0; height: 262px; overflow: auto; padding: 8px 0; font: 500 12.5px/19.5px var(--mono); color: #d5deeb;
+              scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+.how-py .ln { display: block; min-height: 19.5px; padding: 0 14px; white-space: pre; border-left: 3px solid transparent; transition: background 0.2s; }
+.how-py .ln.on { background: rgba(252, 211, 77, 0.09); border-left-color: #fcd34d; }
+.how-py i { font-style: normal; }
+.how-py i.c { color: #7c8ba3; font-style: italic; }
+.how-py i.s { color: #a7ef6f; }
+.how-py i.n { color: #fdba74; }
+.how-py i.k { color: #c084fc; }
+.how-py i.f { color: #5eead4; }
+@media (max-width: 1100px) { .how-caption.with-py { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 .how-story { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
 .how-caption h2 { margin-top: 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .how-ref { padding: 2px 9px; border-radius: 999px; font: 700 10.5px var(--sans); letter-spacing: 0.08em; text-transform: uppercase;

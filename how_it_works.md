@@ -2414,7 +2414,7 @@ flowchart TD
         sys -->|"click the watcher"| wa("<b>Watcher</b> · 33 steps<br/>the watcher guide's 9 steps<br/>each way it can fail")
         sys -->|"click the reader<br/>or a worker"| wo("<b>Worker</b> · 48 steps<br/>INTERNALS.md's 18 steps<br/>with its tables")
         sys -->|"click the api"| ap("<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down")
-        sys -->|"click a lane, the marks<br/>or the pending lists"| rd[["<b>Redis</b> · 48 steps<br/>from zero to advanced:<br/>keys · types · streams<br/>groups · crashes · disk"]]
+        sys -->|"click a lane, the marks<br/>or the pending lists"| rd[["<b>Redis tutorial</b> · 62 steps<br/>zero to advanced, in Python:<br/>types · streams · scripts<br/>persistence · Cluster"]]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
@@ -2433,21 +2433,23 @@ flowchart TD
   walks through 7 stories: a new circular end to end; a company signing up and describing
   itself; a new policy, from the form to the gap it finds; editing a policy; working a gap
   until it's closed; what happens when something goes wrong; and Reprocess.
-- **The Redis tab teaches Redis from zero**, with this app's own keys and lanes, in 8
-  stories: what Redis is (one program, everything in memory, one command at a time, 16
-  databases); keys and strings, which are the marks (`SET NX`, `TTL`, `SCAN`, `DEL`, `INCR`);
-  the other types (lists, hashes, sets, sorted sets, pub/sub) and why the tasks use a stream;
-  streams, which are the lanes (`XADD`, entry ids, `XRANGE`, `MAXLEN ~`, `XREAD`); consumer
-  groups (`XREADGROUP`, the pending list, `XACK`, `BLOCK`, `XINFO`); crashes and claims (at
-  least once, reading `0`, `XAUTOCLAIM`, the `XCLAIM` heartbeat, `rci:dead`, running twice
-  safely, the order that loses nothing, Postgres and Redis can't share a commit); keeping it
-  (memory and `noeviction`, the AOF, RDB snapshots, a restart, rewriting the AOF, losing it
-  all); and beyond one server (`MULTI … EXEC`, Lua, replicas, Sentinel, Cluster, `INFO`,
-  `SLOWLOG`, `CLIENT LIST`, `MONITOR`). The commands were run on this machine's Redis 7.4,
-  and the settings, files, log lines and counts shown are its own. Its picture shows the
-  clients on the left, the command loop that runs every command one at a time, the keys in
-  memory, and the disk files on the right; **The rows now** shows the keys, a lane's entries,
-  the groups and the pending lists as each step changes them.
+- **The Redis tab is a general Redis tutorial**, from zero to advanced, with Python
+  (redis-py). It doesn't use this app: its example is a small shop with users, a leaderboard,
+  an `orders` stream, two workers and a chat channel. There are 62 steps in 13 stories:
+  - what Redis is, the RESP protocol, one command at a time, and the connection pool;
+  - strings with expiry and counters; lists as queues; hashes;
+  - sets and sorted sets; bitmaps, HyperLogLog and geo; pub/sub and keyspace notifications;
+  - streams and consumer groups, with claims and dead letters;
+  - pipelines, `MULTI … EXEC`, `WATCH`, Lua scripts and functions;
+  - the usual patterns: cache-aside, a lock, rate limiting;
+  - memory, eviction, RDB and the AOF; replicas, Sentinel, Cluster and hash tags;
+  - security with ACL users, monitoring, big keys, asyncio, client-side caching over RESP3,
+    and Redis 8's built-in JSON and search.
+
+  Each step shows its Python beside the explanation and lights the line that's running.
+  **Inside Redis now** shows the keys and structures the step changed, and **Underneath**
+  takes every command apart. The snippets were run on Redis 8 with redis-py 8, and the
+  answers shown are the real ones. The **Copy** button copies a step's code.
 - **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`,
   `#/how/redis`), so you can send someone straight to one. Clicking a lane, the marks, the
   pending lists or `rci:dead` in another tab opens the Redis tab.

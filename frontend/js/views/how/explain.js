@@ -260,6 +260,8 @@ const INFO_FIELD = {
   maxmemory_policy: "what to do when full: noeviction refuses writes and never drops a key",
 };
 const CLIENT_FIELD = {
+  laddr: "the server's own address and port", fd: "the connection's file descriptor on the server", age: "seconds since it connected",
+  "lib-name": "the client library, from CLIENT SETINFO", "lib-ver": "its version",
   id: "the connection's number",
   addr: "where it connects from: a container's address and port",
   name: "a name the client may give itself; empty here",
@@ -504,6 +506,390 @@ function redisCommand(cmd) {
 function redis(text) {
   const [line, notes] = aside(text);
   return [...line.split(" · ").flatMap(redisCommand), ...notes];
+}
+
+// ── Redis in general: the tutorial's commands ──────────────────────────────
+// Lines of type "cmd" are read here with general meanings, not this app's lanes and marks.
+
+// What each command does.
+const DOES = {
+  PING: "are you there?",
+  HELLO: "open the conversation: choose the protocol version, and log in if needed",
+  "CLIENT SETINFO": "tell the server which client library this connection is",
+  "CLIENT LIST": "list every connection, one line each",
+  "CLIENT TRACKING": "ask Redis to remember which keys this client reads, and to say when they change",
+  SET: "store a value under a key, replacing any old value",
+  GET: "read the value under a key",
+  SETEX: "store a value with a timer, in one command",
+  MSET: "store several keys at once",
+  MGET: "read several keys at once",
+  DEL: "delete keys",
+  UNLINK: "delete keys, freeing their memory in a background thread",
+  EXISTS: "count how many of these keys exist",
+  TYPE: "say what type of value a key holds",
+  RENAME: "give a key a new name",
+  TTL: "time to live: seconds left before the key deletes itself",
+  EXPIRE: "give a key a timer, in seconds",
+  PERSIST: "remove a key's timer",
+  INCR: "add 1 to a number, atomically",
+  INCRBY: "add to a number, atomically, and answer the new value",
+  DECRBY: "take away from a number, atomically",
+  APPEND: "add text to the end of a string",
+  SCAN: "walk the keys a little at a time, so no client waits",
+  RPUSH: "add items at the right end of a list",
+  LPUSH: "add items at the left end of a list",
+  LRANGE: "read the items between two positions, leaving them there",
+  BRPOP: "take the item at the right end, waiting if the list is empty (B for blocking)",
+  BLMOVE: "move an item from one list to another in one step, waiting if the first is empty",
+  LREM: "remove items equal to a value",
+  LTRIM: "keep only the items between two positions",
+  HSET: "set fields in a hash",
+  HGET: "read one field of a hash",
+  HGETALL: "read every field and value of a hash",
+  HINCRBY: "add to a number in one field, atomically",
+  HDEL: "remove fields from a hash",
+  HEXPIRE: "give fields of a hash their own timer",
+  HTTL: "seconds left on fields' timers",
+  HSCAN: "walk a hash's fields a little at a time",
+  SADD: "add members to a set; ones already there are ignored",
+  SISMEMBER: "is this a member of the set?",
+  SINTER: "the members found in every one of these sets",
+  SUNION: "the members found in any of these sets",
+  SDIFF: "the members of the first set that aren't in the others",
+  ZADD: "add members to a sorted set, each with a score",
+  ZINCRBY: "add to a member's score",
+  ZRANGE: "read members by place, or by score with BYSCORE",
+  ZREVRANGE: "read members by place, counting from the highest score",
+  ZREM: "remove members from a sorted set",
+  SETBIT: "set one bit of a string to 1 or 0",
+  BITCOUNT: "count the bits that are 1",
+  PFADD: "add items to a HyperLogLog, which only counts distinct ones",
+  PFCOUNT: "about how many distinct items were added",
+  GEOADD: "add places to a geo set",
+  GEODIST: "the distance between two places",
+  GEOSEARCH: "find the places within an area",
+  SUBSCRIBE: "listen on channels; the connection then only receives",
+  PSUBSCRIBE: "listen on every channel matching a pattern",
+  PUBLISH: "send a message to everyone listening on a channel now",
+  XADD: "append an entry to a stream",
+  XRANGE: "read a stream's entries between two ids",
+  XREAD: "read entries after an id; every reader gets every entry",
+  "XGROUP CREATE": "make a consumer group on a stream",
+  "XGROUP DELCONSUMER": "remove a consumer from a group",
+  XREADGROUP: "read entries as one consumer of a group: each entry goes to one consumer",
+  XPENDING: "the group's pending list: entries handed out but not acknowledged",
+  XACK: "acknowledge entries: done, so they leave the pending list",
+  XAUTOCLAIM: "take over entries idle for too long, as another consumer",
+  XTRIM: "drop a stream's oldest entries",
+  XDEL: "delete entries by id",
+  "XINFO GROUPS": "describe each consumer group of a stream",
+  MULTI: "start a transaction: what follows is queued, not run",
+  EXEC: "run everything queued since MULTI, with nothing else in between",
+  WATCH: "watch keys: if any changes before EXEC, the transaction is cancelled",
+  EVALSHA: "run a Lua script already loaded in Redis, by its SHA1",
+  "SCRIPT LOAD": "load a Lua script and get back its SHA1",
+  "FUNCTION LOAD": "load a library of functions into Redis",
+  FCALL: "call a loaded function by name",
+  "CONFIG SET": "change a setting while Redis runs",
+  "CONFIG GET": "read a setting",
+  INFO: "ask the server about itself",
+  "MEMORY USAGE": "how many bytes a key takes",
+  "OBJECT ENCODING": "how Redis stores a value inside",
+  BGSAVE: "write a snapshot (RDB) in the background",
+  BGREWRITEAOF: "rewrite the append-only file in the background, to make it small again",
+  ROLE: "is this server a primary or a replica, and how far along?",
+  WAIT: "wait until replicas have every write so far",
+  "SENTINEL GET-MASTER-ADDR-BY-NAME": "ask Sentinel where a group's primary is now",
+  "CLUSTER KEYSLOT": "which of the cluster's 16,384 slots a key belongs to",
+  "ACL SETUSER": "create or change a user and what it may do",
+  "SLOWLOG GET": "the latest commands that took over 10 ms",
+  MONITOR: "print every command any client sends, as it runs",
+  "JSON.SET": "store a JSON document, or a part of one by path",
+  "JSON.NUMINCRBY": "add to a number inside a JSON document",
+  "FT.CREATE": "make a search index",
+  "FT.SEARCH": "search an index",
+};
+
+// Positional arguments: a name each; "+" repeats until the end or an option; a name of
+// several words takes that many words together.
+const ARGS = {
+  SET: ["key", "value"], GET: ["key"], SETEX: ["key", "seconds", "value"], MSET: ["key value+"], MGET: ["key+"],
+  DEL: ["key+"], UNLINK: ["key+"], EXISTS: ["key+"], TYPE: ["key"], RENAME: ["key", "newkey"], TTL: ["key"],
+  EXPIRE: ["key", "seconds"], PERSIST: ["key"], INCR: ["key"], INCRBY: ["key", "by"], DECRBY: ["key", "by"],
+  APPEND: ["key", "value"], SCAN: ["cursor"], RPUSH: ["key", "item+"], LPUSH: ["key", "item+"], LRANGE: ["key", "start stop"],
+  BRPOP: ["key", "timeout"], BLMOVE: ["key", "destination", "from to", "timeout"], LREM: ["key", "count", "item"], LTRIM: ["key", "start stop"],
+  HSET: ["key", "field value+"], HGET: ["key", "field"], HGETALL: ["key"], HINCRBY: ["key", "field", "by"], HDEL: ["key", "field+"],
+  HEXPIRE: ["key", "seconds"], HTTL: ["key"], HSCAN: ["key", "cursor"], SADD: ["key", "member+"], SISMEMBER: ["key", "member"],
+  SINTER: ["key+"], SUNION: ["key+"], SDIFF: ["key+"], ZADD: ["key", "score member+"], ZINCRBY: ["key", "by", "member"],
+  ZRANGE: ["key", "start stop"], ZREVRANGE: ["key", "start stop"], ZREM: ["key", "member+"], SETBIT: ["key", "offset", "bit"],
+  BITCOUNT: ["key"], PFADD: ["key", "item+"], PFCOUNT: ["key+"], GEOADD: ["key", "lon lat place+"], GEODIST: ["key", "place", "place", "unit"],
+  GEOSEARCH: ["key"], SUBSCRIBE: ["channel+"], PSUBSCRIBE: ["pattern+"], PUBLISH: ["channel", "message"],
+  XRANGE: ["key", "start", "end"], "XGROUP CREATE": ["key", "group", "from"], "XGROUP DELCONSUMER": ["key", "group", "consumer"],
+  XPENDING: ["key", "group", "start end", "count"], XACK: ["key", "group", "id+"], XAUTOCLAIM: ["key", "group", "consumer", "idle", "scanfrom"],
+  XTRIM: ["key"], XDEL: ["key", "id+"], "XINFO GROUPS": ["key"], WATCH: ["key+"], "SCRIPT LOAD": ["script"],
+  "FUNCTION LOAD": [], "CONFIG SET": ["setting", "value"], "CONFIG GET": ["setting"], INFO: ["section"], "MEMORY USAGE": ["key"],
+  "OBJECT ENCODING": ["key"], WAIT: ["replicas", "ms"], "SENTINEL GET-MASTER-ADDR-BY-NAME": ["name"], "CLUSTER KEYSLOT": ["key"],
+  "SLOWLOG GET": ["count"], "CLIENT SETINFO": ["what", "value"], "CLIENT TRACKING": ["onoff"],
+  "JSON.SET": ["key", "path", "json"], "JSON.NUMINCRBY": ["key", "path", "by"],
+};
+
+// What some of the tutorial's keys are.
+const KEY_SAID = [
+  [/^views$/, "the key: a counter"], [/^session:/, "the key: one login session"], [/^mode$/, "the key: a setting"],
+  [/^greeting$/, "the key: any name you like"], [/^otp:/, "the key: a one-time code"], [/^price:|^bulk:/, "a key"],
+  [/^stock:/, "the key: a number in stock"], [/^product:/, "the key: a product, as JSON text"], [/^log:/, "the key: a string that grows"],
+  [/^emails:processing$/, "the list of jobs being worked on"], [/^emails$/, "the key: a list used as a job queue"], [/^recent:/, "the key: a list of recent events"],
+  [/^user:\d+$/, "the key: one user's record, a hash"], [/^tags:/, "the key: a set of tags"], [/^leaderboard$/, "the key: a sorted set"],
+  [/^jobs:later$/, "the key: a sorted set used as a schedule"], [/^active:/, "the key: a bitmap, one bit per user"], [/^visitors:/, "the key: a HyperLogLog"],
+  [/^shops$/, "the key: a geo set"], [/^orders:dead$/, "a stream for entries that kept failing"], [/^orders:log$/, "the key: a list"],
+  [/^orders$/, "the key: a stream of orders"], [/^cache:/, "the key: a cached copy"], [/^lock:/, "the key: the lock"],
+  [/^rate:/, "the key: this user's count for this minute"], [/^item:/, "the key: a JSON document"], [/^temp$/, "the key"],
+];
+const keySaid = (k) => (k === "…" ? "more, left out here" : KEY_SAID.find(([re]) => re.test(k))?.[1] ?? "the key");
+
+const secs = (n) => (n >= 3600 && n % 3600 === 0 ? `${n / 3600} hour${n === 3600 ? "" : "s"}` : n >= 60 && n % 60 === 0 ? `${n / 60} minute${n === 60 ? "" : "s"}` : `${count(n)} seconds`);
+const ARG = {
+  key: ([k]) => keySaid(k),
+  value: ([v]) => (v === "…" ? "the value, left out here" : "the value"),
+  newkey: () => "the new name",
+  seconds: ([n]) => secs(+n),
+  by: ([n]) => `by ${n}`,
+  cursor: ([c]) => (c === "0" ? "the cursor: 0 starts at the beginning" : "the cursor to carry on from"),
+  item: () => "an item", member: () => "a member", field: () => "a field", place: () => "a place",
+  "key value": () => "a key and its value", "field value": () => "a field and its value", "score member": () => "a score and its member",
+  "lon lat place": () => "a place: its longitude, latitude and name",
+  "start stop": ([a, b], op, w) => (w?.includes("BYSCORE") ? `scores from ${a} to ${b} (now, in seconds since 1970)`
+    : a === "0" && b === "-1" ? "from the first (0) to the last (-1)" : `from position ${a} to ${b}`),
+  "from to": ([a, b]) => `take from the ${a.toLowerCase()} end, put at the ${b.toLowerCase()} end`,
+  timeout: ([n]) => `wait up to ${n} seconds`,
+  count: ([n], op) => (op === "LREM" ? `remove up to ${n}` : op === "XPENDING" ? `at most ${n}` : `at most ${n}`),
+  destination: ([k]) => keySaid(k),
+  offset: ([n]) => `bit number ${n}`, bit: ([b]) => (b === "1" ? "turn it on" : "turn it off"),
+  unit: ([u]) => ({ km: "in kilometres", m: "in metres", mi: "in miles" })[u] ?? "the unit",
+  channel: ([c]) => (c.startsWith("__keyevent@") ? "a channel Redis itself publishes on: key events in database 0" : "the channel's name; a channel isn't a key"),
+  pattern: () => "a pattern: * matches anything", message: () => "the message",
+  start: ([s]) => (s === "-" ? "from the first entry" : "from this id"), end: ([e]) => (e === "+" ? "to the last" : "to this id"),
+  group: () => "the consumer group", consumer: () => "the consumer's name", from: ([i]) => (i === "0" ? "start at the stream's first entry" : i === "$" ? "start at the end: only new entries" : "start after this id"),
+  "start end": () => "from the first pending entry to the last", id: () => "an entry's id",
+  idle: ([n]) => `only entries untouched for ${count(n)} ms (${secs(n / 1000)})`, scanfrom: ([i]) => (i === "0-0" ? "look from the very start" : "look from this id"),
+  script: () => "the Lua script's text", setting: ([s]) => SETTING_SAID[s] ?? "the setting", section: ([s]) => `only the ${s} section`,
+  replicas: ([n]) => `at least ${n} replica${n === "1" ? "" : "s"}`, ms: ([n]) => `but no longer than ${n} ms`, name: () => "the name of the primary's group",
+  what: ([w]) => ({ "LIB-NAME": "the library's name", "LIB-VER": "the library's version" })[w] ?? "what", onoff: ([o]) => (o === "ON" ? "turn it on" : "turn it off"),
+  path: ([p]) => (p === "$" ? "the path: $ is the whole document" : "the path to a part of the document"), json: () => "the document, as JSON",
+};
+const SETTING_SAID = {
+  "notify-keyspace-events": "which key events Redis publishes", maxmemory: "the most memory Redis may use",
+  "maxmemory-policy": "what to drop when memory is full", appendonly: "the append-only file, on or off", appendfsync: "how often the AOF is pushed to disk",
+  save: "when to take snapshots",
+};
+
+// Options, wherever they come: how many words follow, and what they mean.
+const OPTION = {
+  EX: [1, ([n]) => `expire after ${secs(+n)}`], PX: [1, ([n]) => `expire after ${count(n)} ms`],
+  NX: [0, (_, op) => (op === "EXPIRE" ? "only if it has no timer yet" : "only if the key doesn't exist yet")],
+  MAXLEN: [2, ([t, n]) => (t === "~" ? `keep about the newest ${count(n)} entries (~: roughly, which is cheaper)` : `keep the newest ${count(t)}`)],
+  XX: [0, "only if the key already exists"], GET: [0, "and answer with the old value"],
+  MATCH: [1, () => "only names matching the pattern; * matches anything"],
+  COUNT: [1, ([n], op) => (op === "SCAN" || op === "HSCAN" ? `look at about ${n} per call: a hint, not a limit` : `at most ${n}`)],
+  BLOCK: [1, ([n]) => `if there's nothing yet, wait up to ${count(n)} ms`],
+  WITHSCORES: [0, "with each member's score"], BYSCORE: [0, "start and stop are scores, not places"],
+  WITHDIST: [0, "with each place's distance"], MKSTREAM: [0, "make the stream if it doesn't exist yet"],
+  FROMLONLAT: [2, ([a, b]) => `from the point at longitude ${a}, latitude ${b}`], BYRADIUS: [2, ([r, u]) => `within ${r} ${u}`],
+  FIELDS: [-1, ([n, ...f]) => `for ${n} field${n === "1" ? "" : "s"}: ${f.join(", ")}`],
+  REPLACE: [0, "replace a library of the same name"], DIALECT: [1, ([n]) => `query syntax version ${n}`],
+  LIMIT: [2, ([o, c]) => `results ${+o + 1} to ${+o + +c}`], AUTH: [2, ([u]) => `log in as ${u}, with a password`],
+};
+
+function argv(s) {
+  const out = [];
+  let cur = "", depth = 0, quote = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      cur += ch;
+      if (ch === "\\") cur += s[++i] ?? "";
+      else if (ch === quote) quote = "";
+    } else if (ch === "\"" && depth === 0) { cur += ch; quote = ch; }
+    else if ("{[".includes(ch)) { depth++; cur += ch; }
+    else if ("}]".includes(ch)) { depth--; cur += ch; }
+    else if (ch === " " && depth === 0) { if (cur) out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+const say = (m, ...a) => (typeof m === "function" ? m(...a) : m);
+
+/** XADD, XREAD, XREADGROUP, GEOSEARCH and the rest that don't fit the simple pattern. */
+const SPECIAL = {
+  XADD: (w) => {
+    const out = [["XADD", DOES.XADD], [w[1], keySaid(w[1])]];
+    let i = 2;
+    if (w[i] === "MAXLEN") { out.push([w.slice(i, i + 3).join(" "), `keep only about the newest ${count(w[i + 2])} entries (~: roughly, which is cheaper)`]); i += 3; }
+    if (w[i] === "*") out.push(["*", "let Redis choose the id: the time in ms, then a counter"]), i++;
+    for (; i < w.length; i += 2) out.push([`${w[i]} ${w[i + 1] ?? ""}`.trim(), w[i] === "error" ? "a field: why it failed" : "a field and its value"]);
+    return out;
+  },
+  XREAD: (w) => streams(w, 1),
+  XREADGROUP: (w) => [["XREADGROUP", DOES.XREADGROUP], [`GROUP ${w[2]} ${w[3]}`, `as consumer ${w[3]} of the group ${w[2]}`], ...streams(w, 4).slice(1)],
+  GEOSEARCH: (w) => [["GEOSEARCH", DOES.GEOSEARCH], [w[1], keySaid(w[1])], ...options(w, 2, "GEOSEARCH")],
+  EVALSHA: (w) => script(w, "EVALSHA"),
+  FCALL: (w) => script(w, "FCALL"),
+  HELLO: (w) => [["HELLO", DOES.HELLO], [w[1], w[1] === "3" ? "protocol version 3: RESP3" : "protocol version 2"], ...options(w, 2, "HELLO")],
+  "ACL SETUSER": (w) => [["ACL SETUSER", DOES["ACL SETUSER"]], [w[2], "the user's name"], ...w.slice(3).map((rule) => [rule,
+    rule === "on" ? "enabled: it may log in" : rule.startsWith(">") ? "add this password" : rule.startsWith("~") ? "a pattern of keys it may touch"
+      : rule.startsWith("+@") ? `may run the ${rule.slice(2)} group of commands` : rule.startsWith("+") ? `may run ${rule.slice(1).replace("|", " ").toUpperCase()}` : "a rule"])],
+  "FUNCTION LOAD": (w) => [["FUNCTION LOAD", DOES["FUNCTION LOAD"]], ...options(w, 2, "FUNCTION LOAD").filter(([p]) => p === "REPLACE"),
+    [w.at(-1), "the library's code: its first line names it (#!lua name=shop)"]],
+  "FT.CREATE": (w) => {
+    const out = [["FT.CREATE", DOES["FT.CREATE"]], [w[1], "the index's name"]];
+    for (let i = 2; i < w.length; i++) {
+      if (w[i] === "ON") out.push([`ON ${w[i + 1]}`, `index ${w[i + 1]} documents`]), i++;
+      else if (w[i] === "PREFIX") out.push([`PREFIX ${w[i + 1]} ${w[i + 2]}`, `every key whose name starts ${w[i + 2]}`]), i += 2;
+      else if (w[i] === "SCHEMA") out.push(["SCHEMA", "the fields to index:"]);
+      else if (w[i + 1] === "AS") out.push([w.slice(i, i + 4).join(" "), `${w[i]}, called ${w[i + 2]}, ${w[i + 3] === "TEXT" ? "as text, for word search" : "as a number, for ranges"}`]), i += 3;
+    }
+    return out;
+  },
+  "FT.SEARCH": (w) => [["FT.SEARCH", DOES["FT.SEARCH"]], [w[1], "the index"], [w[2], "the query: price from 0 to 40"], ...options(w, 3, "FT.SEARCH")],
+};
+
+function streams(w, from) {
+  const out = [[w[0], DOES[w[0]]]];
+  let i = from;
+  while (i < w.length && w[i] !== "STREAMS") {
+    const o = OPTION[w[i]];
+    out.push([w.slice(i, i + 1 + o[0]).join(" "), say(o[1], w.slice(i + 1, i + 1 + o[0]), w[0])]);
+    i += 1 + o[0];
+  }
+  if (w[i] === "STREAMS") {
+    out.push([`STREAMS ${w[i + 1]}`, `from the stream ${w[i + 1]}`]);
+    const id = w[i + 2];
+    out.push([id, id === ">" ? "only entries never handed to anyone in the group" : id === "$" ? "only entries added from now on"
+      : id === "0" && w[0] === "XREADGROUP" ? "not new entries: this consumer's own pending ones" : id === "0" ? "from the very start" : "after this id"]);
+  }
+  return out;
+}
+
+function script(w, op) {
+  const keys = +w[2];
+  return [[op, DOES[op]], [w[1], op === "EVALSHA" ? "the script's SHA1, its name in Redis's script cache" : "the function's name"],
+    [w[2], `${keys} of the arguments that follow ${keys === 1 ? "is a key" : "are keys"}`],
+    ...w.slice(3).map((a, k) => [a, k < keys ? `a key the ${op === "FCALL" ? "function" : "script"} uses: KEYS[${k + 1}]` : `an argument: ARGV[${k - keys + 1}]`])];
+}
+
+function options(w, i, op) {
+  const out = [];
+  while (i < w.length) {
+    const o = OPTION[w[i]];
+    if (!o) { out.push([w[i], ""]); i++; continue; }
+    const n = o[0] < 0 ? 1 + +w[i + 1] : o[0];
+    out.push([w.slice(i, i + 1 + n).join(" "), typeof o[1] === "function" ? o[1](w.slice(i + 1, i + 1 + n), op) : o[1]]);
+    i += 1 + n;
+  }
+  return out;
+}
+
+function generic(op, w, skip) {
+  const out = [[op, DOES[op]]];
+  let i = skip;
+  for (const name of ARGS[op] ?? []) {
+    if (i >= w.length) break;
+    const base = name.replace(/\+$/, ""), size = base.split(" ").length;
+    do {
+      if (OPTION[w[i]] && name.endsWith("+")) break;
+      out.push([w.slice(i, i + size).join(" "), ARG[base]?.(w.slice(i, i + size), op, w) ?? ""]);
+      i += size;
+    } while (name.endsWith("+") && i < w.length && !(op === "BRPOP" && i === w.length - 1));
+  }
+  return [...out, ...options(w, i, op)];
+}
+
+/** Redis's answer to a command, in plain words. */
+function answer(op, r, w = []) {
+  const n = integer(r), nil = r === "(nil)";
+  if (op === "INFO") return [["→", "the section's fields, name:value:"], ...fields(r, " ", ":", { ...INFO_FIELD, used_memory: "the memory Redis uses, in bytes: the data and its own bookkeeping",
+    used_memory_human: "the same, rounded for people" })];
+  if (op === "CLIENT LIST") return [["→", "one line per connection; this one's fields:"], ...fields(r, " ", "=", CLIENT_FIELD)];
+  if (op === "MONITOR") {
+    const m = r.match(/^([\d.]+) (\[\S+ \S+\]) (.+)$/);
+    if (m) return [[`→ ${m[1]}`, "when: seconds since 1970, to the microsecond"], [m[2], "the database (0), then the client's address"], [m[3], "the command, word by word"]];
+  }
+  if (op === "SET" && r.startsWith("\"") && w.includes("GET")) return [[`→ ${r}`, "the old value, because of GET"]];
+  const g = {
+    PING: "it's alive: redis-py returns True",
+    HELLO: "facts about the server: its version, the protocol, its role…",
+    "CLIENT SETINFO": "done", "CLIENT TRACKING": "done: from now on Redis tells this client about changed keys",
+    SET: nil ? "nothing set (NX or XX said no): nil, None in Python" : r === "OK" ? "done" : r === "QUEUED" ? "queued in the transaction, not run yet" : "Redis's answer",
+    GET: nil ? "no such key: nil, None in Python" : "the value", SETEX: "done", MSET: "done: all set together",
+    MGET: "one answer per key, in order; (nil) for a missing one", DEL: `how many keys were deleted: ${n}`, UNLINK: `how many keys were deleted: ${n}`,
+    EXISTS: `how many of them exist: ${n}`, TYPE: "the type", RENAME: "done",
+    TTL: n === "-1" ? "-1: no timer, it's kept until deleted" : n === "-2" ? "-2: there's no such key" : `${count(n)} seconds left`,
+    EXPIRE: r === "QUEUED" ? "queued in the transaction" : n === "1" ? "1: the timer is set" : "0: not set (no key, or NX and it had a timer)",
+    PERSIST: "1: the timer is gone", INCR: "the new value", INCRBY: r === "QUEUED" ? "queued in the transaction" : "the new value", DECRBY: r === "QUEUED" ? "queued in the transaction, not run yet" : "the new value",
+    APPEND: "the string's new length", SCAN: "the next cursor (0: the walk is done), then the keys found",
+    RPUSH: "the list's new length", LPUSH: r === "QUEUED" ? "queued in the transaction" : "the list's new length", LRANGE: "the items, in order",
+    BRPOP: "the list it came from, then the item, now off the list", BLMOVE: "the item that moved", LREM: `how many were removed: ${n}`, LTRIM: "done",
+    HSET: n === "0" ? "0: no new field; an existing one changed" : `how many fields were new: ${n}`, HGET: "the field's value",
+    HGETALL: "each field, then its value; redis-py makes a dict", HINCRBY: "the field's new value", HDEL: `how many fields were removed: ${n}`,
+    HEXPIRE: "one answer per field: 1 = timer set", HTTL: "one answer per field: the seconds left", HSCAN: "the next cursor (0: done), then fields and values",
+    SADD: `how many members were new: ${n}`, SISMEMBER: n === "1" ? "1: yes" : "0: no", SINTER: "the members in every set",
+    SUNION: "the members in any of the sets", SDIFF: "the members only in the first set",
+    ZADD: `how many members were new: ${n}`, ZINCRBY: "the member's new score", ZRANGE: "the members asked for", ZREVRANGE: "each member with its score, highest first",
+    ZREM: `how many were removed: ${n}`, SETBIT: `the bit's old value: ${n}`, BITCOUNT: `how many bits are 1: ${n}`,
+    PFADD: n === "1" ? "1: the count changed" : "0: nothing new", PFCOUNT: `about how many distinct items: ${n}`, GEOADD: `how many places were new: ${n}`,
+    GEODIST: "the distance", GEOSEARCH: "each place found, with its distance",
+    SUBSCRIBE: "confirmed: subscribed to the channel, and how many this connection listens to", PSUBSCRIBE: "confirmed: the pattern, and how many this connection listens to",
+    PUBLISH: `how many listeners got it: ${n}. With nobody listening it'd be 0, and the message gone`,
+    XADD: "the new entry's id", XRANGE: "each entry: its id, then its fields", XREAD: nil ? "nothing came in time: nil, an empty list in Python" : "the entries",
+    "XGROUP CREATE": "done: the group is made", "XGROUP DELCONSUMER": `how many entries it still had pending: ${n}`,
+    XREADGROUP: "the stream, then each entry: its id and fields", XPENDING: "a summary: how many are pending, the lowest and highest id, and how many each consumer has",
+    XACK: `how many entries left the pending list: ${n}`, XAUTOCLAIM: "where to carry on (0-0: done), the entries now this consumer's, and any deleted meanwhile",
+    XTRIM: `how many entries were dropped: ${n}`, XDEL: `how many were deleted: ${n}`, "XINFO GROUPS": "each group: its name, consumers, pending, last id handed out, entries read and lag",
+    MULTI: "the transaction has started", EXEC: nil ? "nil: a watched key changed, so nothing ran" : "one answer per queued command, in order",
+    WATCH: "watching", EVALSHA: "the script's answer", "SCRIPT LOAD": "the script's SHA1", "FUNCTION LOAD": "the library's name", FCALL: "the function's answer",
+    "CONFIG SET": "done, at once, without a restart", "CONFIG GET": "the setting and its value", INFO: "the section's fields, name:value",
+    "MEMORY USAGE": `bytes: ${n}`, "OBJECT ENCODING": "the encoding", BGSAVE: "started: a child process writes the snapshot",
+    BGREWRITEAOF: "started: a child process writes the new files", ROLE: "the role, its primary, the link's state, and the replication offset",
+    WAIT: `how many replicas have it: ${n}`, "SENTINEL GET-MASTER-ADDR-BY-NAME": "the primary's address and port",
+    "CLUSTER KEYSLOT": `the slot: ${n}`, "ACL SETUSER": "done", "SLOWLOG GET": "nothing: no command has been that slow", MONITOR: "one line per command: when, the database and client, then the command",
+    "CLIENT LIST": "one line per connection; this one's fields", "JSON.SET": "done", "JSON.NUMINCRBY": "the new number, as JSON", "FT.CREATE": "done: the index is made",
+    "FT.SEARCH": "how many matched, then each match's key and fields",
+  }[op];
+  return [[`→ ${r}`, g ?? "Redis's answer"]];
+}
+
+function general(text) {
+  const [line, notes] = aside(text);
+  if (/^invalidate → /.test(line)) {
+    return [["invalidate", "a message Redis pushes on its own (RESP3), unasked: keys this client read have changed"], [line.slice(13), "the keys: drop your local copies"]];
+  }
+  const [cmd, reply] = line.split(" → ");
+  const w = argv(cmd);
+  const two = `${w[0]} ${w[1] ?? ""}`;
+  const op = DOES[two] || SPECIAL[two] ? two : w[0];
+  if (!DOES[op] && !SPECIAL[op]) return [];
+  const parts = SPECIAL[op] ? SPECIAL[op](w) : generic(op, w, op.split(" ").length);
+  return [...parts, ...(reply ? answer(op, reply, w) : []), ...notes];
+}
+
+// Redis's error answers, and redis-py's exceptions
+const REDIS_ERROR = {
+  NOSCRIPT: "Redis's error: there's no script with that SHA1 in its cache", NOPERM: "Redis's error: this user isn't allowed to do that",
+  MOVED: "Redis's error in a cluster: this server doesn't own that slot", CROSSSLOT: "Redis's error in a cluster: the keys are in different slots",
+  WRONGTYPE: "Redis's error: the key holds another type", OOM: "Redis's error: memory is full and the policy is noeviction",
+};
+function redisError(text) {
+  let m = text.match(/^(redis\.exceptions\.\w+): (.+)$/);
+  if (m) return [[m[1], "the exception redis-py raises"], [m[2], "its message"]];
+  m = text.match(/^([A-Z]{3,}) (.+)$/);
+  if (!m || !REDIS_ERROR[m[1]]) return null;
+  if (m[1] === "MOVED") {
+    const [slot, addr] = m[2].split(" ");
+    return [["MOVED", REDIS_ERROR.MOVED], [slot, "the slot asked about"], [addr, "the server that owns it now: ask there"]];
+  }
+  return [[m[1], REDIS_ERROR[m[1]]], [m[2], "the message"]];
 }
 
 // ── Postgres ───────────────────────────────────────────────────────────────
@@ -751,7 +1137,7 @@ function serverLine(text) {
 }
 
 function logLine(text) {
-  const server = serverLine(text);
+  const server = serverLine(text) ?? redisError(text);
   if (server) return server;
   const [line, notes] = aside(text);
   const m = line.match(/^(INFO|WARNING|ERROR) (.+)$/);
@@ -782,7 +1168,7 @@ function app(text) {
   return [];
 }
 
-const RULES = { redis, sql, http, s3, ocr, log: logLine, warn: logLine, error: logLine, llm: (t) => call(t) ?? [], app };
+const RULES = { redis, cmd: general, sql, http, s3, ocr, log: logLine, warn: logLine, error: logLine, llm: (t) => call(t) ?? [], app };
 
 /** A real line's parts, each with what it means: [[part, meaning], …], or [] if unknown. */
 export function explain(type, text) {

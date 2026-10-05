@@ -8,9 +8,13 @@
  * A scene: { id, tab, hint, heading, lead, label, refDoc, size: [w, h], nodes, edges,
  *            groups: [[x, y, w, h, label]], tables: { id: { title, store, cols } },
  *            start: { sub, slots, badge, rows }, stories, steps, quietEdges, backbone }
- * A step:  { story, dur, ref, title, text, code, focus: [node ids], tables: [table ids],
+ * A step:  { story, dur, ref, title, text, code, py, focus: [node ids], tables: [table ids],
  *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
- *            marks: [[moment, { sub, slots, badge, rows, log }], …] }
+ *            marks: [[moment, { sub, slots, badge, rows, log, py }], …] }
+ * py: the step's Python, an array of lines, shown beside the caption when the scene sets
+ * python: true; a mark's py (a line number, or [first, last]) lights the lines running.
+ * A scene may also name its labels: codeLabel ("In the code"), rowsTitle, rowsHint, and its
+ * own legend, [[kind, label], …].
  * A log line: [type, the real log line, SQL or command, what it means in plain words]. The
  * panel under the picture shows the plain words first, the real line under them. The line
  * that's open shows the real line in full and then each of its parts with what it means
@@ -31,7 +35,7 @@ export const KIND = {
 // The log panel's line types. Each line is [type, the real text, what it means in plain words].
 const LOG = {
   http: ["request", "#a7ef6f"], sql: ["Postgres", "#818cf8"], redis: ["Redis", "#38bdf8"], s3: ["S3", "#a5b4fc"],
-  llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warning", "#fbbf24"],
+  cmd: ["Redis", "#38bdf8"], llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warning", "#fbbf24"],
   error: ["error", "#fb7185"], app: ["app", "#cbd5e1"],
 };
 const LOG_LINES = 8;
@@ -155,13 +159,14 @@ const range = (n) => [...Array(n).keys()];
 function apply(s, change) {
   for (const [key, value] of Object.entries(change)) {
     if (key === "log") s.log.push(...(typeof value[0] === "string" ? [value] : value));
+    else if (key === "py") s.py = value;
     else Object.assign(s[key], value);
   }
 }
 
 /** The state at a moment: the start, every mark of the earlier steps, and this step's up to p. */
 function stateAt(scene, step, p) {
-  const s = { sub: {}, slots: {}, badge: {}, rows: {}, log: [] };
+  const s = { sub: {}, slots: {}, badge: {}, rows: {}, log: [], py: null };
   for (const [id, n] of Object.entries(scene.nodes)) {
     s.sub[id] = n.sub;
     if (n.slots) s.slots[id] = [];
@@ -172,8 +177,33 @@ function stateAt(scene, step, p) {
     const marks = [...(st.marks || [])].sort((a, b) => a[0] - b[0]);
     for (const [t, change] of marks) if (k < step || t <= p) apply(s, change);
   });
+  if (!scene.steps[step].marks?.some(([t, change]) => t <= p && "py" in change)) s.py = null;   // lit lines are this step's
   return s;
 }
+
+// ── Python ─────────────────────────────────────────────────────────────────
+
+const PY_WORDS = new Set(["import", "from", "as", "def", "return", "with", "for", "in", "if", "elif", "else", "try", "except",
+  "finally", "while", "True", "False", "None", "async", "await", "lambda", "and", "or", "not", "is", "raise", "class", "pass",
+  "break", "continue", "yield", "global"]);
+const PY_TOKEN = /(#.*$)|([rbf]?"(?:[^"\\]|\\.)*"|[rbf]?'(?:[^'\\]|\\.)*')|\b(\d[\d_]*(?:\.\d+)?)\b|([A-Za-z_]\w*)(?=\s*\()|([A-Za-z_]\w*)/g;
+
+/** A line of Python, coloured: comments, strings, numbers, keywords and calls. */
+function pyLine(line) {
+  const out = [];
+  let at = 0;
+  for (const m of line.matchAll(PY_TOKEN)) {
+    if (m.index > at) out.push(line.slice(at, m.index));
+    const [word, comment, string, number, call, name] = m;
+    const cls = comment ? "c" : string ? "s" : number ? "n" : PY_WORDS.has(call || name) ? "k" : call ? "f" : "";
+    out.push(cls ? html`<i class="${cls}">${word}</i>` : word);
+    at = m.index + word.length;
+  }
+  out.push(line.slice(at));
+  return out;
+}
+
+const pyLines = (py) => (Array.isArray(py) ? py : String(py ?? "").split("\n"));
 
 // ── Drawing ────────────────────────────────────────────────────────────────
 
@@ -265,11 +295,18 @@ export function play(scene, root) {
   put(root, html`
     <div class="how">
       <section class="panel how-stage">
-        <div class="how-caption" aria-live="polite">
-          <div class="how-story" id="how-story"></div>
-          <h2 id="how-title"></h2>
-          <p id="how-text"></p>
-          <p class="how-code" id="how-code"></p>
+        <div class="how-caption${scene.python ? " with-py" : ""}" aria-live="polite">
+          <div class="how-words">
+            <div class="how-story" id="how-story"></div>
+            <h2 id="how-title"></h2>
+            <p id="how-text"></p>
+            <p class="how-code" id="how-code"></p>
+          </div>
+          ${scene.python ? html`<figure class="how-py">
+            <figcaption><b>Python</b><span>what this step runs, with redis-py</span>
+              <button type="button" class="btn ghost sm" id="how-copy">Copy</button></figcaption>
+            <pre id="how-py"></pre>
+          </figure>` : ""}
         </div>
         <div class="how-canvas">${sceneSvg(scene)}</div>
         <div class="how-bar"><i id="how-progress"></i></div>
@@ -281,11 +318,11 @@ export function play(scene, root) {
           <button class="btn ghost sm" id="how-speed" title="Speed">1×</button>
           <span class="how-count" id="how-count"></span>
           <button class="btn ghost sm" id="how-full" title="Full screen (F)">${icon("expand")}Full screen</button>
-          <ul class="how-legend">${LEGEND.map(([k, label]) => html`<li style="--k: ${KIND[k]}">${keyIcon(k)}${label}</li>`)}</ul>
+          <ul class="how-legend">${(scene.legend ?? LEGEND).map(([k, label]) => html`<li style="--k: ${KIND[k]}">${keyIcon(k)}${label}</li>`)}</ul>
         </div>
         <div class="how-panels${scene.tables ? "" : " log-only"}">
           ${scene.tables ? html`<div class="how-rows" aria-live="polite">
-            <div class="how-panel-head"><b>The rows now</b><span>what this step changed is lit</span></div>
+            <div class="how-panel-head"><b>${scene.rowsTitle ?? "The rows now"}</b><span>${scene.rowsHint ?? "what this step changed is lit"}</span></div>
             <div id="how-tables"></div>
           </div>` : ""}
           <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
@@ -308,7 +345,7 @@ export function play(scene, root) {
   const widths = new Map();
   const shown = new Map();                        // text element → the text last put in it
   let step = 0, p = reduced ? 1 : 0, playing = !reduced, speed = 1, last = null;
-  let shownStep = -1, shownLog = "", shownRows = "", before = null;
+  let shownStep = -1, shownLog = "", shownRows = "", shownPy = "", before = null;
   let chosen = -1, logLength = 0;                 // the log line opened by a click, or -1: this step's newest
 
   /** Put text in an SVG text element, cut with "…" to fit `max` pixels. */
@@ -408,7 +445,12 @@ export function play(scene, root) {
       $("#how-story", root).textContent = scene.stories[st.story];
       put($("#how-title", root), html`${st.ref ? html`<span class="how-ref">${scene.refDoc} · ${st.ref}</span>` : ""}${st.title}`);
       $("#how-text", root).textContent = st.text;
-      put($("#how-code", root), st.code ? html`<span>In the code</span>${st.code}` : html``);
+      put($("#how-code", root), st.code ? html`<span>${scene.codeLabel ?? "In the code"}</span>${st.code}` : html``);
+      if (scene.python) {
+        put($("#how-py", root), html`${pyLines(st.py).map((l, i) => html`<span class="ln" data-ln="${i + 1}">${pyLine(l)}</span>`)}`);
+        $("#how-py", root).scrollTop = 0;
+        shownPy = "";
+      }
       $("#how-count", root).textContent = `step ${step + 1} of ${steps.length}`;
       $$(".how-step", root).forEach((b) => b.classList.toggle("on", +b.dataset.step === step));
       const routes = new Set(st.moves.map(([, name]) => edgeFor(name).id));
@@ -433,6 +475,12 @@ export function play(scene, root) {
     }
     showLog(s.log, before.log.length);
     showTables(st, s);
+    if (scene.python && JSON.stringify(s.py) !== shownPy) {
+      shownPy = JSON.stringify(s.py);
+      const [a, b] = Array.isArray(s.py) ? s.py : [s.py, s.py];
+      $$("#how-py .ln", root).forEach((ln) => ln.classList.toggle("on", s.py !== null && +ln.dataset.ln >= a && +ln.dataset.ln <= b));
+      $("#how-py .ln.on", root)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
 
     const lit = new Set(st.focus || []);
     const busyEdges = new Map();
@@ -512,6 +560,16 @@ export function play(scene, root) {
   $("#how-next", root).addEventListener("click", () => go(step + 1));
   $("#how-restart", root).addEventListener("click", () => go(0, { play: true }));
   $("#how-full", root).addEventListener("click", toggleFull);
+  $("#how-copy", root)?.addEventListener("click", async (e) => {
+    const button = e.currentTarget;
+    try {
+      await navigator.clipboard.writeText(pyLines(steps[step].py).join("\n"));
+      button.textContent = "Copied";
+    } catch {
+      button.textContent = "Select and copy";
+    }
+    setTimeout(() => { button.textContent = "Copy"; }, 1600);
+  });
   $("#how-speed", root).addEventListener("click", (e) => {
     speed = speed === 1 ? 2 : speed === 2 ? 0.5 : 1;
     e.currentTarget.textContent = `${speed}×`;
