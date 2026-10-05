@@ -231,15 +231,15 @@ a.xbar:hover .name { color: var(--accent); }
 .how { display: grid; gap: 20px; }
 .how-stage { padding: 18px 20px 16px; }
 .how-caption { min-height: 132px; }
-.how-caption.with-py { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 0 24px; align-items: start; }
+.how-caption.with-py { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.35fr); gap: 0 26px; align-items: start; }
 .how-py { margin: 0; border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; min-width: 0; }
 .how-py figcaption { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--line);
                      font-size: 12px; color: var(--muted); }
-.how-py figcaption b { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #fcd34d; }
+.how-py figcaption b { font-size: 11.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #fcd34d; }
 .how-py figcaption button { margin-left: auto; }
-.how-py pre { margin: 0; height: 262px; overflow: auto; padding: 8px 0; font: 500 12.5px/19.5px var(--mono); color: #d5deeb;
+.how-py pre { margin: 0; height: 344px; overflow: auto; padding: 10px 0; font: 500 14px/22px var(--mono); color: #d5deeb;
               scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
-.how-py .ln { display: block; min-height: 19.5px; padding: 0 14px; white-space: pre; border-left: 3px solid transparent; transition: background 0.2s; }
+.how-py .ln { display: block; min-height: 22px; padding: 0 16px; white-space: pre; border-left: 3px solid transparent; transition: background 0.2s; }
 .how-py .ln.on { background: rgba(252, 211, 77, 0.09); border-left-color: #fcd34d; }
 .how-py i { font-style: normal; }
 .how-py i.c { color: #7c8ba3; font-style: italic; }
@@ -263,7 +263,7 @@ a.xbar:hover .name { color: var(--accent); }
               radial-gradient(circle, rgba(148, 163, 184, 0.08) 1px, transparent 1.4px) 0 0 / 22px 22px, #070b14;
 }
 .how-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
-.how-panels.log-only { grid-template-columns: minmax(0, 1fr); }
+.how-panels.log-only, .how-panels.rows-only { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1150px) { .how-panels { grid-template-columns: minmax(0, 1fr); } }
 .how-rows, .how-log { border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; min-width: 0; }
 .how-log { display: flex; flex-direction: column; }

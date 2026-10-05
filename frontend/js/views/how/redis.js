@@ -3,10 +3,12 @@
  * the usual patterns, memory and persistence, replication and Cluster, and running it
  * well. It's general: the example is a small shop (users, a leaderboard, an orders
  * stream, workers, a chat channel), not this app. Every snippet was run on Redis 8 with
- * redis-py 8, and the answers shown are the ones they gave. */
+ * redis-py 8, and the answers shown are the ones they gave. The scene plays slowly (SLOW)
+ * and has no Underneath panel; its log lines are kept as a record of the real commands. */
 import { geometry, node } from "./player.js";
 
 const IDLE = "idle";
+const SLOW = 2;                                  // every step takes twice its written time
 
 const nodes = {
   // your Python programs
@@ -964,7 +966,7 @@ const steps = [
     text: "To let only one process at a time do something, take a lock: a key set with NX and a timeout, holding a random token. Only the holder may delete it, which needs a check-and-delete script. redis-py's r.lock() does it all; the timeout frees the lock if the holder dies.",
     code: "r.lock(timeout=, blocking_timeout=)",
     py: ["with r.lock(\"lock:report\", timeout=30, blocking_timeout=5):", "    build_report()        # only one process at a time", "",
-         "# Underneath:", "#   SET lock:report <random token> NX PX 30000", "#   … the work …", "#   a Lua script deletes it, only if it still holds our token"],
+         "# What r.lock() does:", "#   SET lock:report <random token> NX PX 30000", "#   … the work …", "#   a Lua script deletes it, only if it still holds our token"],
     moves: [...trip("app", "SET … NX PX 30000", "str", "True", 0.04, 0.2), ...trip("wA", "SET … NX PX 30000", "str", "None: wait", 0.28, 0.2, "bad"), ...trip("app", "EVALSHA release", "lua", "1", 0.62, 0.22),
             ...trip("wA", "SET … NX PX 30000", "str", "True", 0.86, 0.12)],
     marks: [
@@ -1313,9 +1315,10 @@ export default {
   tab: "Redis",
   hint: "a tutorial, zero to advanced",
   heading: "Redis, from zero to advanced, with Python",
-  lead: "A tutorial in 62 steps: what Redis is, every data type, pub/sub, streams and consumer groups, pipelines, transactions and scripts, the usual patterns, memory and persistence, replicas and Cluster, and running it well. Each step shows the Python (redis-py) beside the explanation, lights the line that's running, animates what happens inside Redis, and takes every command apart underneath. Tested with Redis 8 and redis-py 8.",
+  lead: "A tutorial in 62 steps: what Redis is, every data type, pub/sub, streams and consumer groups, pipelines, transactions and scripts, the usual patterns, memory and persistence, replicas and Cluster, and running it well. Each step shows the Python (redis-py) beside the explanation, lights the line that's running, and animates what happens inside Redis, slowly; under the picture, what Redis holds after each step. Tested with Redis 8 and redis-py 8.",
   label: "A Redis server: on the left your Python programs and their connection pool send commands to the event loop, which runs them one at a time on the keys in memory, one of each type; inside the server, the expiry clock, the MULTI queue, Lua and the consumer groups; on the right the files on disk, replicas, a cluster's shards and the tools for running it.",
   python: true,
+  underneath: false,
   legend: [["start", "your program"], ["svc", "a client, a worker"], ["queue", "inside Redis"], ["data", "a file, a database"], ["ask", "a check, a tool"]],
   codeLabel: "redis-py",
   rowsTitle: "Inside Redis now",
@@ -1334,5 +1337,5 @@ export default {
   stories: ["Zero · what Redis is", "Strings · expiry and counters", "Lists · queues", "Hashes · records", "Sets and sorted sets",
             "Bitmaps, HyperLogLog, geo", "Pub/sub · live messages", "Streams · logs and consumer groups", "Pipelines, transactions, scripts",
             "Patterns · cache, lock, rate limit", "Memory and persistence", "Replication, Sentinel, Cluster", "Running it well"],
-  steps,
+  steps: steps.map((st) => ({ ...st, dur: st.dur * SLOW })),
 };

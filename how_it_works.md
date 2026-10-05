@@ -2446,10 +2446,12 @@ flowchart TD
   - security with ACL users, monitoring, big keys, asyncio, client-side caching over RESP3,
     and Redis 8's built-in JSON and search.
 
-  Each step shows its Python beside the explanation and lights the line that's running.
-  **Inside Redis now** shows the keys and structures the step changed, and **Underneath**
-  takes every command apart. The snippets were run on Redis 8 with redis-py 8, and the
-  answers shown are the real ones. The **Copy** button copies a step's code.
+  Each step shows its Python in a large box beside the explanation and lights the line
+  that's running. The animation plays at half the other tabs' pace, and the speed button
+  still works. Under the picture, **Inside Redis now** shows the keys and structures the
+  step changed; this tab has no Underneath panel. The snippets were run on Redis 8 with
+  redis-py 8, and the answers shown are the real ones. The **Copy** button copies a step's
+  code.
 - **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`,
   `#/how/redis`), so you can send someone straight to one. Clicking a lane, the marks, the
   pending lists or `rci:dead` in another tab opens the Redis tab.

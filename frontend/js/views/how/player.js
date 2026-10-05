@@ -14,7 +14,7 @@
  * py: the step's Python, an array of lines, shown beside the caption when the scene sets
  * python: true; a mark's py (a line number, or [first, last]) lights the lines running.
  * A scene may also name its labels: codeLabel ("In the code"), rowsTitle, rowsHint, and its
- * own legend, [[kind, label], …].
+ * own legend, [[kind, label], …]; underneath: false leaves out the Underneath panel.
  * A log line: [type, the real log line, SQL or command, what it means in plain words]. The
  * panel under the picture shows the plain words first, the real line under them. The line
  * that's open shows the real line in full and then each of its parts with what it means
@@ -320,15 +320,15 @@ export function play(scene, root) {
           <button class="btn ghost sm" id="how-full" title="Full screen (F)">${icon("expand")}Full screen</button>
           <ul class="how-legend">${(scene.legend ?? LEGEND).map(([k, label]) => html`<li style="--k: ${KIND[k]}">${keyIcon(k)}${label}</li>`)}</ul>
         </div>
-        <div class="how-panels${scene.tables ? "" : " log-only"}">
+        <div class="how-panels${scene.tables ? "" : " log-only"}${scene.underneath === false ? " rows-only" : ""}">
           ${scene.tables ? html`<div class="how-rows" aria-live="polite">
             <div class="how-panel-head"><b>${scene.rowsTitle ?? "The rows now"}</b><span>${scene.rowsHint ?? "what this step changed is lit"}</span></div>
             <div id="how-tables"></div>
           </div>` : ""}
-          <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
+          ${scene.underneath === false ? "" : html`<div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
             <div class="how-panel-head"><b>Underneath</b><span>what the programs really do, in plain words. The newest line is taken apart piece by piece; click any line to open it</span></div>
             <ol id="how-log"></ol>
-          </div>
+          </div>`}
         </div>
       </section>
       <aside class="panel how-steps"><ol>${stepList(scene)}</ol></aside>
@@ -392,6 +392,7 @@ export function play(scene, root) {
    * line is open: the one clicked, else this step's newest. It shows the real line in full
    * and then each of its parts with what that part means. */
   function showLog(lines, fresh) {
+    if (scene.underneath === false) return;
     if (lines.length !== logLength) chosen = -1;
     logLength = lines.length;
     const newest = lines.length - 1;
@@ -574,7 +575,7 @@ export function play(scene, root) {
     speed = speed === 1 ? 2 : speed === 2 ? 0.5 : 1;
     e.currentTarget.textContent = `${speed}×`;
   });
-  $("#how-log", root).addEventListener("click", (e) => {
+  $("#how-log", root)?.addEventListener("click", (e) => {
     const line = e.target.closest("[data-line]");
     if (!line) return;
     chosen = +line.dataset.line;                  // open it, and pause so it can be read
