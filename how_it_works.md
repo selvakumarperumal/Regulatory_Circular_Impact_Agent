@@ -2390,7 +2390,7 @@ everything your company sees, and can change their own password here.
 
 ### How it works
 
-Four animations of the system, one per tab. Each step moves small labelled notes along the
+Five animations of the system, one per tab. Each step moves small labelled notes along the
 arrows and changes what each part says. Under the picture, **The rows now** shows the
 database and Redis rows that step changed (lit), like the tables in the guides, and
 **Underneath** explains each thing that happens behind the scenes in plain words (say, "A mark
@@ -2414,11 +2414,14 @@ flowchart TD
         sys -->|"click the watcher"| wa("<b>Watcher</b> · 33 steps<br/>the watcher guide's 9 steps<br/>each way it can fail")
         sys -->|"click the reader<br/>or a worker"| wo("<b>Worker</b> · 48 steps<br/>INTERNALS.md's 18 steps<br/>with its tables")
         sys -->|"click the api"| ap("<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down")
+        sys -->|"click a lane, the marks<br/>or the pending lists"| rd[["<b>Redis</b> · 48 steps<br/>from zero to advanced:<br/>keys · types · streams<br/>groups · crashes · disk"]]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
     class sys ok
+    classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class wa,wo,ap svc
+    class rd queue
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
@@ -2430,8 +2433,24 @@ flowchart TD
   walks through 7 stories: a new circular end to end; a company signing up and describing
   itself; a new policy, from the form to the gap it finds; editing a policy; working a gap
   until it's closed; what happens when something goes wrong; and Reprocess.
-- **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`), so you
-  can send someone straight to one.
+- **The Redis tab teaches Redis from zero**, with this app's own keys and lanes, in 8
+  stories: what Redis is (one program, everything in memory, one command at a time, 16
+  databases); keys and strings, which are the marks (`SET NX`, `TTL`, `SCAN`, `DEL`, `INCR`);
+  the other types (lists, hashes, sets, sorted sets, pub/sub) and why the tasks use a stream;
+  streams, which are the lanes (`XADD`, entry ids, `XRANGE`, `MAXLEN ~`, `XREAD`); consumer
+  groups (`XREADGROUP`, the pending list, `XACK`, `BLOCK`, `XINFO`); crashes and claims (at
+  least once, reading `0`, `XAUTOCLAIM`, the `XCLAIM` heartbeat, `rci:dead`, running twice
+  safely, the order that loses nothing, Postgres and Redis can't share a commit); keeping it
+  (memory and `noeviction`, the AOF, RDB snapshots, a restart, rewriting the AOF, losing it
+  all); and beyond one server (`MULTI … EXEC`, Lua, replicas, Sentinel, Cluster, `INFO`,
+  `SLOWLOG`, `CLIENT LIST`, `MONITOR`). The commands were run on this machine's Redis 7.4,
+  and the settings, files, log lines and counts shown are its own. Its picture shows the
+  clients on the left, the command loop that runs every command one at a time, the keys in
+  memory, and the disk files on the right; **The rows now** shows the keys, a lane's entries,
+  the groups and the pending lists as each step changes them.
+- **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`,
+  `#/how/redis`), so you can send someone straight to one. Clicking a lane, the marks, the
+  pending lists or `rci:dead` in another tab opens the Redis tab.
 - **The Worker tab follows [INTERNALS.md](backend/worker/INTERNALS.md)**, and the Watcher tab
   [how_the_watcher_works.md](how_the_watcher_works.md): their numbered boxes are the guides'
   steps, each caption names the step it shows, and the example is the guides' own

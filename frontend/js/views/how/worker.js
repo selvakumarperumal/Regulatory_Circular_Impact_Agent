@@ -15,11 +15,11 @@ const nodes = {
   // who queues (INTERNALS step 16), and Redis
   watcher: node(72, 86, 96, 48, "svc", "watcher", "circular.read"),
   api: node(184, 86, 96, 48, "svc", "api", "other tasks"),
-  pdf: node(128, 250, 208, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true }),
-  main: node(128, 360, 208, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true }),
-  pending: node(128, 468, 208, 64, "queue", "pending lists", NOBODY, { mono: true }),
-  marks: node(128, 562, 208, 56, "queue", "marks", "none", { mono: true }),
-  dead: node(128, 654, 208, 56, "bad", "rci:dead", "nothing given up", { shape: "pipe" }),
+  pdf: node(128, 250, 208, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true, link: "redis" }),
+  main: node(128, 360, 208, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true, link: "redis" }),
+  pending: node(128, 468, 208, 64, "queue", "pending lists", NOBODY, { mono: true, link: "redis" }),
+  marks: node(128, 562, 208, 56, "queue", "marks", "none", { mono: true, link: "redis" }),
+  dead: node(128, 654, 208, 56, "bad", "rci:dead", "nothing given up", { shape: "pipe", link: "redis" }),
   // the program, three copies (steps 1 to 3)
   reader: node(346, 250, 150, 70, "svc", "reader", W, { idle: W, mono: true }),
   w1: node(346, 360, 150, 70, "svc", "worker 1", W, { idle: W, mono: true }),

@@ -29,8 +29,8 @@ const nodes = {
 
   s3obj: node(1035, 106, 338, 56, "data", "S3 · bucket rci", "one file per fingerprint"),
   pg: node(1035, 230, 338, 72, "data", "Postgres · circulars", "UNIQUE (source, source_key)"),
-  marks: node(1035, 356, 338, 56, "queue", "Redis · marks", "none", { mono: true }),
-  lane: node(1035, 480, 338, 92, "queue", "Redis · PDF lane", "rci:tasks:pdf", { slots: 3, mono: true }),
+  marks: node(1035, 356, 338, 56, "queue", "Redis · marks", "none", { mono: true, link: "redis" }),
+  lane: node(1035, 480, 338, 92, "queue", "Redis · PDF lane", "rci:tasks:pdf", { slots: 3, mono: true, link: "redis" }),
   reader: node(1035, 626, 338, 64, "svc", "reader", W, { idle: W, link: "worker" }),
 };
 

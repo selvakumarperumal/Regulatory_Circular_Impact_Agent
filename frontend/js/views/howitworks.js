@@ -1,5 +1,5 @@
 /** How it works: the system, animated. One tab per scene: the whole system end to end,
- * then the watcher, the worker and the api in detail. Each scene is plain data in
+ * then the watcher, the worker and the api in detail, and Redis from zero to advanced. Each scene is plain data in
  * views/how/; player.js draws and plays it. */
 import { $, html, put } from "../lib/html.js";
 import { pageHead } from "../ui/components.js";
@@ -9,8 +9,9 @@ import system from "./how/system.js";
 import watcher from "./how/watcher.js";
 import worker from "./how/worker.js";
 import api from "./how/api.js";
+import redis from "./how/redis.js";
 
-const SCENES = [system, watcher, worker, api];
+const SCENES = [system, watcher, worker, api, redis];
 
 export async function howPage({ scene = "system" } = {}) {
   const current = SCENES.find((s) => s.id === scene) ?? system;

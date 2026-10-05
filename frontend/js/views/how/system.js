@@ -15,9 +15,9 @@ const nodes = {
   reg: node(88, 104, 150, 58, "ext", "regulators", "RBI · SEBI · IRDAI"),
   watcher: node(272, 104, 132, 58, "svc", "watcher", "every 60 min", { link: "watcher" }),
   // Redis's bookkeeping
-  marks: node(104, 268, 150, 52, "queue", "marks", "no duplicates"),
-  pending: node(292, 268, 168, 52, "queue", "pending lists", "who has what"),
-  dead: node(198, 356, 180, 52, "bad", "rci:dead", "tasks given up", { shape: "pipe" }),
+  marks: node(104, 268, 150, 52, "queue", "marks", "no duplicates", { link: "redis" }),
+  pending: node(292, 268, 168, 52, "queue", "pending lists", "who has what", { link: "redis" }),
+  dead: node(198, 356, 180, 52, "bad", "rci:dead", "tasks given up", { shape: "pipe", link: "redis" }),
   // your team and the console's pages, in the sidebar's order
   team: node(62, 600, 92, 64, "start", "your team", "browser"),
   overview: node(235, 486, 198, 34, "svc", "Overview", "at a glance", { inline: true }),
@@ -29,9 +29,9 @@ const nodes = {
   api: node(402, 662, 84, 64, "svc", "api", "FastAPI", { link: "api" }),
   // reading circulars, and checking them
   s3: node(575, 50, 196, 38, "data", "S3", "the PDFs", { inline: true }),
-  pdf: node(575, 142, 196, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true }),
+  pdf: node(575, 142, 196, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true, link: "redis" }),
   reader: node(790, 142, 140, 64, "svc", "reader", W, { idle: W, link: "worker" }),
-  main: node(600, 522, 240, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true }),
+  main: node(600, 522, 240, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true, link: "redis" }),
   w1: node(800, 470, 136, 60, "svc", "worker 1", W, { idle: W, link: "worker" }),
   w2: node(800, 578, 136, 60, "svc", "worker 2", W, { idle: W, link: "worker" }),
   // what they call, and where everything is kept

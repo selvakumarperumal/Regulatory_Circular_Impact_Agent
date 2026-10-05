@@ -16,7 +16,7 @@ const nodes = {
   save: node(852, 420, 208, 62, "svc", "save()", "commit · 409 if taken", { mono: true }),
   enq: node(852, 546, 208, 62, "queue", "enqueue()", "after the commit", { mono: true }),
   pg: node(1112, 152, 196, 92, "data", "Postgres", "users · policies · gaps"),
-  lane: node(1112, 356, 196, 92, "queue", "main lane", "rci:tasks", { slots: 2, mono: true }),
+  lane: node(1112, 356, 196, 92, "queue", "main lane", "rci:tasks", { slots: 2, mono: true, link: "redis" }),
   worker: node(1112, 522, 196, 62, "svc", "worker", "waiting", { idle: "waiting", link: "worker" }),
 };
 
