@@ -11,32 +11,26 @@ from database import SessionDep, save
 
 router = APIRouter(tags=["accounts"])
 
-
 class NewUser(SQLModel):
     name: str = Field(min_length=1)
     email: str = Field(regex=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=8)
 
-
 class SignUp(NewUser):
     company: str = Field(min_length=2)
-
 
 class Login(SQLModel):
     email: str
     password: str
 
-
 class NewPassword(SQLModel):
     current: str
     new: str = Field(min_length=8)
-
 
 class Account(BaseModel):
     user: User
     company: Company
     token: str | None = None
-
 
 def add_user(session: Session, company_id: int, body: NewUser) -> User:
     email = body.email.strip().lower()
@@ -47,7 +41,6 @@ def add_user(session: Session, company_id: int, body: NewUser) -> User:
         password_hash=hash_password(body.password),
     )
     return save(session, user, f"an account with {email} already exists")
-
 
 @router.post("/auth/signup", status_code=201)
 def sign_up(body: SignUp, session: SessionDep) -> Account:
@@ -75,7 +68,6 @@ def log_in(body: Login, session: SessionDep) -> Account:
 def me(user: CurrentUser, session: SessionDep) -> Account:
     return Account(user=user, company=session.get(Company, user.company_id))
 
-
 @router.put("/auth/password", status_code=204)
 def change_password(body: NewPassword, user: CurrentUser, session: SessionDep) -> None:
     if not password_ok(body.current, user.password_hash):
@@ -83,12 +75,10 @@ def change_password(body: NewPassword, user: CurrentUser, session: SessionDep) -
     user.password_hash = hash_password(body.new)
     save(session, user)
 
-
 @router.get("/users")
 def list_users(user: CurrentUser, session: SessionDep) -> list[User]:
     team = select(User).where(User.company_id == user.company_id).order_by(User.name)
     return session.exec(team).all()
-
 
 @router.post("/users", status_code=201)
 def add_teammate(body: NewUser, user: CurrentUser, session: SessionDep) -> User:
