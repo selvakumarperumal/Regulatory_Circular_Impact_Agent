@@ -1,506 +1,723 @@
-# Redis for Product Developers — A Practical Guide with Python
+# Redis Made Easy — A Developer Guide with Simple Examples
 
-A hands-on guide to the Redis concepts you actually need when building a product: data structures, caching, rate limiting, locks, idempotency, atomic operations, and a deep dive into **Redis Streams with consumer groups** (`XREADGROUP`, `XACK`, pending entries, `XAUTOCLAIM`, dead-letter queues, and multiple consumers where each message goes to exactly one worker).
+This guide explains Redis the simple way. Every idea comes with:
 
-Every pattern comes with Python code (`redis-py`) and diagrams (Mermaid).
+- a **real-life picture**, so the idea makes sense before the code,
+- a **small `redis-cli` example** with the real reply from Redis,
+- **short Python code** you can copy into your project,
+- **diagrams** (Mermaid) for anything with moving parts.
 
-**Assumed versions:** Redis 7.0+ (Redis 8 or Valkey 7.2+/8 also work), `redis-py` 5+, Python 3.10+.
-The Lua scripts, rate limiters, locks, delayed queue and the full Streams demo in this guide were run and checked against a real Redis 7 server.
+**How to read the examples**
+
+- A line starting with `>` is a command typed into `redis-cli`. The lines under it are what Redis replied. All replies in this guide come from a real Redis 7 server.
+- `(integer) 1` is a number, `"Asha"` is text, `(nil)` means "nothing there", and `1) 2) 3)` is a list of results.
+- Python examples use the `redis-py` library and assume this connection:
+  ```python
+  import redis
+  r = redis.Redis(decode_responses=True)
+  ```
+
+**Our story.** All examples build one small app: **Tiffin Express**, a food-ordering app.
+Asha is a customer. Ravi, Meena and Kumar are cooks in the kitchen (in code they are *worker processes*). Anu works in billing.
+
+**Versions:** Redis 7+ (Redis 8 and Valkey work too), redis-py 5+, Python 3.10+.
 
 ---
 
-## Table of contents
+## Contents
 
-**Part 1 — Foundations**
-1. [What Redis is and where it fits](#1-what-redis-is-and-where-it-fits)
-2. [Setup and connecting from Python](#2-setup-and-connecting-from-python)
-3. [Key design and naming](#3-key-design-and-naming)
-4. [Core data structures](#4-core-data-structures)
-5. [Expiration (TTL)](#5-expiration-ttl)
+**Part 1 — Getting started**
+1. [What is Redis?](#1-what-is-redis)
+2. [Setup and connecting](#2-setup-and-connecting)
+3. [Naming your keys](#3-naming-your-keys)
+4. [The data types](#4-the-data-types)
+5. [TTL: keys that delete themselves](#5-ttl-keys-that-delete-themselves)
 
-**Part 2 — Product patterns**
+**Part 2 — Everyday product patterns**
 
 6. [Caching](#6-caching)
-7. [Session storage](#7-session-storage)
+7. [Login sessions](#7-login-sessions)
 8. [Rate limiting](#8-rate-limiting)
-9. [Distributed locks](#9-distributed-locks)
-10. [Idempotency keys](#10-idempotency-keys)
-11. [Leaderboards, counters and analytics](#11-leaderboards-counters-and-analytics)
-12. [Delayed jobs with sorted sets](#12-delayed-jobs-with-sorted-sets)
+9. [Locks: one worker at a time](#9-locks-one-worker-at-a-time)
+10. [Idempotency: the double-click problem](#10-idempotency-the-double-click-problem)
+11. [Leaderboards and counters](#11-leaderboards-and-counters)
+12. [Delayed jobs: "do this later"](#12-delayed-jobs-do-this-later)
 
-**Part 3 — Atomicity and performance**
+**Part 3 — Safe and fast**
 
-13. [The single-threaded model](#13-the-single-threaded-model)
-14. [Pipelining](#14-pipelining)
-15. [Transactions: MULTI/EXEC and WATCH](#15-transactions-multiexec-and-watch)
-16. [Lua scripts](#16-lua-scripts)
+13. [One cashier: how Redis runs commands](#13-one-cashier-how-redis-runs-commands)
+14. [Pipeline: one trip instead of many](#14-pipeline-one-trip-instead-of-many)
+15. [Transactions: MULTI, EXEC and WATCH](#15-transactions-multi-exec-and-watch)
+16. [Lua scripts: small programs inside Redis](#16-lua-scripts-small-programs-inside-redis)
 
-**Part 4 — Messaging**
+**Part 4 — Messages and queues**
 
-17. [Pub/Sub](#17-pubsub)
-18. [Redis Streams deep dive](#18-redis-streams-deep-dive)
+17. [Pub/Sub: the loudspeaker](#17-pubsub-the-loudspeaker)
+18. [Streams: the kitchen order rail](#18-streams-the-kitchen-order-rail) (consumer groups, `XREADGROUP`, `XACK`, pending messages, crash recovery, no duplicates, and more)
 
-**Part 5 — Running Redis in production**
+**Part 5 — Running Redis for real**
 
-19. [Persistence](#19-persistence)
-20. [Memory and eviction](#20-memory-and-eviction)
-21. [Replication, Sentinel and Cluster](#21-replication-sentinel-and-cluster)
+19. [Saving data to disk](#19-saving-data-to-disk)
+20. [When memory is full](#20-when-memory-is-full)
+21. [Copies, failover and clusters](#21-copies-failover-and-clusters)
 22. [Security](#22-security)
-23. [Observability and operations](#23-observability-and-operations)
-24. [Managed services and forks](#24-managed-services-and-forks)
+23. [Watching Redis health](#23-watching-redis-health)
+24. [Managed Redis and Valkey](#24-managed-redis-and-valkey)
 
-**Part 6 — Redis in AI / LLM applications**
+**Part 6 — Redis in AI apps**
 
-25. [Semantic cache, chat memory, token budgets](#25-redis-in-ai--llm-applications)
+25. [Caching, memory, budgets and streaming for LLM apps](#25-redis-in-ai-apps)
 
 **Part 7 — Wrap-up**
 
-26. [Testing](#26-testing)
-27. [Common mistakes checklist](#27-common-mistakes-checklist)
-28. [Command cheat sheet](#28-command-cheat-sheet)
+26. [Testing your Redis code](#26-testing-your-redis-code)
+27. [Top 20 mistakes](#27-top-20-mistakes)
+28. [Cheat sheet](#28-cheat-sheet)
+29. [Practice exercises](#29-practice-exercises)
 
 ---
 
-# Part 1 — Foundations
+# Part 1 — Getting started
 
-## 1. What Redis is and where it fits
+## 1. What is Redis?
 
-Redis is an **in-memory data structure server**. Data lives in RAM, so most operations finish in microseconds. You talk to it over the network with simple commands (`SET`, `GET`, `XADD`, ...).
+**In one line:** Redis is a very fast store that keeps data in memory (RAM) and answers in well under a millisecond.
 
-In a typical product, Redis sits **next to** your main database, not instead of it:
+**Real-life picture.** Your main database (Postgres, MySQL) is a **filing cabinet in the back room**: safe and organised, but you have to walk there. Redis is a **whiteboard next to the counter**: you can read and write it instantly, but it is smaller. You keep the real records in the cabinet and put the things you need *often* or *right now* on the whiteboard.
 
 ```mermaid
 flowchart LR
-    U["Users / clients"] --> LB["Load balancer"]
-    LB --> A1["App server 1"]
-    LB --> A2["App server 2"]
-    LB --> A3["App server 3"]
-    A1 & A2 & A3 --> R[("Redis<br/>cache, sessions, rate limits,<br/>locks, queues, streams")]
-    A1 & A2 & A3 --> DB[("Primary database<br/>Postgres / MySQL")]
-    R --> W["Background workers"]
-    W --> DB
+    U["Customers"] --> APP["Tiffin Express app servers"]
+    APP -- "fast, short-lived data" --> R[("Redis<br/>the whiteboard")]
+    APP -- "permanent records" --> DB[("Postgres<br/>the filing cabinet")]
+    R -- "order queue" --> K["Kitchen workers<br/>Ravi, Meena, Kumar"]
+    K --> DB
 ```
 
-Why teams add Redis:
+**What Tiffin Express keeps in Redis**
 
-| Need | Why Redis helps |
-|---|---|
-| Speed | Reads and writes in well under a millisecond |
-| Shared state across servers | Sessions, rate-limit counters, locks visible to every app instance |
-| Rich data structures | Sorted sets, streams, sets, etc. solve problems that are awkward in SQL |
-| Atomic operations | `INCR`, `SET NX`, Lua scripts give race-free logic without extra locking |
-| Messaging | Pub/Sub and Streams for real-time features and job queues |
+| Need | Redis feature | Section |
+|---|---|---|
+| Show the menu fast | Cache | [6](#6-caching) |
+| Remember who is logged in | Sessions | [7](#7-login-sessions) |
+| One-time passwords that expire | TTL | [5](#5-ttl-keys-that-delete-themselves) |
+| Stop someone trying 1,000 passwords | Rate limiting | [8](#8-rate-limiting) |
+| Never charge a customer twice | Idempotency keys | [10](#10-idempotency-the-double-click-problem) |
+| "Top 10 dishes this week" | Sorted set | [11](#11-leaderboards-and-counters) |
+| Send orders to the kitchen reliably | Streams | [18](#18-streams-the-kitchen-order-rail) |
+| "Your order is ready" pop-up | Pub/Sub | [17](#17-pubsub-the-loudspeaker) |
 
-What Redis is **not** good at: complex relational queries, joins, very large datasets that don't fit in your RAM budget, and being your only copy of critical data unless you configure persistence and replication carefully.
+**What Redis is not good at:** complex searches with joins (use SQL), data much bigger than your RAM budget, and being the *only* copy of important data unless you set up saving to disk and copies ([Part 5](#part-5--running-redis-for-real)).
 
 ---
 
-## 2. Setup and connecting from Python
+## 2. Setup and connecting
 
-### Run Redis locally
+### Start Redis
 
 ```bash
 docker run -d --name redis -p 6379:6379 redis:7
 pip install "redis>=5"
 ```
 
-### Connect with a connection pool
+Check it is alive with the command-line tool `redis-cli`:
 
-Creating a new TCP connection per request is slow. Create **one pool per process** and reuse it.
+```text
+> PING
+PONG
+```
+
+### Connect from Python
 
 ```python
 import redis
 
-pool = redis.ConnectionPool.from_url(
-    "redis://localhost:6379/0",
-    decode_responses=True,       # return str instead of bytes
-    max_connections=50,          # upper bound per process
-    socket_connect_timeout=2,    # fail fast if Redis is unreachable
-    socket_timeout=10,           # MUST be larger than any BLOCK time you use (see Streams)
-    health_check_interval=30,    # ping idle connections before reuse
-)
-r = redis.Redis(connection_pool=pool)
-r.ping()
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+r.set("hello", "world")
+print(r.get("hello"))      # world
 ```
 
-### Retries on transient errors
+`decode_responses=True` gives you normal Python strings. Without it you get bytes (`b"world"`). Keep the default bytes mode only when you store binary data such as images or AI embeddings.
+
+### Use one connection pool
+
+**Real-life picture:** opening a new connection is like dialling a new phone call for every question. A **pool** keeps a few phone lines open and reuses them.
 
 ```python
-from redis.backoff import ExponentialBackoff
-from redis.retry import Retry
-from redis.exceptions import ConnectionError, TimeoutError
-
-r = redis.Redis(
-    host="localhost",
-    port=6379,
+pool = redis.ConnectionPool.from_url(
+    "redis://localhost:6379/0",
     decode_responses=True,
-    retry=Retry(ExponentialBackoff(cap=2, base=0.1), retries=3),
-    retry_on_error=[ConnectionError, TimeoutError],
+    max_connections=50,        # most lines this process may open
+    socket_connect_timeout=2,  # give up quickly if Redis is down
+    socket_timeout=10,         # must be longer than any BLOCK wait you use (see Streams)
 )
+r = redis.Redis(connection_pool=pool)   # create once, reuse everywhere
 ```
 
-Only retry operations that are safe to repeat. `GET` is always safe. `INCR` or `XADD` can run twice if the first attempt succeeded but the reply was lost.
-
-### Async client (FastAPI, aiohttp, etc.)
+### Async version (FastAPI and friends)
 
 ```python
 import redis.asyncio as aioredis
 
 r = aioredis.Redis.from_url("redis://localhost:6379/0", decode_responses=True)
 
-async def get_user_name(user_id: int) -> str | None:
+async def get_name(user_id: int) -> str | None:
     return await r.hget(f"user:{user_id}", "name")
 
-# on shutdown
+# when the app shuts down
 await r.aclose()
 ```
 
-### `decode_responses`
+---
 
-- `True`: you get `str`. Convenient for text and JSON.
-- `False` (default): you get `bytes`. Required when storing binary data such as vector embeddings, images or pickled objects. Many apps keep **two clients**: one text, one binary.
+## 3. Naming your keys
+
+Redis has no tables. Every value lives under a **key name**, so your key names are your structure. Think of them as **folder paths**.
+
+```
+app:thing:id:detail
+
+user:1               -> Asha's profile
+user:1:cart          -> Asha's cart
+session:9f3a...      -> one login session
+cache:menu:v2        -> cached menu (version 2 of the format)
+rl:login:asha        -> Asha's login-attempt counter
+orders               -> the order stream
+```
+
+Simple rules:
+
+- Use `:` between parts. Tools like RedisInsight show keys as folders this way.
+- Short but readable. Millions of keys × long names = wasted memory.
+- Put a **version** in cache keys (`cache:menu:v2`). When the data format changes, switch to `v3` and all old cache entries are ignored.
+- Never put raw user input in a key without checking it first.
 
 ---
 
-## 3. Key design and naming
+## 4. The data types
 
-Redis has no tables. Your **key names are your schema**, so be consistent.
-
-```
-<app>:<entity>:<id>[:<sub-thing>]
-
-shop:user:42                 -> hash with profile fields
-shop:user:42:cart            -> hash of product_id -> qty
-shop:session:9f3a...         -> session hash
-shop:rl:login:203.0.113.7    -> rate-limit counter
-shop:cache:product:1001      -> cached JSON
-shop:orders                  -> stream
-```
-
-Rules of thumb:
-
-- Use `:` as a separator. Most tools (RedisInsight, etc.) group keys by it.
-- Keep keys short but readable. Billions of keys × long names = real memory.
-- Put a **version** in cache keys when the value format changes: `cache:v2:product:1001`. Bumping `v2 → v3` instantly invalidates everything old.
-- In Redis Cluster, keys used together in one command or script must live in the same slot. Use **hash tags**: `{user:42}:cart` and `{user:42}:profile` both hash on `user:42` (see [section 21](#21-replication-sentinel-and-cluster)).
-- Never build keys from raw, unbounded user input without validation (key explosion, memory abuse).
-
----
-
-## 4. Core data structures
-
-Picking the right structure is most of the skill with Redis.
+Choosing the right type is half of Redis.
 
 ```mermaid
 flowchart TD
-    Q{"What do you need?"} --> S1["A single value, counter, token"] --> STR["String"]
-    Q --> S2["An object with fields"] --> HASH["Hash"]
-    Q --> S3["Ordered items, push/pop at the ends"] --> LIST["List"]
-    Q --> S4["Unique members, membership checks"] --> SET["Set"]
-    Q --> S5["Items ranked or ordered by a number"] --> ZSET["Sorted Set"]
-    Q --> S6["Durable event log, work queue with acks"] --> STREAM["Stream"]
-    Q --> S7["Approximate unique count"] --> HLL["HyperLogLog"]
-    Q --> S8["Yes/no flag per integer id"] --> BIT["Bitmap"]
-    Q --> S9["Nearby locations"] --> GEO["Geo"]
+    Q{"What do you want to store?"}
+    Q --> A["One value, a counter, a token"] --> STR["String"]
+    Q --> B["An object with fields"] --> HASH["Hash"]
+    Q --> C["Items in order, add and remove at the ends"] --> LIST["List"]
+    Q --> D["Unique items, quick 'is it there?' checks"] --> SET["Set"]
+    Q --> E["Items ranked by a number"] --> ZSET["Sorted Set"]
+    Q --> F["A queue that never loses work"] --> STREAM["Stream"]
+    Q --> G["Count unique visitors cheaply"] --> HLL["HyperLogLog"]
+    Q --> H["Yes/no flag per user id"] --> BIT["Bitmap"]
+    Q --> I["Places near me"] --> GEO["Geo"]
 ```
 
-### String
+### 4.1 String — one value under one name
 
-The simplest type: text, number or bytes up to 512 MB (keep them far smaller in practice).
+**Picture:** a sticky note with a label.
+
+```text
+> SET greeting "Welcome to Tiffin Express"
+OK
+> GET greeting
+"Welcome to Tiffin Express"
+# INCR adds 1. It is safe even if 1,000 users do it at the same moment.
+> INCR page:views
+(integer) 1
+> INCR page:views
+(integer) 2
+> INCRBY wallet:asha 50
+(integer) 50
+# NX = only set it if it does not exist yet
+> SET coupon:FIRST50 asha NX
+OK
+> SET coupon:FIRST50 ravi NX
+(nil)
+> GET coupon:FIRST50
+"asha"
+```
+
+The coupon could be claimed only once: Ravi's `SET ... NX` returned `(nil)`, so Asha keeps it.
 
 ```python
-r.set("feature:new_checkout", "on")
-r.set("otp:+919800000000", "482913", ex=300)          # expires in 5 minutes
-r.set("job:report:lock", "worker-1", nx=True, ex=30)  # only if it doesn't exist
-
-r.incr("stats:page_views")              # atomic counter
-r.incrby("wallet:42:points", 50)
-r.incrbyfloat("metrics:latency_sum", 0.023)
-
-r.mset({"a": 1, "b": 2})
-r.mget("a", "b")                        # ['1', '2']
+r.set("greeting", "Welcome to Tiffin Express")
+r.incr("page:views")                          # counter
+r.set("otp:asha", "482913", ex=300)           # disappears after 5 minutes
+first = r.set("coupon:FIRST50", "asha", nx=True)   # True only for the first person
 ```
 
-### Hash
+### 4.2 Hash — a small object with fields
 
-A small object: field → value. Memory-efficient for many small objects.
+**Picture:** one filled-in form, with field names and values.
+
+```text
+> HSET user:1 name Asha city Chennai plan free credits 10
+(integer) 4
+> HGET user:1 name
+"Asha"
+> HGETALL user:1
+1) "name"
+2) "Asha"
+3) "city"
+4) "Chennai"
+5) "plan"
+6) "free"
+7) "credits"
+8) "10"
+> HINCRBY user:1 credits -1
+(integer) 9
+> HSET user:1 plan pro
+(integer) 0
+> HMGET user:1 name plan credits
+1) "Asha"
+2) "pro"
+3) "9"
+```
 
 ```python
-r.hset("user:42", mapping={"name": "Asha", "plan": "pro", "credits": 10})
-r.hget("user:42", "plan")                # 'pro'
-r.hgetall("user:42")                     # {'name': 'Asha', 'plan': 'pro', 'credits': '10'}
-r.hincrby("user:42", "credits", -1)      # atomic per-field counter
-r.hdel("user:42", "plan")
+r.hset("user:1", mapping={"name": "Asha", "city": "Chennai", "plan": "free", "credits": 10})
+user = r.hgetall("user:1")        # {'name': 'Asha', 'city': 'Chennai', ...}
+r.hincrby("user:1", "credits", -1)
 ```
 
-Redis 7.4+ also supports **per-field expiry** (`HEXPIRE key 60 FIELDS 1 otp`), useful when one field of an object should expire on its own.
+> **Remember:** every value comes back as a string (`'10'`, not `10`). Convert it yourself: `int(user["credits"])`.
 
-### List
+### 4.3 List — items in a line
 
-Ordered sequence. Fast at both ends, slow (O(N)) in the middle.
+**Picture:** people standing in a queue. You can join at either end and leave from either end.
+
+```text
+# Asha's recently viewed dishes, newest first
+> LPUSH recent:asha idli
+(integer) 1
+> LPUSH recent:asha dosa
+(integer) 2
+> LPUSH recent:asha vada
+(integer) 3
+> LRANGE recent:asha 0 -1
+1) "vada"
+2) "dosa"
+3) "idli"
+# keep only the newest 2
+> LTRIM recent:asha 0 1
+OK
+> LRANGE recent:asha 0 -1
+1) "vada"
+2) "dosa"
+# a simple job queue: add at the right, take from the left
+> RPUSH jobs send-email send-sms
+(integer) 2
+> LPOP jobs
+"send-email"
+> LLEN jobs
+(integer) 1
+```
 
 ```python
-r.lpush("recent:user:42", "viewed:p1001")   # newest first
-r.ltrim("recent:user:42", 0, 49)            # keep only the latest 50
-r.lrange("recent:user:42", 0, 9)            # top 10
+r.lpush("recent:asha", "dosa")
+r.ltrim("recent:asha", 0, 49)          # keep the newest 50
+recent = r.lrange("recent:asha", 0, 9)  # top 10
 
-# simple blocking queue (no acks: if the worker dies after BRPOP, the job is lost)
-r.lpush("jobs", "send-email:42")
-job = r.brpop("jobs", timeout=5)            # ('jobs', 'send-email:42') or None
+job = r.blpop("jobs", timeout=5)        # wait up to 5 s for a job, else None
 ```
 
-For reliable queues use **Streams** ([section 18](#18-redis-streams-deep-dive)) or the `LMOVE` "processing list" pattern.
+> **Remember:** once a job is popped from a list, it is gone. If the worker crashes before finishing, the job is lost. For work that must never be lost, use [Streams](#18-streams-the-kitchen-order-rail).
 
-### Set
+### 4.4 Set — unique items, no order
 
-Unordered unique members with fast membership checks.
+**Picture:** a guest list. Writing a name twice doesn't add it twice.
+
+```text
+> SADD dish:dosa:likes asha ravi meena
+(integer) 3
+> SADD dish:dosa:likes asha
+(integer) 0
+> SISMEMBER dish:dosa:likes ravi
+(integer) 1
+> SCARD dish:dosa:likes
+(integer) 3
+# dishes both Asha and Ravi like
+> SADD likes:asha dosa idli vada
+(integer) 3
+> SADD likes:ravi dosa pongal vada
+(integer) 3
+> SINTER likes:asha likes:ravi
+1) "vada"
+2) "dosa"
+```
 
 ```python
-r.sadd("post:99:likes", "user:1", "user:2")
-r.sismember("post:99:likes", "user:1")      # True
-r.scard("post:99:likes")                    # 2
-r.sinter("user:1:follows", "user:2:follows")  # mutual follows
+r.sadd("dish:dosa:likes", "asha")
+already_liked = r.sismember("dish:dosa:likes", "asha")   # True
+like_count = r.scard("dish:dosa:likes")
 ```
 
-### Sorted Set (ZSET)
+### 4.5 Sorted set — unique items ranked by a score
 
-Unique members, each with a numeric **score**, kept in order. One of the most useful structures.
+**Picture:** a cricket scoreboard. Every player has a score and the board is always in order.
+
+```text
+> ZADD top:dishes 120 dosa 95 idli 60 vada
+(integer) 3
+# 50 more dosas sold
+> ZINCRBY top:dishes 50 dosa
+"170"
+# highest first, with scores
+> ZREVRANGE top:dishes 0 2 WITHSCORES
+1) "dosa"
+2) "170"
+3) "idli"
+4) "95"
+5) "vada"
+6) "60"
+# idli's position (0 = first place)
+> ZREVRANK top:dishes idli
+(integer) 1
+> ZSCORE top:dishes vada
+"60"
+# dishes that sold at least 90
+> ZRANGEBYSCORE top:dishes 90 +inf
+1) "idli"
+2) "dosa"
+```
 
 ```python
-r.zadd("lb:weekly", {"alice": 120, "bob": 95})
-r.zincrby("lb:weekly", 10, "bob")
-r.zrevrange("lb:weekly", 0, 9, withscores=True)   # top 10
-r.zrevrank("lb:weekly", "alice")                   # 0-based rank
-r.zrangebyscore("lb:weekly", 100, "+inf")          # members with score >= 100
+r.zincrby("top:dishes", 1, "dosa")                          # one more sale
+top3 = r.zrevrange("top:dishes", 0, 2, withscores=True)     # [('dosa', 170.0), ...]
 ```
 
-Used for leaderboards, priority queues, sliding-window rate limits, delayed jobs (score = run-at timestamp), and time-ordered indexes.
+Sorted sets are used for leaderboards, priority queues, rate limits and scheduled jobs (score = time).
 
-### HyperLogLog, Bitmap, Geo
+### 4.6 HyperLogLog — count unique things with tiny memory
+
+**Picture:** a clicker counter at a gate that counts *different* people, not total entries. It is a little bit approximate (about 1% error) but uses only about 12 KB, even for millions of people.
+
+```text
+> PFADD visitors:today asha ravi asha meena asha
+(integer) 1
+> PFCOUNT visitors:today
+(integer) 3
+```
+
+### 4.7 Bitmap — one yes/no bit per user id
+
+**Picture:** a long row of light switches, one per user. On = active today.
+
+```text
+> SETBIT active:today 7 1
+(integer) 0
+> SETBIT active:today 12 1
+(integer) 0
+> GETBIT active:today 7
+(integer) 1
+> GETBIT active:today 8
+(integer) 0
+> BITCOUNT active:today
+(integer) 2
+```
+
+One million users = one million bits ≈ 125 KB.
+
+### 4.8 Geo — places near me
+
+```text
+> GEOADD kitchens 80.2707 13.0827 chennai-central 80.2209 13.0475 chennai-tnagar 77.5946 12.9716 bengaluru-mg
+(integer) 3
+# kitchens within 10 km of a customer, nearest first
+> GEOSEARCH kitchens FROMLONLAT 80.25 13.06 BYRADIUS 10 km ASC WITHDIST
+1) 1) "chennai-central"
+   2) "3.3773"
+2) 1) "chennai-tnagar"
+   2) "3.4460"
+```
 
 ```python
-# Unique visitors per day, ~12 KB per key regardless of count, ~0.81% error
-r.pfadd("uv:2026-10-06", "user:1", "user:2", "user:1")
-r.pfcount("uv:2026-10-06")                          # 2
-
-# Daily active users as bits: 1 bit per user id
-r.setbit("dau:2026-10-06", 42, 1)
-r.bitcount("dau:2026-10-06")
-
-# Stores near a point
-r.geoadd("stores", [78.1460, 11.6643, "salem-store", 80.2707, 13.0827, "chennai-store"])
-r.geosearch("stores", longitude=78.15, latitude=11.66, radius=10, unit="km",
-            withdist=True, sort="ASC")              # [['salem-store', 0.6468]]
+r.geoadd("kitchens", [80.2707, 13.0827, "chennai-central"])
+nearby = r.geosearch("kitchens", longitude=80.25, latitude=13.06,
+                     radius=10, unit="km", withdist=True, sort="ASC")
 ```
 
-### JSON, Search and Vector
+### 4.9 Stream — a queue that never loses work
 
-Redis 8 bundles JSON documents, the Query Engine (secondary indexes, full-text) and vector search. On Redis 7 these come from **Redis Stack** modules. Useful for querying documents by field and for AI similarity search ([section 25](#25-redis-in-ai--llm-applications)).
+The most powerful type, with its own big chapter: [Streams](#18-streams-the-kitchen-order-rail).
 
-### Big-O you should remember
+### 4.10 JSON, search and vectors
 
-| Operation | Cost |
+Redis 8 includes JSON documents, search indexes and vector search (on Redis 7 these come from "Redis Stack"). Vector search is used for AI features ([section 25](#25-redis-in-ai-apps)).
+
+### 4.11 Which commands are fast?
+
+| Always fast (size doesn't matter) | Gets slower as the key grows |
 |---|---|
-| `GET`, `SET`, `HGET`, `SADD`, `LPUSH`, `INCR` | O(1) |
-| `ZADD`, `ZRANK`, `ZINCRBY` | O(log N) |
-| `XADD` | O(1) |
-| `HGETALL`, `SMEMBERS`, `LRANGE 0 -1`, `KEYS *` | O(N), dangerous on big keys |
+| `GET`, `SET`, `INCR`, `HGET`, `HSET`, `SADD`, `SISMEMBER`, `LPUSH`, `LPOP`, `XADD` | `HGETALL`, `SMEMBERS`, `LRANGE 0 -1`, `KEYS *`, `DEL` of a huge key |
+| `ZADD`, `ZRANK`, `ZINCRBY` (fast, grows very slowly) | |
+
+Commands in the right column are fine on small keys. On a key with millions of items they can freeze Redis for everyone ([section 13](#13-one-cashier-how-redis-runs-commands)).
 
 ---
 
-## 5. Expiration (TTL)
+## 5. TTL: keys that delete themselves
 
-Any key can have a time-to-live. When it expires, Redis deletes it.
+**In one line:** any key can have a **time-to-live**. When it runs out, Redis deletes the key.
 
-```python
-r.set("otp:42", "123456", ex=300)        # set with TTL (seconds)
-r.set("tmp", "x", px=1500)               # milliseconds
-r.expire("session:abc", 1800)            # add TTL to an existing key
-r.expire("counter", 60, nx=True)         # only if it has no TTL yet (Redis 7+)
-r.ttl("session:abc")                     # seconds left; -1 = no TTL, -2 = missing
-r.persist("session:abc")                 # remove TTL
-r.set("user:42:name", "Asha", keepttl=True)  # overwrite value, keep the old TTL
+**Picture:** milk with an expiry date.
+
+```text
+> SET otp:asha 482913 EX 60
+OK
+> TTL otp:asha
+(integer) 60
+# a key with no expiry
+> SET menu:title "Tiffin Express"
+OK
+> TTL menu:title
+(integer) -1
+# a key that does not exist
+> TTL nothing:here
+(integer) -2
+# Careful: a plain SET removes the expiry!
+> SET otp:asha 111111
+OK
+> TTL otp:asha
+(integer) -1
+# KEEPTTL changes the value but keeps the expiry
+> SET otp:asha 222222 EX 60
+OK
+> SET otp:asha 333333 KEEPTTL
+OK
+> TTL otp:asha
+(integer) 60
+# add an expiry to an existing key
+> EXPIRE menu:title 120
+(integer) 1
+> TTL menu:title
+(integer) 120
 ```
 
-**Watch out:** a plain `SET` on an existing key **removes its TTL** unless you pass `ex`/`px` again or `keepttl=True`.
+What `TTL` replies mean: a positive number = seconds left, `-1` = never expires, `-2` = key doesn't exist.
 
-How Redis expires keys:
+```python
+r.set("otp:asha", "482913", ex=300)        # 5 minutes
+r.expire("session:abc", 1800)              # add or reset a TTL
+r.expire("counter", 60, nx=True)           # only if it has no TTL yet
+r.set("otp:asha", "999999", keepttl=True)  # change value, keep TTL
+seconds_left = r.ttl("otp:asha")
+```
+
+**Always give these a TTL:** cache entries, sessions, OTPs, rate-limit counters, locks, idempotency keys.
+
+How Redis cleans up expired keys:
 
 ```mermaid
 flowchart LR
-    K["Key with TTL"] --> P["Passive: checked when a client accesses it"]
-    K --> A["Active: background job samples keys with TTL<br/>many times per second and deletes expired ones"]
-    P --> D["Deleted"]
+    K["Key with TTL"] --> P["When someone asks for it,<br/>Redis checks the expiry first"]
+    K --> A["Many times per second Redis<br/>checks a few random keys with TTLs"]
+    P --> D["Expired keys are deleted"]
     A --> D
 ```
 
-So expired keys never get returned to clients, but memory may be freed slightly later than the exact TTL.
-
-Always set a TTL on: cache entries, sessions, OTPs, rate-limit keys, locks, idempotency keys, temporary job state.
+You will never *read* an expired key, but its memory may be freed a moment later than the exact expiry time.
 
 ---
 
-# Part 2 — Product patterns
+# Part 2 — Everyday product patterns
 
 ## 6. Caching
 
-### 6.1 Cache-aside (lazy loading) — the default choice
+**Problem:** every time someone opens the menu, the app runs a slow database query. With 10,000 visitors, that's 10,000 slow queries for the same menu.
 
-The application owns the logic: check Redis, fall back to the database on a miss, then fill the cache.
+**Picture:** the first time someone asks "what's today's special?", the cashier walks to the back room and checks. Then they **write the answer on the whiteboard**. Everyone after that just reads the whiteboard. At the end of the day the whiteboard is wiped (TTL).
+
+### 6.1 Cache-aside: the pattern you will use 90% of the time
 
 ```mermaid
 sequenceDiagram
     participant App
     participant Redis
     participant DB as Database
-    App->>Redis: GET cache:product:1001
-    alt cache hit
-        Redis-->>App: cached JSON
-    else cache miss
+    App->>Redis: GET cache:product:7
+    alt found (cache hit)
+        Redis-->>App: saved JSON, fast
+    else not found (cache miss)
         Redis-->>App: nil
-        App->>DB: SELECT * FROM products WHERE id = 1001
+        App->>DB: SELECT ... WHERE id = 7 (slow)
         DB-->>App: row
-        App->>Redis: SET cache:product:1001 JSON EX 300
+        App->>Redis: SET cache:product:7 JSON EX 300
     end
 ```
 
-A reusable decorator with TTL jitter (so many keys don't expire at the same moment):
+```python
+import json
+
+def get_product(product_id: int) -> dict:
+    key = f"cache:product:{product_id}"
+    saved = r.get(key)
+    if saved is not None:                        # 1. hit: fast path
+        print("from cache")
+        return json.loads(saved)
+    print("from database")
+    product = db.query_product(product_id)       # 2. miss: ask the database
+    r.set(key, json.dumps(product), ex=300)      # 3. save for 5 minutes
+    return product
+
+get_product(7)    # from database
+get_product(7)    # from cache
+get_product(7)    # from cache
+```
+
+### 6.2 A reusable decorator
+
+Add `@cached(...)` to any slow function. The random "jitter" makes keys expire at slightly different times, so they don't all run out together.
 
 ```python
 import functools
-import json
 import random
 
 def cached(prefix: str, ttl: int = 300, jitter: float = 0.1):
-    def deco(fn):
+    def decorator(fn):
         @functools.wraps(fn)
         def wrapper(*args):
             key = f"cache:{prefix}:" + ":".join(map(str, args))
-            hit = r.get(key)
-            if hit is not None:
-                return json.loads(hit)
+            saved = r.get(key)
+            if saved is not None:
+                return json.loads(saved)
             value = fn(*args)
-            real_ttl = int(ttl * random.uniform(1 - jitter, 1 + jitter))
+            real_ttl = int(ttl * random.uniform(1 - jitter, 1 + jitter))  # 270..330 s
             r.set(key, json.dumps(value), ex=real_ttl)
             return value
         return wrapper
-    return deco
+    return decorator
 
-@cached("product", ttl=300)
-def get_product(product_id: int) -> dict | None:
-    return db.fetch_product(product_id)        # your DB call
+@cached("menu", ttl=300)
+def get_menu(kitchen_id: int) -> list:
+    return [{"dish": "dosa", "price": 80}, {"dish": "idli", "price": 40}]   # imagine a slow query
+
+print(get_menu(1))
 ```
 
-Note that a `None` result is stored as the JSON string `"null"`, so "not found" is cached too. That is **negative caching**, and it protects the database from repeated lookups of missing ids. Give misses a shorter TTL if new records appear often.
+Because `None` is saved as the JSON text `"null"`, "not found" answers are cached too. This is called **negative caching**: it stops the database being asked again and again for something that doesn't exist.
 
-### 6.2 Other write strategies
+### 6.3 When the data changes
 
-| Strategy | How it works | Good for | Risk |
+**Rule:** after you update the database, **delete** the cache key. The next reader loads the fresh value.
+
+```python
+def update_product(product_id: int, data: dict) -> None:
+    db.update_product(product_id, data)          # 1. update the real record first
+    r.delete(f"cache:product:{product_id}")      # 2. then remove the old copy
+```
+
+Simple rules for fresh data:
+
+1. **Delete, don't update** the cached value.
+2. Delete **after** the database update has finished (committed), not before. Otherwise another request may put the old value back.
+3. **Always keep a TTL**, so even a forgotten delete fixes itself.
+4. When the data *format* changes, change the key version: `cache:v2:product:7` → `cache:v3:product:7`.
+
+### 6.4 Other ways to cache
+
+| Strategy | In simple words | Good for | Watch out |
 |---|---|---|---|
-| Cache-aside | App reads cache, loads DB on miss | Most read-heavy data | Stale data until TTL or invalidation |
-| Write-through | App writes DB and cache together | Data read right after writing | Extra write latency, caches data nobody reads |
-| Write-behind | App writes cache, a worker flushes to DB later | Very high write rates (counters, likes) | Data loss if Redis dies before flush |
-| Refresh-ahead | Refresh popular keys before they expire | Hot keys with expensive loads | Wasted work on keys that cooled down |
+| **Cache-aside** | Look in cache, else load and save | Most read-heavy data | Old data until delete or TTL |
+| **Write-through** | Every write goes to DB and cache together | Data read right after it's written | Slower writes |
+| **Write-behind** | Write to cache now, a worker saves to DB later | Very frequent counters (likes, views) | Data lost if Redis dies first |
+| **Refresh-ahead** | Refresh popular keys before they expire | A few very hot keys | Wasted work on keys nobody reads |
 
-### 6.3 Invalidation
+### 6.5 Cache stampede
 
-"There are only two hard things in computer science: cache invalidation and naming things." Practical rules:
+**Picture:** the whiteboard is wiped at 1:00 pm and 500 people ask for the special at 1:00:01. All 500 run to the back room at once and the back room collapses.
 
-1. **On write, delete the cache key** (don't update it). The next read repopulates it from the source of truth.
-   ```python
-   def update_product(product_id: int, data: dict) -> None:
-       db.update_product(product_id, data)
-       r.delete(f"cache:product:{product_id}")
-   ```
-2. **Delete after the DB commit**, not before. Deleting first lets a concurrent reader put the old value back.
-3. **Always keep a TTL** as a safety net for missed invalidations.
-4. For many app servers with local in-process caches, broadcast invalidations via Pub/Sub, or use Redis client-side caching (RESP3 tracking).
-5. Use **versioned keys** (`cache:v3:...`) for deploys that change the cached format.
-
-### 6.4 Cache stampede (thundering herd)
-
-When a hot key expires, hundreds of requests miss at the same time and all hit the database.
+**Fix:** let **one** person go to the back room. Everyone else waits a moment and reads the whiteboard.
 
 ```mermaid
 sequenceDiagram
-    participant R1 as Request 1
-    participant R2 as Request 2..N
+    participant A as Request A
+    participant B as Requests B..Z
     participant Redis
     participant DB as Database
-    R1->>Redis: GET key (miss)
-    R1->>Redis: SET lock:key NX EX 10
-    Redis-->>R1: OK (got the rebuild lock)
-    R2->>Redis: GET key (miss)
-    R2->>Redis: SET lock:key NX EX 10
-    Redis-->>R2: nil (someone else is rebuilding)
-    R1->>DB: expensive query (only once)
-    DB-->>R1: result
-    R1->>Redis: SET key value EX 300
-    R1->>Redis: DEL lock:key
-    R2->>Redis: GET key (retry after short sleep)
-    Redis-->>R2: value
+    A->>Redis: GET key → miss
+    A->>Redis: SET lock:key 1 NX EX 10 → OK (A rebuilds)
+    B->>Redis: GET key → miss
+    B->>Redis: SET lock:key 1 NX EX 10 → nil (someone else is on it)
+    A->>DB: slow query, only once
+    A->>Redis: SET key value EX 300
+    B->>Redis: GET key (after a short wait) → value
 ```
 
 ```python
-import json
 import time
 
-def get_with_rebuild_lock(key: str, loader, ttl: int = 300, lock_ttl: int = 10):
-    value = r.get(key)
-    if value is not None:
-        return json.loads(value)
+def get_with_rebuild_lock(key: str, loader, ttl: int = 300):
+    saved = r.get(key)
+    if saved is not None:
+        return json.loads(saved)
 
-    if r.set(f"lock:{key}", "1", nx=True, ex=lock_ttl):
+    if r.set(f"lock:{key}", "1", nx=True, ex=10):     # I am the one who rebuilds
         try:
-            result = loader()
-            r.set(key, json.dumps(result), ex=ttl)
-            return result
+            value = loader()
+            r.set(key, json.dumps(value), ex=ttl)
+            return value
         finally:
             r.delete(f"lock:{key}")
 
-    for _ in range(50):                      # wait up to ~5 s for the rebuilder
+    for _ in range(50):                                # others: wait up to ~5 s
         time.sleep(0.1)
-        value = r.get(key)
-        if value is not None:
-            return json.loads(value)
-    return loader()                          # last resort
+        saved = r.get(key)
+        if saved is not None:
+            return json.loads(saved)
+    return loader()                                    # last resort
+
+print(get_with_rebuild_lock("cache:special", lambda: {"special": "ghee roast"}))
 ```
 
-Other defences: TTL jitter (above), refresh-ahead for known hot keys, and **probabilistic early expiration** (each reader refreshes a little before expiry with a small probability that grows as the TTL runs out).
+### 6.6 What to store in the cache
 
-### 6.5 Serialization tips
-
-- JSON is readable and portable. Use `orjson` or `msgpack` for speed and size.
-- Avoid `pickle` for anything another service might write: unpickling untrusted data runs code.
-- Compress large values (zstd/gzip) if they are over a few KB.
-- Prefer many small keys over one giant key that every request rewrites.
+- JSON is easy to read. `orjson` or `msgpack` are faster and smaller.
+- Don't use `pickle` for data other services can write: loading a pickle can run code.
+- Compress values bigger than a few KB.
+- Many small keys are better than one giant key that every request rewrites.
 
 ---
 
-## 7. Session storage
+## 7. Login sessions
 
-Storing sessions in Redis makes app servers **stateless**: any server can handle any request.
+**Picture:** a cloakroom token. You get a random token at the door, and any staff member can look up your coat with it.
+
+After login, the app creates a random session id, stores the user's details under it in Redis, and sends the id to the browser as a cookie. Any app server can read it, so it doesn't matter which server handles the next request.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S1 as App server 1
+    participant S2 as App server 2
+    participant R as Redis
+    B->>S1: login (email + password)
+    S1->>R: HSET session:9f3a user_id 1 role customer, EXPIRE 1800
+    S1-->>B: cookie sid=9f3a
+    B->>S2: GET /orders (cookie sid=9f3a)
+    S2->>R: HGETALL session:9f3a
+    R-->>S2: user_id 1, role customer
+    S2-->>B: Asha's orders
+```
 
 ```python
 import secrets
 
-SESSION_TTL = 1800  # 30 minutes of inactivity
+SESSION_TTL = 1800    # 30 minutes without activity
 
 def create_session(user_id: int, role: str) -> str:
-    sid = secrets.token_urlsafe(32)
-    key = f"session:{sid}"
+    sid = secrets.token_urlsafe(32)              # long random id, impossible to guess
     pipe = r.pipeline()
-    pipe.hset(key, mapping={"user_id": user_id, "role": role})
-    pipe.expire(key, SESSION_TTL)
-    pipe.sadd(f"user:{user_id}:sessions", sid)   # index for "log out everywhere"
+    pipe.hset(f"session:{sid}", mapping={"user_id": user_id, "role": role})
+    pipe.expire(f"session:{sid}", SESSION_TTL)
+    pipe.sadd(f"user:{user_id}:sessions", sid)   # list of this user's devices
     pipe.execute()
     return sid                                   # send as an HttpOnly, Secure cookie
 
 def load_session(sid: str) -> dict | None:
-    key = f"session:{sid}"
     pipe = r.pipeline()
-    pipe.hgetall(key)
-    pipe.expire(key, SESSION_TTL)                # sliding expiration on every access
+    pipe.hgetall(f"session:{sid}")
+    pipe.expire(f"session:{sid}", SESSION_TTL)   # active users stay logged in
     data, _ = pipe.execute()
     return data or None
 
@@ -508,76 +725,98 @@ def logout(sid: str) -> None:
     r.delete(f"session:{sid}")
 
 def logout_everywhere(user_id: int) -> None:
-    # keep an index of a user's sessions to support "log out of all devices"
     for sid in r.smembers(f"user:{user_id}:sessions"):
         r.delete(f"session:{sid}")
     r.delete(f"user:{user_id}:sessions")
+
+sid = create_session(1, "customer")
+print(load_session(sid))       # {'user_id': '1', 'role': 'customer'}
+logout(sid)
+print(load_session(sid))       # None
 ```
 
 ---
 
 ## 8. Rate limiting
 
-Three algorithms, from simplest to smoothest.
+**Problem:** someone tries 1,000 passwords per minute on Asha's account, or a script hammers your API.
+
+**Picture:** a bouncer with a clicker who lets in at most N people per minute.
 
 ```mermaid
 flowchart LR
-    REQ["Incoming request"] --> RL{"Rate limiter<br/>in Redis"}
-    RL -- "under limit" --> OK["Handle request"]
-    RL -- "over limit" --> DENY["HTTP 429 Too Many Requests<br/>+ Retry-After header"]
+    REQ["Request"] --> RL{"Count for this user<br/>in Redis"}
+    RL -- "under the limit" --> OK["Handle it"]
+    RL -- "over the limit" --> NO["Reply 429 Too Many Requests"]
 ```
 
-### 8.1 Fixed window
+### 8.1 Fixed window: "max 3 per minute"
 
-Count requests per time bucket (e.g. per minute).
+One counter per user per minute. The counter deletes itself after the minute.
+
+```text
+# Asha's login attempts during one minute (limit = 3)
+> INCR rl:login:asha:minute-27
+(integer) 1
+> EXPIRE rl:login:asha:minute-27 60
+(integer) 1
+> INCR rl:login:asha:minute-27
+(integer) 2
+> INCR rl:login:asha:minute-27
+(integer) 3
+> INCR rl:login:asha:minute-27
+(integer) 4
+```
+
+The 4th attempt returned 4, which is more than 3, so the app rejects it.
 
 ```python
 import time
 
-def allow_fixed_window(user_id: str, limit: int = 100, window: int = 60) -> bool:
-    key = f"rl:fixed:{user_id}:{int(time.time() // window)}"
+def allow_fixed_window(user: str, limit: int = 3, window: int = 60) -> bool:
+    key = f"rl:fixed:{user}:{int(time.time() // window)}"   # a new key every minute
     pipe = r.pipeline()
     pipe.incr(key)
-    pipe.expire(key, window, nx=True)   # set TTL only on the first hit
+    pipe.expire(key, window, nx=True)     # set the expiry on the first request only
     count, _ = pipe.execute()
     return count <= limit
+
+print([allow_fixed_window("asha") for _ in range(5)])   # [True, True, True, False, False]
 ```
 
-Simple and cheap, but allows bursts at window edges (100 at 0:59 + 100 at 1:00).
+The weakness: someone can send 3 requests at 0:59 and 3 more at 1:00, which is 6 in two seconds.
 
-### 8.2 Sliding window log (sorted set + Lua)
+### 8.2 Sliding window: "max 3 in any 60 seconds"
 
-Keep a timestamp per request and count the ones inside the last `window`. The script makes check-and-add atomic.
+Store the time of each request in a sorted set. Before allowing a new one, remove the old ones and count what's left. A Lua script ([section 16](#16-lua-scripts-small-programs-inside-redis)) does it all in one safe step.
 
 ```python
-import time
 import uuid
 
 SLIDING_WINDOW = r.register_script("""
 local now    = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 local limit  = tonumber(ARGV[3])
-redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, now - window)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, now - window)   -- forget old requests
 if redis.call('ZCARD', KEYS[1]) < limit then
-  redis.call('ZADD', KEYS[1], now, ARGV[4])
+  redis.call('ZADD', KEYS[1], now, ARGV[4])                -- remember this one
   redis.call('PEXPIRE', KEYS[1], window)
   return 1
 end
 return 0
 """)
 
-def allow_sliding_window(user_id: str, limit: int = 100, window_ms: int = 60_000) -> bool:
+def allow_sliding_window(user: str, limit: int = 3, window_ms: int = 60_000) -> bool:
     now = int(time.time() * 1000)
-    member = f"{now}-{uuid.uuid4().hex[:8]}"           # unique per request
-    return SLIDING_WINDOW(keys=[f"rl:slide:{user_id}"],
-                          args=[now, window_ms, limit, member]) == 1
+    request_id = f"{now}-{uuid.uuid4().hex[:8]}"
+    return SLIDING_WINDOW(keys=[f"rl:slide:{user}"], args=[now, window_ms, limit, request_id]) == 1
+
+print([allow_sliding_window("ravi") for _ in range(4)])   # [True, True, True, False]
 ```
 
-Accurate, but stores one entry per request, so memory grows with the limit.
+### 8.3 Token bucket: "bursts are OK, but a steady average"
 
-### 8.3 Token bucket (Lua, server time)
-
-A bucket holds up to `capacity` tokens and refills at `rate` per second. Each request spends tokens. It allows short bursts but enforces a steady average. Using Redis `TIME` avoids clock differences between app servers.
+**Picture:** a jar that holds 5 tokens and gets 1 new token every second. Each request takes a token. If the jar is empty, wait.
 
 ```python
 TOKEN_BUCKET = r.register_script("""
@@ -589,7 +828,7 @@ local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local data   = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
 local tokens = tonumber(data[1]) or capacity
 local ts     = tonumber(data[2]) or now
-tokens = math.min(capacity, tokens + (now - ts) / 1000 * rate)
+tokens = math.min(capacity, tokens + (now - ts) / 1000 * rate)   -- refill
 local allowed = 0
 if tokens >= cost then
   tokens = tokens - cost
@@ -600,49 +839,63 @@ redis.call('PEXPIRE', KEYS[1], math.ceil(capacity / rate * 1000) + 1000)
 return allowed
 """)
 
-def allow_token_bucket(key: str, capacity: int = 20, per_sec: float = 5.0, cost: int = 1) -> bool:
+def allow_token_bucket(key: str, capacity: int = 5, per_sec: float = 1.0, cost: int = 1) -> bool:
     return TOKEN_BUCKET(keys=[f"rl:bucket:{key}"], args=[capacity, per_sec, cost]) == 1
+
+print([allow_token_bucket("api:meena") for _ in range(6)])   # [True, True, True, True, True, False]
 ```
 
-`cost` lets you charge expensive endpoints more (or charge by LLM tokens, see section 25).
+`cost` lets you charge more for expensive calls (or charge by AI tokens, [section 25](#25-redis-in-ai-apps)).
 
-| Algorithm | Memory per key | Burst at edges | Accuracy |
+| Method | Memory | Burst problem | When to use |
 |---|---|---|---|
-| Fixed window | 1 counter | Yes | Approximate |
-| Sliding window log | 1 entry per request | No | Exact |
-| Token bucket | 2 fields | Controlled bursts | Smooth |
+| Fixed window | 1 counter | Yes, at the minute edge | Simple limits, login attempts |
+| Sliding window | 1 entry per request | No | Exact limits, small numbers |
+| Token bucket | 2 fields | Allows controlled bursts | APIs, paid plans, AI calls |
 
 ---
 
-## 9. Distributed locks
+## 9. Locks: one worker at a time
 
-Use a lock when **only one worker at a time** may do something: run a nightly job, rebuild a cache, process a specific user's payout.
+**Problem:** you run 3 copies of your app. The "send daily report" job must run **once**, not three times.
+
+**Picture:** the key to the store room hangs on a hook. Whoever takes it goes in. Others wait until it's back. And the key **returns to the hook by itself** after 30 seconds, in case the person who took it faints inside.
+
+```text
+> SET lock:daily-report worker-1 NX EX 30
+OK
+> SET lock:daily-report worker-2 NX EX 30
+(nil)
+> GET lock:daily-report
+"worker-1"
+> TTL lock:daily-report
+(integer) 30
+```
+
+- `NX` = only if nobody holds it. Worker-2 got `(nil)`, so it must wait.
+- `EX 30` = the lock disappears after 30 seconds if worker-1 crashes.
+- The value (`worker-1`) says **who** holds the lock.
+
+### Why "who holds it" matters
+
+If you release with a plain `DEL`, this can happen:
 
 ```mermaid
 sequenceDiagram
     participant W1 as Worker 1
+    participant R as Redis
     participant W2 as Worker 2
-    participant Redis
-    W1->>Redis: SET lock:payout:42 token-A NX PX 30000
-    Redis-->>W1: OK (lock acquired)
-    W2->>Redis: SET lock:payout:42 token-B NX PX 30000
-    Redis-->>W2: nil (busy, retry later)
-    W1->>W1: do the work
-    W1->>Redis: release only if value == token-A (Lua)
-    Redis-->>W1: 1 (deleted)
-    W2->>Redis: SET lock:payout:42 token-B NX PX 30000
-    Redis-->>W2: OK
+    W1->>R: SET lock A NX EX 30 → OK
+    Note over W1: very slow, takes 40 s
+    Note over R: 30 s pass, the lock expires
+    W2->>R: SET lock B NX EX 30 → OK
+    W1->>R: DEL lock (wrong! deletes Worker 2's lock)
+    Note over R: now nobody is protected
 ```
 
-Three rules make a Redis lock safe enough:
-
-1. **Acquire atomically with a TTL**: `SET key token NX PX ttl`. The TTL frees the lock if the holder crashes.
-2. **Unique token per holder**, so you never delete someone else's lock.
-3. **Release with a compare-and-delete script**. A plain `DEL` could remove a lock that already expired and was taken by another worker.
+So release the lock **only if it still has your value**. That check-and-delete must be one step, so it's a tiny Lua script.
 
 ```python
-import random
-import time
 import uuid
 
 RELEASE = r.register_script("""
@@ -662,18 +915,17 @@ return 0
 class RedisLock:
     def __init__(self, client, name: str, ttl_ms: int = 30_000):
         self.r, self.key, self.ttl_ms = client, f"lock:{name}", ttl_ms
-        self.token = uuid.uuid4().hex
+        self.token = uuid.uuid4().hex                  # my private value
 
     def acquire(self, wait_s: float = 5.0) -> bool:
         deadline = time.monotonic() + wait_s
         while time.monotonic() < deadline:
             if self.r.set(self.key, self.token, nx=True, px=self.ttl_ms):
                 return True
-            time.sleep(0.05 + random.random() * 0.05)   # jittered retry
+            time.sleep(0.05 + random.random() * 0.05)  # try again soon
         return False
 
-    def extend(self) -> bool:
-        """Call periodically for long jobs (a 'watchdog')."""
+    def extend(self) -> bool:                          # for long jobs: "I'm still working"
         return EXTEND(keys=[self.key], args=[self.token, self.ttl_ms]) == 1
 
     def release(self) -> bool:
@@ -681,106 +933,152 @@ class RedisLock:
 
     def __enter__(self):
         if not self.acquire():
-            raise TimeoutError(f"could not acquire {self.key}")
+            raise TimeoutError(f"could not get {self.key}")
         return self
 
     def __exit__(self, *exc):
         self.release()
 
-with RedisLock(r, "payout:42"):
-    run_payout(42)
+a = RedisLock(r, "payout:asha")
+b = RedisLock(r, "payout:asha")
+print(a.acquire())             # True  (a holds it)
+print(b.acquire(wait_s=0.2))   # False (busy)
+print(b.release())             # False (b can't remove a's lock)
+print(a.release())             # True
+
+with RedisLock(r, "daily-report"):
+    print("sending the report, only one worker does this")
 ```
 
-`redis-py` also ships a ready-made lock: `with r.lock("payout:42", timeout=30, blocking_timeout=5): ...`.
+redis-py also has a ready-made lock that follows the same rules:
 
-**Know the limits.** A process can pause (GC, slow I/O) longer than the TTL, the lock expires, and a second worker enters. For correctness-critical work, pass a **fencing token** (an `INCR` number taken with the lock) to the database and reject writes with an older token, or rely on database constraints. Redlock (multiple independent Redis nodes) improves availability but does not remove this problem.
+```python
+with r.lock("daily-report", timeout=30, blocking_timeout=5):
+    send_daily_report()
+```
+
+> **Remember:** a Redis lock is "good enough" for avoiding duplicate work. For money and stock, also protect the data itself (database unique constraints, or a version number checked on write), because a very slow worker can still outlive its lock.
 
 ---
 
-## 10. Idempotency keys
+## 10. Idempotency: the double-click problem
 
-Clients retry. Networks drop replies. Webhooks are delivered twice. An **idempotency key** makes "do this once" safe to repeat.
+**Problem:** Asha taps "Pay ₹250". The network is slow, so she taps again. Or her phone retries automatically. Without protection she pays twice.
+
+**Fix:** the app sends a unique **idempotency key** with the payment (made once when the checkout screen opens). The server does the work only the **first** time it sees that key.
 
 ```mermaid
 flowchart TD
-    A["POST /payments<br/>Idempotency-Key: abc-123"] --> B{"SET idem:abc-123 in_progress NX EX 86400"}
-    B -- "OK (first time)" --> C["Run the payment"]
-    C --> D["Store result under idem:abc-123"]
-    D --> E["Return 200 + result"]
-    B -- "nil (seen before)" --> F{"Stored status?"}
-    F -- "in_progress" --> G["Return 409, still processing"]
-    F -- "done" --> H["Return the stored result, no second charge"]
+    A["POST /pay<br/>Idempotency-Key: pay-abc123"] --> B{"SET idem:pay-abc123 NX<br/>(first time?)"}
+    B -- "yes" --> C["Charge the card"]
+    C --> D["Save the result under the key"]
+    D --> E["Reply: paid"]
+    B -- "no, seen before" --> F{"Saved status?"}
+    F -- "still running" --> G["Reply 409: please wait"]
+    F -- "done" --> H["Reply with the saved result<br/>(no second charge)"]
 ```
 
 ```python
-import json
-
-def run_idempotent(idem_key: str, handler, ttl: int = 86_400):
+def run_once(idem_key: str, work, ttl: int = 86_400):
     key = f"idem:{idem_key}"
-    if r.set(key, json.dumps({"status": "in_progress"}), nx=True, ex=ttl):
+    if r.set(key, json.dumps({"status": "running"}), nx=True, ex=ttl):
         try:
-            result = handler()
+            result = work()
         except Exception:
-            r.delete(key)                    # let the client retry a failed attempt
+            r.delete(key)              # failed: allow a retry
             raise
         r.set(key, json.dumps({"status": "done", "result": result}), ex=ttl)
-        return 200, result
+        return result
 
-    saved = json.loads(r.get(key) or '{"status": "in_progress"}')
-    if saved["status"] == "in_progress":
-        return 409, {"detail": "request is already being processed"}
-    return 200, saved["result"]
+    saved = json.loads(r.get(key) or '{"status": "running"}')
+    if saved["status"] == "running":
+        return {"error": "already in progress, try again in a moment"}
+    return saved["result"]             # same answer as the first time
+
+charges = []
+def charge_card():
+    charges.append(250)
+    return {"paid": 250, "receipt": "R-1001"}
+
+print(run_once("pay-abc123", charge_card))   # {'paid': 250, 'receipt': 'R-1001'}
+print(run_once("pay-abc123", charge_card))   # same result again
+print("times charged:", len(charges))        # 1
 ```
 
-The same idea protects stream consumers from double processing (see [18.5](#185-no-duplicates-delivery-vs-processing)).
+The same idea stops a queue worker from doing the same job twice ([18.6](#186-can-work-happen-twice-and-how-to-stop-it)).
 
 ---
 
-## 11. Leaderboards, counters and analytics
+## 11. Leaderboards and counters
 
 ```python
-# Leaderboard
-r.zincrby("lb:2026-w41", 25, "player:7")
-top10 = r.zrevrange("lb:2026-w41", 0, 9, withscores=True)
-my_rank = r.zrevrank("lb:2026-w41", "player:7")          # 0-based
-around_me = r.zrevrange("lb:2026-w41", max(my_rank - 2, 0), my_rank + 2, withscores=True)
+# Top dishes this week
+r.zincrby("top:dishes:2026-w41", 1, "dosa")
+r.zincrby("top:dishes:2026-w41", 3, "idli")
+print(r.zrevrange("top:dishes:2026-w41", 0, 9, withscores=True))   # [('idli', 3.0), ('dosa', 1.0)]
 
-# Counters per time bucket (expire old buckets automatically)
-bucket = f"stats:signups:{time.strftime('%Y%m%d%H')}"
+# Orders per hour, each hour's counter deletes itself after 7 days
+hour_key = f"stats:orders:{time.strftime('%Y%m%d%H')}"
 pipe = r.pipeline()
-pipe.incr(bucket)
-pipe.expire(bucket, 7 * 86_400)
+pipe.incr(hour_key)
+pipe.expire(hour_key, 7 * 86_400)
 pipe.execute()
 
-# Unique counts at tiny memory
-r.pfadd("uv:article:55", "user:1")
-r.pfcount("uv:article:55")
-r.pfmerge("uv:article:55:week", "uv:article:55:d1", "uv:article:55:d2")
+# Unique visitors per day, and for the whole week
+r.pfadd("uv:mon", "asha", "ravi")
+r.pfadd("uv:tue", "asha", "meena")
+r.pfmerge("uv:week", "uv:mon", "uv:tue")
+print(r.pfcount("uv:week"))     # 3  (asha counted once)
 
-# "Did user X do Y today?" for millions of users
-r.setbit("active:2026-10-06", 123456, 1)
-r.getbit("active:2026-10-06", 123456)
-r.bitcount("active:2026-10-06")
+# Did user 123456 open the app today?
+r.setbit("active:2026-10-08", 123456, 1)
+print(r.getbit("active:2026-10-08", 123456))   # 1
+```
+
+Show a player's neighbours on a leaderboard ("you are 5th, here are 3rd to 7th"):
+
+```python
+for dish, score in {"vada": 10, "pongal": 7, "upma": 4, "poori": 2}.items():
+    r.zadd("top:dishes:2026-w41", {dish: score})
+rank = r.zrevrank("top:dishes:2026-w41", "upma")
+print(rank, r.zrevrange("top:dishes:2026-w41", max(rank - 2, 0), rank + 2, withscores=True))
+# 2 [('vada', 10.0), ('pongal', 7.0), ('upma', 4.0), ('idli', 3.0), ('poori', 2.0)]
 ```
 
 ---
 
-## 12. Delayed jobs with sorted sets
+## 12. Delayed jobs: "do this later"
 
-Streams and lists have no built-in "run later". A sorted set with **score = run-at timestamp** gives you a delayed queue. A small mover process pushes due jobs into a stream for normal workers.
+**Problem:** "Send Asha a feedback request 1 hour after delivery." Lists and streams have no "run later" option.
+
+**Picture:** a tray of reminder cards **sorted by time**. Every second, someone takes out the cards whose time has come and puts them in the kitchen queue.
+
+A sorted set does this: the **score is the time** the job should run.
+
+```text
+# scores are run-at times (small numbers to keep it readable)
+> ZADD reminders 1000 call-asha 3000 send-invoice 2000 check-stock
+(integer) 3
+# it is now time 2500: which jobs are due?
+> ZRANGEBYSCORE reminders -inf 2500
+1) "call-asha"
+2) "check-stock"
+> ZREM reminders call-asha check-stock
+(integer) 2
+> ZRANGE reminders 0 -1 WITHSCORES
+1) "send-invoice"
+2) "3000"
+```
 
 ```mermaid
 flowchart LR
-    APP["App: schedule(job, delay)"] -- "ZADD score = now + delay" --> Z[("ZSET delayed:orders")]
-    MOVER["Mover loop every 1 s"] -- "Lua: take due items" --> Z
-    MOVER -- "XADD (same script)" --> S[("Stream orders")]
-    S --> WK["Consumer group workers"]
+    APP["App: schedule(job, in 1 hour)"] -- "ZADD score = now + 3600" --> Z[("delayed:orders<br/>sorted by time")]
+    MOVER["Mover loop, every second"] -- "take due jobs (Lua)" --> Z
+    MOVER -- "add them to the stream (same Lua)" --> S[("Stream: orders")]
+    S --> W["Kitchen workers"]
 ```
 
 ```python
-import json
-import time
-
 MOVE_DUE = r.register_script("""
 local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
 for _, job in ipairs(due) do
@@ -791,92 +1089,193 @@ return #due
 """)
 
 def schedule(job: dict, delay_s: float) -> None:
-    # ZSET members are unique, so every job needs its own id
+    # every job needs its own event_id, because sorted-set members are unique
     r.zadd("delayed:orders", {json.dumps(job, sort_keys=True): time.time() + delay_s})
 
+schedule({"event_id": "evt-1", "type": "feedback_request", "user": "asha"}, delay_s=0)
+schedule({"event_id": "evt-2", "type": "feedback_request", "user": "ravi"}, delay_s=3600)
+moved = MOVE_DUE(keys=["delayed:orders", "orders"], args=[time.time(), 100])
+print("moved now:", moved, "| still waiting:", r.zcard("delayed:orders"))   # moved now: 1 | still waiting: 1
+```
+
+The mover runs forever in its own small process:
+
+```python
 def mover_loop() -> None:
     while True:
         moved = MOVE_DUE(keys=["delayed:orders", "orders"], args=[time.time(), 100])
         if not moved:
             time.sleep(1)
-
-schedule({"event_id": "evt-1", "type": "reminder_email", "user": 42}, delay_s=3600)
 ```
 
-Because the move happens in one Lua script, a job is never lost or duplicated between the ZSET and the stream. The job lands in the stream as a `data` field holding JSON, the same message format used in the Streams section. This is also how you build **retry with exponential backoff** for stream messages ([18.13](#1813-retries-with-backoff)).
+Because "take from the tray" and "add to the stream" happen in one Lua script, a job can never be lost or moved twice in between. The same trick gives you **retries with growing wait times** ([18.10](#1810-retry-later-with-growing-waits)).
 
 ---
 
-# Part 3 — Atomicity and performance
+# Part 3 — Safe and fast
 
-## 13. The single-threaded model
+## 13. One cashier: how Redis runs commands
 
-Redis executes commands **one at a time** on a single main thread (network I/O can use extra threads in Redis 6+, but command execution is serial).
+**Picture:** a shop with **one very fast cashier**. Customers line up and the cashier serves them one at a time, finishing each before starting the next.
 
 ```mermaid
 flowchart LR
-    C1["Client A: INCR x"] --> Q["Command queue"]
-    C2["Client B: GET y"] --> Q
-    C3["Client C: HSET z ..."] --> Q
-    Q --> T["Single execution thread<br/>runs one command fully,<br/>then the next"]
-    T --> M[("In-memory data")]
+    C1["Client A: INCR orders:count"] --> Q["Waiting line"]
+    C2["Client B: GET menu"] --> Q
+    C3["Client C: HSET user:1 ..."] --> Q
+    Q --> T["One cashier<br/>runs one command fully,<br/>then the next"]
+    T --> M[("Data in memory")]
 ```
 
 What this means for you:
 
-- **Every single command is atomic.** Two clients doing `INCR` at once never lose an update. No locks needed for single-command logic.
-- **One slow command blocks everyone.** `KEYS *`, `HGETALL` on a 1M-field hash, `SMEMBERS` on a huge set, `DEL` of a giant key, or a long Lua script all freeze every other client while they run.
-- Multi-step logic ("read, decide, write") is **not** atomic across commands. Use `MULTI`/`WATCH` or a Lua script.
+- **Good:** every single command is safe on its own. Two apps running `INCR` at the same time never lose a count. No locks needed for one-command logic.
+- **Bad:** one slow command makes **everyone** wait. `KEYS *` on 10 million keys, `HGETALL` on a giant hash, or `DEL` of a huge list freezes the whole server while it runs.
+- **Careful:** several commands in a row are **not** one safe step. Between your `GET` and your `SET`, another client can change the value. For "read, decide, write", use a transaction ([15](#15-transactions-multi-exec-and-watch)) or a Lua script ([16](#16-lua-scripts-small-programs-inside-redis)).
 
 ---
 
-## 14. Pipelining
+## 14. Pipeline: one trip instead of many
 
-Each command costs one network round trip. With 1 ms between your app and Redis, 100 commands take ~100 ms. A pipeline sends them all at once and reads all replies together.
+**Picture:** a waiter carrying plates. Walking to the table once per plate is slow. Carrying all the plates on one tray is fast.
+
+Each command normally needs a full trip over the network: send, wait, receive. A **pipeline** sends many commands together and reads all the answers together.
 
 ```mermaid
 sequenceDiagram
     participant App
     participant Redis
-    Note over App,Redis: Without pipeline, 3 round trips
+    Note over App,Redis: Without pipeline: 3 trips
     App->>Redis: SET a 1
     Redis-->>App: OK
     App->>Redis: SET b 2
     Redis-->>App: OK
     App->>Redis: SET c 3
     Redis-->>App: OK
-    Note over App,Redis: With pipeline, 1 round trip
+    Note over App,Redis: With pipeline: 1 trip
     App->>Redis: SET a 1, SET b 2, SET c 3
     Redis-->>App: OK, OK, OK
 ```
 
 ```python
-pipe = r.pipeline(transaction=False)      # plain pipeline, no MULTI/EXEC
-for user_id in user_ids:
+r.hset("user:1", "name", "Asha")
+r.hset("user:2", "name", "Ravi")
+r.hset("user:3", "name", "Meena")
+
+pipe = r.pipeline(transaction=False)    # just batching, no transaction
+for user_id in [1, 2, 3]:
     pipe.hget(f"user:{user_id}", "name")
-names = pipe.execute()                    # list of results in the same order
+names = pipe.execute()                  # answers come back in the same order
+print(names)                            # ['Asha', 'Ravi', 'Meena']
 ```
 
-Pipelines are about **speed**, not atomicity: other clients' commands can run between yours. Keep batches to a few hundred or thousand commands to bound memory.
+How much faster? This small script ran on one machine, talking to Redis on the same machine:
+
+```python
+import time
+import redis
+
+r = redis.Redis(decode_responses=True)
+N = 2_000
+
+start = time.perf_counter()
+for i in range(N):
+    r.set(f"bench:{i}", i)
+one_by_one = time.perf_counter() - start
+
+start = time.perf_counter()
+pipe = r.pipeline(transaction=False)
+for i in range(N):
+    pipe.set(f"bench:{i}", i)
+pipe.execute()
+pipelined = time.perf_counter() - start
+
+print(f"{N} SETs one by one : {one_by_one * 1000:7.1f} ms")
+print(f"{N} SETs in pipeline: {pipelined * 1000:7.1f} ms")
+print(f"pipeline was {one_by_one / pipelined:.0f}x faster")
+r.delete(*[f"bench:{i}" for i in range(N)])
+```
+
+Real output:
+
+```text
+2000 SETs one by one :   200.0 ms
+2000 SETs in pipeline:    19.0 ms
+pipeline was 11x faster
+```
+
+Across a real network (1 ms per trip), the gap is much bigger: 2,000 trips take 2 seconds, but one pipeline takes a few milliseconds.
+
+> **Remember:** a pipeline is about **speed**, not safety. Other clients' commands can still run between yours. Send batches of hundreds or a few thousand commands, not millions at once.
 
 ---
 
-## 15. Transactions: MULTI/EXEC and WATCH
+## 15. Transactions: MULTI, EXEC and WATCH
 
-`MULTI ... EXEC` queues commands and runs them **back-to-back** with nothing in between. In `redis-py`, `r.pipeline()` (default `transaction=True`) wraps commands in `MULTI`/`EXEC`.
+### MULTI / EXEC: "run these together, with nothing in between"
 
-```python
-pipe = r.pipeline()                        # transaction=True by default
-pipe.decrby("wallet:42", 100)
-pipe.incrby("wallet:99", 100)
-pipe.execute()                             # both run together
+**Picture:** you hand the cashier a list. They put it aside (`QUEUED`) and, when you say "go" (`EXEC`), they do the whole list without serving anyone else in between.
+
+```text
+> SET stock:dosa 5
+OK
+> MULTI
+OK
+> DECRBY stock:dosa 2
+QUEUED
+> INCR orders:count
+QUEUED
+> EXEC
+1) (integer) 3
+2) (integer) 1
 ```
 
-Important: Redis transactions have **no rollback**. If one command fails at runtime (e.g. `INCR` on a non-number), the others still apply.
+**Important: there is no rollback.** If one command in the list fails, the others still happen:
 
-### Optimistic locking with WATCH
+```text
+> MULTI
+OK
+> INCR stock:dosa
+QUEUED
+> HSET stock:dosa x 1
+QUEUED
+> EXEC
+1) (integer) 4
+2) (error) WRONGTYPE Operation against a key holding the wrong kind of value
+> GET stock:dosa
+"4"
+```
 
-`WATCH` a key, read it, decide, then `MULTI`/`EXEC`. If anyone changed the key in between, `EXEC` aborts and you retry.
+The `INCR` happened even though the `HSET` failed. (These must be typed in one `redis-cli` session, because a transaction belongs to one connection.)
+
+In Python, `r.pipeline()` is a transaction by default:
+
+```python
+r.set("wallet:asha", 500)
+r.set("wallet:ravi", 0)
+
+pipe = r.pipeline()                 # transaction=True by default → MULTI ... EXEC
+pipe.decrby("wallet:asha", 100)
+pipe.incrby("wallet:ravi", 100)
+print(pipe.execute())               # [400, 100]
+```
+
+### WATCH: "only if nobody changed it while I was deciding"
+
+**Picture:** you look at the last packet of biscuits on the shelf and decide to buy it. If someone else grabs it before you reach the counter, your purchase is cancelled and you look again.
+
+```mermaid
+sequenceDiagram
+    participant A as Asha's request
+    participant R as Redis
+    participant B as Ravi's request
+    A->>R: WATCH stock:dosa
+    A->>R: GET stock:dosa → 1
+    B->>R: DECR stock:dosa → 0 (Ravi buys first)
+    A->>R: MULTI, DECR stock:dosa, EXEC
+    R-->>A: nil (cancelled: the value changed)
+    A->>R: try again: GET → 0, out of stock
+```
 
 ```python
 def buy_with_watch(sku: str, qty: int) -> bool:
@@ -884,846 +1283,1250 @@ def buy_with_watch(sku: str, qty: int) -> bool:
     with r.pipeline() as pipe:
         while True:
             try:
-                pipe.watch(key)                    # immediate mode: commands run now
-                stock = int(pipe.get(key) or 0)
+                pipe.watch(key)                    # 1. watch the key
+                stock = int(pipe.get(key) or 0)    # 2. read it
                 if stock < qty:
                     pipe.unwatch()
-                    return False
-                pipe.multi()                       # start buffering the transaction
+                    return False                   # not enough stock
+                pipe.multi()                       # 3. start the transaction
                 pipe.decrby(key, qty)
-                pipe.execute()                     # raises WatchError if key changed
+                pipe.execute()                     # 4. fails if the key changed
                 return True
             except redis.WatchError:
-                continue                           # someone else bought, retry
+                continue                           # someone changed it: try again
+
+r.set("stock:vada", 3)
+print(buy_with_watch("vada", 2), buy_with_watch("vada", 2), buy_with_watch("vada", 1))
+# True False True
 ```
 
-Under heavy contention `WATCH` retries a lot. A Lua script is usually simpler and faster.
+When many users fight over the same key, `WATCH` retries a lot. A Lua script is usually simpler.
 
 ---
 
-## 16. Lua scripts
+## 16. Lua scripts: small programs inside Redis
 
-A Lua script runs **atomically on the server**: no other command runs until it finishes. It is the cleanest way to do "check then act" in one step.
+**Picture:** instead of asking the cashier five separate questions, you hand them a **written recipe**. They follow it from start to finish without serving anyone else.
+
+A Lua script runs **inside Redis as one uninterruptible step**. It is the cleanest way to do "check, then change".
+
+You can try one straight from `redis-cli`:
+
+```text
+> SET stock:dosa 3
+OK
+# EVAL "script" <number of keys> <keys...> <args...>
+> EVAL "local s = tonumber(redis.call('GET', KEYS[1])) if s < tonumber(ARGV[1]) then return -1 end return redis.call('DECRBY', KEYS[1], ARGV[1])" 1 stock:dosa 2
+(integer) 1
+> EVAL "local s = tonumber(redis.call('GET', KEYS[1])) if s < tonumber(ARGV[1]) then return -1 end return redis.call('DECRBY', KEYS[1], ARGV[1])" 1 stock:dosa 2
+(integer) -1
+```
+
+The first buy left 1 dosa. The second asked for 2, so the script returned `-1` and changed nothing.
+
+The same thing in Python, written nicely:
 
 ```python
 BUY = r.register_script("""
 local stock = tonumber(redis.call('GET', KEYS[1]) or '0')
 local qty   = tonumber(ARGV[1])
 if stock < qty then
-  return -1
+  return -1                                  -- not enough, change nothing
 end
-return redis.call('DECRBY', KEYS[1], qty)
+return redis.call('DECRBY', KEYS[1], qty)    -- take them, return what's left
 """)
 
-remaining = BUY(keys=["stock:sku-1"], args=[2])
-if remaining == -1:
-    print("out of stock")
+r.set("stock:idli", 3)
+print(BUY(keys=["stock:idli"], args=[2]))    # 1   (1 left)
+print(BUY(keys=["stock:idli"], args=[2]))    # -1  (not enough)
 ```
 
-`register_script` uses `EVALSHA` (sends only the script's hash) and falls back to `EVAL` automatically if the server doesn't have it cached yet.
+Two customers can never both take the last item, because nothing runs between the check and the change.
 
-Rules for scripts:
+**Rules for scripts**
 
-- Pass **every key** the script touches in `KEYS`, never build key names inside the script. Redis Cluster needs this to route the script, and all keys must be in the same slot.
-- Keep scripts short. A long script blocks the whole server like any slow command.
-- Return values convert: Lua number → integer (decimals are truncated, return `tostring(x)` for floats), Lua table → array, `false` → nil.
-- Scripts are not persisted. After a restart or failover, `register_script` reloads them for you.
-- **Redis Functions** (Redis 7+, `FUNCTION LOAD` / `FCALL`) are the persistent, named version of scripts. They are stored with the data and replicated, which suits shared libraries of server-side logic.
+- Pass **every key** the script uses in `KEYS`. Don't build key names inside the script (Redis Cluster needs to know the keys up front).
+- Keep scripts short. A long script blocks everyone, like any slow command.
+- Numbers: Lua decimals are cut to whole numbers when returned. Return `tostring(x)` if you need decimals.
+- `register_script` sends the script once and afterwards only its short fingerprint (SHA), so it's cheap to call often.
+- **Redis Functions** (`FUNCTION LOAD` / `FCALL`, Redis 7+) are named scripts that Redis stores permanently. Useful when many services share the same logic.
 
-### When to use what
+### Which tool when?
 
-| Need | Tool |
+| You need | Use |
 |---|---|
-| Many independent commands, fast | Pipeline (`transaction=False`) |
-| Several writes that must run together | `MULTI`/`EXEC` |
-| Read, decide, write with low contention | `WATCH` + `MULTI`/`EXEC` |
-| Read, decide, write, any contention | Lua script |
+| Many independent commands, quickly | Pipeline |
+| A few writes that must happen together | `MULTI` / `EXEC` |
+| Read → decide → write, little competition | `WATCH` + `MULTI` / `EXEC` |
+| Read → decide → write, any amount of competition | Lua script |
 
 ---
 
-# Part 4 — Messaging
+# Part 4 — Messages and queues
 
-## 17. Pub/Sub
+## 17. Pub/Sub: the loudspeaker
 
-Publish/Subscribe is **fire-and-forget broadcast**. A message goes to every client subscribed to the channel **at that moment**, and is not stored anywhere.
+**In one line:** Pub/Sub sends a message to everyone who is listening **right now**. Nothing is saved.
+
+**Picture:** an announcement on the shop loudspeaker. Everyone inside hears it. Anyone who walks in a minute later missed it forever.
 
 ```mermaid
 flowchart LR
-    PUB["Publisher<br/>PUBLISH notifications:user:42"] --> CH(("Channel"))
-    CH --> S1["Subscriber A (online)<br/>receives it"]
-    CH --> S2["Subscriber B (online)<br/>receives it"]
-    CH -. "not delivered" .-> S3["Subscriber C (offline)<br/>misses it forever"]
+    PUB["App: PUBLISH order:42:status 'ready'"] --> CH(("Channel"))
+    CH --> S1["Asha's phone (connected)<br/>gets it"]
+    CH --> S2["Admin dashboard (connected)<br/>gets it"]
+    CH -. "missed" .-> S3["Asha's laptop (offline)<br/>never sees it"]
 ```
+
+When nobody is listening, the message just disappears. `PUBLISH` tells you how many listeners received it:
+
+```text
+> PUBLISH order:42:status ready
+(integer) 0
+```
+
+`0` listeners, so the message is gone.
+
+In Python:
 
 ```python
-import json
+listener = r.pubsub(ignore_subscribe_messages=True)
+listener.subscribe("order:42:status")          # start listening
+listener.get_message(timeout=1)                 # wait until the subscription is confirmed
 
-# Publisher (anywhere in your app)
-r.publish("notifications:user:42", json.dumps({"text": "Your order shipped"}))
+receivers = r.publish("order:42:status", "ready")
+print("received by", receivers, "listener(s)")  # received by 1 listener(s)
 
-# Subscriber (a long-running loop in its own thread or process)
-p = r.pubsub(ignore_subscribe_messages=True)
-p.subscribe("notifications:user:42")
-p.psubscribe("notifications:*")              # pattern subscription
-for msg in p.listen():
-    print(msg["channel"], json.loads(msg["data"]))
+msg = listener.get_message(timeout=1)
+print(msg["channel"], msg["data"])              # order:42:status ready
+listener.close()
 ```
 
-Async version, e.g. to push events to WebSocket clients connected to this server:
+A real listener runs forever in its own thread or process:
+
+```python
+listener = r.pubsub(ignore_subscribe_messages=True)
+listener.psubscribe("order:*:status")           # pattern: all orders
+for msg in listener.listen():
+    print("update:", msg["channel"], msg["data"])
+```
+
+Async version, for pushing updates to a browser over WebSocket:
 
 ```python
 import redis.asyncio as aioredis
 
-r = aioredis.Redis(decode_responses=True)
+ar = aioredis.Redis(decode_responses=True)
 
-async def events_for(user_id: int):
-    pubsub = r.pubsub(ignore_subscribe_messages=True)
-    await pubsub.subscribe(f"notifications:user:{user_id}")
+async def updates_for(order_id: int):
+    pubsub = ar.pubsub(ignore_subscribe_messages=True)
+    await pubsub.subscribe(f"order:{order_id}:status")
     try:
         async for msg in pubsub.listen():
-            yield msg["data"]                # e.g. await websocket.send_text(...)
+            yield msg["data"]               # e.g. await websocket.send_text(msg["data"])
     finally:
         await pubsub.unsubscribe()
         await pubsub.aclose()
 ```
 
-Good for: live notifications to connected users, chat typing indicators, broadcasting cache-invalidation or config-reload signals to all app servers.
+| Good for | Not good for |
+|---|---|
+| "Your order is ready" pop-ups for people online | Orders, payments, emails: anything that must not be lost |
+| Live dashboards, typing indicators | Work that needs retries |
+| Telling all app servers "reload settings" | Anyone who might be offline |
 
-Not good for: anything that must not be lost (orders, payments, emails). There are no acks, no retries and no history. A slow subscriber can even be disconnected when its output buffer fills (`client-output-buffer-limit pubsub`). In Redis Cluster, prefer **sharded Pub/Sub** (`SPUBLISH`/`SSUBSCRIBE`, Redis 7+) so messages don't get copied to every node.
+In Redis Cluster, use **sharded Pub/Sub** (`SPUBLISH` / `SSUBSCRIBE`) so messages aren't copied to every server.
 
-When you need durability, use Streams.
+When a message must not be lost, use Streams.
 
 ---
 
-## 18. Redis Streams deep dive
+## 18. Streams: the kitchen order rail
 
-Streams give you a **durable, append-only log** plus **consumer groups** that share work between workers with acknowledgements and retries. This is the Redis answer to "a reliable job/event queue".
+**In one line:** a stream is a list of messages that **stays saved**, and a **consumer group** lets many workers share the work, with "done" receipts and automatic retries.
 
-### 18.1 Mental model
+This is how Tiffin Express sends orders to the kitchen without ever losing one.
+
+### 18.1 The picture and the words
+
+Imagine the order rail in a restaurant kitchen. Waiters clip tickets to the rail. Cooks take tickets, cook, and mark them done.
 
 ```mermaid
 flowchart LR
-    P["Producers<br/>XADD"] --> S
-    subgraph S ["Stream: orders (append-only log)"]
+    APP["App<br/>XADD"] --> RAIL
+    subgraph RAIL ["Stream 'orders' = the rail"]
         direction LR
-        E1["1-0"] --- E2["2-0"] --- E3["3-0"] --- E4["4-0"] --- E5["5-0"] --- E6["6-0"]
+        T1["1-0 tea"] --- T2["2-0 coffee"] --- T3["3-0 dosa"] --- T4["4-0 vada"]
     end
-    subgraph G ["Consumer group: order-workers"]
-        LD["last-delivered-id = 5-0<br/>(6-0 not delivered yet)"]
-        PEL["Pending Entries List (PEL)<br/>4-0 owner worker-B, delivered 1x<br/>5-0 owner worker-A, delivered 2x"]
+    subgraph TEAM ["Consumer group 'kitchen' = the cooking team"]
+        PEL["Pending list:<br/>tickets taken but not done yet"]
     end
-    S --> G
-    G -- "XREADGROUP" --> A["worker-A"]
-    G -- "XREADGROUP" --> B["worker-B"]
-    G -- "XREADGROUP" --> C["worker-C"]
-    A & B & C -- "XACK" --> PEL
+    RAIL --> TEAM
+    TEAM -- "XREADGROUP" --> RAVI["Cook Ravi"]
+    TEAM -- "XREADGROUP" --> MEENA["Cook Meena"]
+    RAVI & MEENA -- "XACK = done" --> PEL
 ```
 
-The vocabulary:
+| Word | Kitchen picture | What it really is |
+|---|---|---|
+| **Stream** | The order rail | A saved, append-only list of messages under one key |
+| **Entry / message** | One ticket | A small set of fields, e.g. `item tea` |
+| **Entry ID** | Ticket number | `time-sequence`, e.g. `1791284113066-0`. Always increasing. |
+| **Consumer group** | The cooking team | A named reader that remembers which tickets it has handed out |
+| **Consumer** | One cook | A named worker in the group (one per running process) |
+| **Pending list (PEL)** | Tickets a cook took but hasn't finished | Messages delivered but not yet acknowledged |
+| **XACK** | "Done!" | Removes the message from the pending list |
+| **Delivery count** | How many times a ticket was handed out | Goes up on every redelivery; used to spot bad tickets |
 
-| Term | Meaning |
-|---|---|
-| **Stream** | An append-only log stored under one key. Entries are small field-value maps. |
-| **Entry ID** | `<milliseconds-timestamp>-<sequence>`, e.g. `1791284113066-7`. Always increasing, so IDs double as time. |
-| **Consumer group** | A named reader of the stream with its own cursor (`last-delivered-id`). Many groups can read the same stream independently. |
-| **Consumer** | A named worker inside a group. Created automatically the first time it calls `XREADGROUP`. |
-| **PEL** | Pending Entries List: messages delivered to a consumer but **not yet acknowledged**. Each record stores the owner, the idle time and the delivery count. |
-| **ACK** | `XACK` removes a message from the PEL: "done, don't give this to anyone again". |
+Two facts to remember:
 
-Two properties to remember:
+1. **Reading doesn't remove a ticket from the rail.** Messages stay in the stream after they're read and acked. You clean up old ones by trimming ([18.13](#1813-the-rail-never-empties-by-itself)).
+2. **Inside one team, each ticket goes to one cook. Different teams each get every ticket** ([18.11](#1811-two-teams-on-the-same-rail-fan-out)).
 
-- **Reading does not delete.** Unlike `LPOP`, entries stay in the stream after they are read and acked. You remove old entries by trimming ([18.14](#1814-retention-and-trimming)).
-- **Groups share work, separate groups each get everything.** Inside one group, each message goes to one consumer. Different groups each see every message (fan-out, [18.11](#1811-fan-out-with-multiple-groups)).
-
-### 18.2 Message lifecycle
+### 18.2 The life of one ticket
 
 ```mermaid
 stateDiagram-v2
-    state "In stream, not yet delivered" as New
-    state "Pending (in PEL, owned by one consumer)" as Pending
-    state "Acknowledged" as Acked
-    state "Dead-letter stream" as Dead
+    state "On the rail, not given to anyone yet" as New
+    state "Pending: a cook has it" as Pending
+    state "Done (acknowledged)" as Done
+    state "Dead-letter stream (problem tickets)" as Dead
     [*] --> New: XADD
-    New --> Pending: XREADGROUP with id >
-    Pending --> Acked: XACK after successful work
-    Pending --> Pending: consumer crashed or too slow, XAUTOCLAIM gives it to another consumer
-    Pending --> Dead: delivery count above limit
-    Dead --> Acked: XACK the original
-    Acked --> [*]: removed later by XTRIM / MAXLEN
+    New --> Pending: a cook reads it with XREADGROUP >
+    Pending --> Done: cook finishes and sends XACK
+    Pending --> Pending: cook crashed or too slow, another cook takes it (XAUTOCLAIM)
+    Pending --> Dead: failed too many times
+    Done --> [*]: removed later by trimming
 ```
 
-### 18.3 Command reference
+### 18.3 Try it step by step in redis-cli
 
-| Command | What it does |
-|---|---|
-| `XADD key [MAXLEN ~ n] * f v ...` | Append an entry. `*` = auto-generate ID. Optional trimming. |
-| `XLEN key` | Number of entries. |
-| `XRANGE key - + [COUNT n]` | Read entries by ID range (no group, no tracking). |
-| `XREAD [BLOCK ms] STREAMS key id` | Read without a group (every reader sees everything, nothing is tracked). |
-| `XGROUP CREATE key group id [MKSTREAM]` | Create a group. `$` = only new entries, `0` = from the beginning. |
-| `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key id` | Read as consumer `c` of group `g`. `>` = new messages, `0` = my own pending messages. |
-| `XACK key group id [id ...]` | Acknowledge, removing from the PEL. |
-| `XPENDING key group` | Summary: total pending, min/max ID, count per consumer. |
-| `XPENDING key group [IDLE ms] - + count [consumer]` | Detail: ID, owner, idle ms, delivery count. |
-| `XCLAIM key group c min-idle id ...` | Take specific pending messages. `JUSTID` resets idle without counting a delivery. |
-| `XAUTOCLAIM key group c min-idle start [COUNT n]` | Scan the PEL and take messages idle longer than `min-idle`. |
-| `XINFO STREAM / GROUPS / CONSUMERS` | Introspection: length, lag, pending, idle times. |
-| `XTRIM key MAXLEN ~ n` / `MINID ~ id` | Retention by count or by age. |
-| `XDEL key id` | Delete specific entries. |
-| `XGROUP SETID key group id` | Move a group's cursor (replay or skip). |
-| `XGROUP DELCONSUMER key group c` | Remove a consumer **and drop its pending entries**. |
-| `XGROUP DESTROY key group` | Delete a group. |
+We use small ticket ids (`1-0`, `2-0`, ...) so the output is easy to read. In real apps you write `*` and Redis creates the id from the current time.
 
-Special IDs at a glance:
+**Step 1 — create the team and put 4 orders on the rail**
 
-| ID | Where | Meaning |
-|---|---|---|
-| `*` | `XADD` | Generate the ID for me |
-| `$` | `XGROUP CREATE`, `XREAD` | "Only things added after now" |
-| `0` or `0-0` | `XGROUP CREATE` | Start from the very first entry |
-| `>` | `XREADGROUP` | Messages never delivered to anyone in this group |
-| `0` | `XREADGROUP` | My own pending messages (history), for recovery after restart |
-| `-` / `+` | ranges | Smallest / largest possible ID |
+```text
+# $ = the team only cares about orders added from now on. MKSTREAM = create the stream if missing.
+> XGROUP CREATE orders kitchen $ MKSTREAM
+OK
+> XADD orders 1-0 item tea
+"1-0"
+> XADD orders 2-0 item coffee
+"2-0"
+> XADD orders 3-0 item dosa
+"3-0"
+> XADD orders 4-0 item vada
+"4-0"
+```
 
-### First steps in Python
+**Step 2 — two cooks take work**
+
+```text
+# ">" = give me tickets nobody in my team has taken yet
+> XREADGROUP GROUP kitchen ravi COUNT 2 STREAMS orders >
+1) 1) "orders"
+   2) 1) 1) "1-0"
+         2) 1) "item"
+            2) "tea"
+      2) 1) "2-0"
+         2) 1) "item"
+            2) "coffee"
+> XREADGROUP GROUP kitchen meena COUNT 2 STREAMS orders >
+1) 1) "orders"
+   2) 1) 1) "3-0"
+         2) 1) "item"
+            2) "dosa"
+      2) 1) "4-0"
+         2) 1) "item"
+            2) "vada"
+# Ravi asks again: nothing new is left
+> XREADGROUP GROUP kitchen ravi COUNT 2 STREAMS orders >
+(nil)
+```
+
+Ravi got tea and coffee. Meena got dosa and vada. **Nobody got the same ticket.** Redis hands tickets out one request at a time, so this is guaranteed with no locks.
+
+**Step 3 — cooks finish and say "done"**
+
+```text
+# Ravi made the tea. Meena made the dosa and vada.
+> XACK orders kitchen 1-0
+(integer) 1
+> XACK orders kitchen 3-0 4-0
+(integer) 2
+# Summary: how many unfinished tickets, and who holds them?
+> XPENDING orders kitchen
+1) (integer) 1
+2) "2-0"
+3) "2-0"
+4) 1) 1) "ravi"
+      2) "1"
+# Details: ticket id, who holds it, milliseconds since it was handed out, delivery count
+> XPENDING orders kitchen - + 10
+1) 1) "2-0"
+   2) "ravi"
+   3) (integer) 19
+   4) (integer) 1
+```
+
+Only the coffee (`2-0`) is unfinished. Ravi took it but never said done. **Then Ravi's process crashes.** The coffee is not lost: it stays in the pending list with Ravi's name on it. There are two ways to recover it.
+
+**Step 4a — Ravi restarts with the same name and finishes his own leftovers**
+
+Reading with id `0` instead of `>` means "show me **my** unfinished tickets".
+
+```text
+> XREADGROUP GROUP kitchen ravi STREAMS orders 0
+1) 1) "orders"
+   2) 1) 1) "2-0"
+         2) 1) "item"
+            2) "coffee"
+```
+
+**Step 4b — or Ravi never comes back, so Meena takes over**
+
+(Here, Ravi re-read the coffee in step 4a and then crashed again.)
+
+`XAUTOCLAIM` means: "give me tickets that nobody has touched for at least N milliseconds". In a real app N would be something like `60000` (one minute). We use `0` here so we don't have to wait.
+
+```text
+> XAUTOCLAIM orders kitchen meena 0 0-0
+1) "0-0"
+2) 1) 1) "2-0"
+      2) 1) "item"
+         2) "coffee"
+3) (empty array)
+> XPENDING orders kitchen - + 10
+1) 1) "2-0"
+   2) "meena"
+   3) (integer) 3
+   4) (integer) 3
+```
+
+The coffee now belongs to Meena, and its delivery count went up (1 → 2 when Ravi re-read it, 2 → 3 when Meena claimed it). The delivery count is how you spot a ticket that keeps failing ([18.9](#189-bad-tickets-poison-messages)).
+
+**Step 5 — Meena finishes it**
+
+```text
+> XACK orders kitchen 2-0
+(integer) 1
+> XPENDING orders kitchen
+1) (integer) 0
+2) (nil)
+3) (nil)
+4) (nil)
+# the tickets are still on the rail, even though all are done
+> XLEN orders
+(integer) 4
+```
+
+**Step 6 — look at the team's status**
+
+```text
+> XINFO GROUPS orders
+1)  1) "name"
+    2) "kitchen"
+    3) "consumers"
+    4) (integer) 2
+    5) "pending"
+    6) (integer) 0
+    7) "last-delivered-id"
+    8) "4-0"
+    9) "entries-read"
+   10) (integer) 4
+   11) "lag"
+   12) (integer) 0
+```
+
+The useful fields: `pending` (unfinished tickets), `last-delivered-id` (the last ticket handed out) and `lag` (tickets on the rail that nobody has taken yet).
+
+### 18.4 The same thing in Python
+
+In this guide each message has one field, `data`, holding JSON. Each order also gets an `event_id` made by the app (you'll see why in [18.6](#186-can-work-happen-twice-and-how-to-stop-it)).
 
 ```python
-import json
-import redis
+STREAM, GROUP = "orders:py", "kitchen"
 
-r = redis.Redis(decode_responses=True)
-STREAM, GROUP = "orders", "order-workers"
-
-# 1. Create the group once (idempotent)
+# 1. Create the team once. Running this again is harmless.
 try:
     r.xgroup_create(STREAM, GROUP, id="$", mkstream=True)
 except redis.ResponseError as e:
-    if "BUSYGROUP" not in str(e):           # BUSYGROUP = group already exists
+    if "BUSYGROUP" not in str(e):      # BUSYGROUP = the group already exists
         raise
 
-# 2. Produce. Convention used in this guide: one field "data" holding JSON,
-#    with a producer-generated event_id for idempotency.
-msg_id = r.xadd(STREAM, {"data": json.dumps({"event_id": "evt-1001", "order_id": 1001, "amount": 499})},
-                maxlen=1_000_000, approximate=True)
+# 2. The app adds orders
+for n, dish in enumerate(["tea", "coffee", "dosa"], start=1):
+    order = {"event_id": f"evt-{n}", "order_id": n, "dish": dish}
+    r.xadd(STREAM, {"data": json.dumps(order)}, maxlen=1_000_000, approximate=True)
 
-# 3. Consume as worker-1
-resp = r.xreadgroup(GROUP, "worker-1", {STREAM: ">"}, count=10, block=5000)
-# resp == [['orders', [('1791284113066-0', {'data': '{"event_id": ...}'})]]]   or [] on timeout
-for _stream, messages in resp:
+# 3. A cook reads and finishes work
+reply = r.xreadgroup(GROUP, "ravi", {STREAM: ">"}, count=2, block=2000)
+# reply looks like: [['orders:py', [('1791...-0', {'data': '{"event_id": "evt-1", ...}'}), ...]]]
+for _stream, messages in reply:
     for msg_id, fields in messages:
         order = json.loads(fields["data"])
-        # ... do the work ...
-        r.xack(STREAM, GROUP, msg_id)
+        print("ravi cooks", order["dish"])
+        r.xack(STREAM, GROUP, msg_id)          # only after the work is really done
 
-# 4. Inspect pending
-r.xpending(STREAM, GROUP)
-# {'pending': 0, 'min': None, 'max': None, 'consumers': []}
-r.xpending_range(STREAM, GROUP, min="-", max="+", count=10)
-# [{'message_id': '...', 'consumer': 'worker-1', 'time_since_delivered': 61234, 'times_delivered': 1}, ...]
+# 4. What is still unfinished?
+r.xreadgroup(GROUP, "meena", {STREAM: ">"}, count=1)    # Meena takes one, doesn't finish yet
+print(r.xpending(STREAM, GROUP))
+# {'pending': 1, 'min': '...', 'max': '...', 'consumers': [{'name': 'meena', 'pending': 1}]}
+for p in r.xpending_range(STREAM, GROUP, min="-", max="+", count=10):
+    print(p["message_id"], p["consumer"], p["time_since_delivered"], p["times_delivered"])
 ```
 
-### 18.4 Multiple consumers: one message goes to exactly one consumer
+`block=2000` means "wait up to 2 seconds for new tickets". Without it, the read returns immediately, and you'd have to keep asking in a busy loop.
 
-When a consumer calls `XREADGROUP ... >`, Redis, in **one atomic step** on its single thread:
+### 18.5 Many cooks, and no ticket goes to two cooks
 
-1. takes the entries after the group's `last-delivered-id`,
-2. moves `last-delivered-id` forward past them,
-3. records each of them in the PEL under **that** consumer's name.
+When a cook asks for new tickets with `>`, Redis does three things in **one step**:
 
-Because this happens atomically, two consumers in the same group can never receive the same new message. No locks are needed.
+1. picks the next tickets after the team's `last-delivered-id`,
+2. moves `last-delivered-id` forward,
+3. writes those tickets into the pending list under **that cook's** name.
+
+Because Redis runs one command at a time ([section 13](#13-one-cashier-how-redis-runs-commands)), two cooks can never get the same new ticket.
 
 ```mermaid
 sequenceDiagram
-    participant P as Producer
-    participant R as Redis (stream + group)
-    participant A as worker-A
-    participant B as worker-B
-    participant C as worker-C
-    P->>R: XADD m1, m2, m3, m4, m5, m6
-    A->>R: XREADGROUP COUNT 2, id >
-    R-->>A: m1, m2 (cursor now at m2)
-    B->>R: XREADGROUP COUNT 2, id >
-    R-->>B: m3, m4 (cursor now at m4)
-    C->>R: XREADGROUP COUNT 2, id >
-    R-->>C: m5, m6 (cursor now at m6)
-    A->>R: XACK m1 m2
-    B->>R: XACK m3 m4
-    C->>R: XACK m5 m6
-    Note over R: PEL is empty, each message was delivered to one consumer only
+    participant App
+    participant R as Redis (rail + team)
+    participant Ravi
+    participant Meena
+    participant Kumar
+    App->>R: XADD t1 .. t6
+    Ravi->>R: XREADGROUP COUNT 2 >
+    R-->>Ravi: t1, t2
+    Meena->>R: XREADGROUP COUNT 2 >
+    R-->>Meena: t3, t4
+    Kumar->>R: XREADGROUP COUNT 2 >
+    R-->>Kumar: t5, t6
+    Ravi->>R: XACK t1 t2
+    Meena->>R: XACK t3 t4
+    Kumar->>R: XACK t5 t6
+    Note over R: pending list is empty: every ticket was handled by exactly one cook
 ```
 
-How load balancing works in practice:
+How the work gets shared:
 
-- Whoever asks first gets the next messages, so idle workers naturally pick up more work. There is no round-robin; fast workers simply ask more often.
-- `COUNT` is the batch size. Use small counts (1–10) for slow jobs, larger counts for fast jobs.
-- To scale, start more consumers **in the same group with different names**. Nothing else changes.
+- There's no fixed rotation. **Whoever asks first gets the next tickets**, so a fast cook simply asks more often and does more.
+- `COUNT` is how many tickets a cook takes at once. Use 1–10 for slow jobs and bigger numbers for fast jobs.
+- To handle more orders, **start more cooks in the same group with different names**. Nothing else changes.
 
-**Consumer names must be unique per running process.** Two processes using the same name share one PEL, and on restart both would re-read the same pending messages with id `0`. Good choices: `hostname-pid`, or the Kubernetes pod name. A StatefulSet gives stable pod names, so a restarted pod resumes its own pending work. With a Deployment, pod names change, so leftovers are picked up by `XAUTOCLAIM` and the old consumer name is cleaned up later ([18.15](#1815-consumer-housekeeping)).
+> **Every running process needs its own consumer name.** Two processes with the same name share one pending list and get confused on restart. Good names: `hostname-pid`, or the Kubernetes pod name.
 
-### 18.5 "No duplicates": delivery vs processing
+### 18.6 Can work happen twice, and how to stop it
 
-Be precise about what Redis guarantees:
+Be clear about what Redis promises:
 
-| Layer | Guarantee |
+| | Promise |
 |---|---|
-| **Delivery** of a new message within a group | Exactly one consumer at a time owns it. |
-| **Processing** | **At-least-once.** The same message can be processed more than once. |
+| **Handing out** a new ticket | Exactly one cook at a time holds it |
+| **Doing** the work | **At least once.** The same order *can* be cooked twice. |
 
-Ways a message gets processed twice:
+How an order gets cooked twice:
 
-1. The worker finishes the work, then crashes **before** `XACK`. The message is still pending, gets reclaimed and runs again.
-2. The worker is **slow**. Its message looks abandoned, another worker claims it, and both finish ([18.7](#187-the-slow-consumer-trap)).
-3. The `XACK` reply is lost on the network and the client retries the whole job.
+1. Ravi cooks it, then crashes **just before** `XACK`. The ticket is still pending, so someone takes it over and cooks it again.
+2. Ravi is just **slow**. The ticket looks abandoned, Meena claims it, and both of them cook it ([18.8](#188-the-slow-cook-trap)).
+3. Ravi's `XACK` gets lost on the network.
 
-So "no duplicates" in a product means **effectively-once**: at-least-once delivery + an **idempotent handler**. Pick the technique that matches where your side effect lives:
+So "no duplicates" in a real product means: **at-least-once delivery + work that is safe to repeat**. The trick is to remember "order X is done" in the **same step** as doing the work. Pick the version that matches where your work is saved:
 
 ```mermaid
 flowchart TD
-    M["Message to process"] --> W{"Where does the side effect happen?"}
-    W -- "In Redis" --> L["Lua script: check processed marker,<br/>apply change, set marker, XACK<br/>all in one atomic step"]
-    W -- "In a SQL database" --> D["Same DB transaction:<br/>INSERT event_id into processed_events (unique)<br/>+ business write, then XACK after commit"]
-    W -- "External API (payment, email)" --> X["Send event_id as the provider's<br/>idempotency key, then XACK"]
+    M["Ticket to process"] --> W{"Where is the result saved?"}
+    W -- "In Redis" --> L["One Lua script:<br/>already done? if not: do it + mark done.<br/>Then XACK"]
+    W -- "In Postgres / MySQL" --> D["One DB transaction:<br/>insert event_id into processed_events (unique)<br/>+ the real change. Then XACK"]
+    W -- "External API (payment, SMS, email)" --> X["Send event_id as the provider's<br/>idempotency key. Then XACK"]
 ```
 
-**Side effect in Redis — atomic apply + mark + ack** (this exact script is used in the runnable demo below):
+**Result saved in Redis** — "mark done", "do the work" and "XACK" in one Lua script:
 
 ```python
-APPLY_AND_ACK = r.register_script("""
+COOK_AND_ACK = r.register_script("""
 local first_time = redis.call('SET', KEYS[2], '1', 'NX', 'EX', 86400)
 if first_time then
-  redis.call('HINCRBY', KEYS[3], ARGV[3], ARGV[4])
+  redis.call('HINCRBY', KEYS[3], ARGV[3], 1)      -- the real work: count the dish
 end
-redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])     -- done, either way
 if first_time then return 1 else return 0 end
 """)
 
-# returns 1 = applied now, 0 = duplicate, safely skipped (and acked)
-APPLY_AND_ACK(keys=[STREAM, f"processed:{event_id}", "wallet:totals"],
-              args=[GROUP, msg_id, user_id, amount])
+r.xadd(STREAM, {"data": json.dumps({"event_id": "evt-9", "dish": "pongal"})})
+for _s, messages in r.xreadgroup(GROUP, "kumar", {STREAM: ">"}, count=10):
+    for msg_id, fields in messages:
+        order = json.loads(fields["data"])
+        for attempt in (1, 2):              # pretend the same ticket arrives twice
+            result = COOK_AND_ACK(keys=[STREAM, f"done:{order['event_id']}", "dishes:made"],
+                                  args=[GROUP, msg_id, order["dish"]])
+            print(order["dish"], "attempt", attempt, "->", "cooked" if result else "skipped (already done)")
+# pongal attempt 1 -> cooked
+# pongal attempt 2 -> skipped (already done)
 ```
 
-**Side effect in Postgres — dedup table in the same transaction** (psycopg 3):
+**Result saved in Postgres** — a "processed events" table in the same transaction (psycopg 3):
 
 ```python
-# CREATE TABLE processed_events (event_id text PRIMARY KEY, processed_at timestamptz DEFAULT now());
+# CREATE TABLE processed_events (event_id text PRIMARY KEY, done_at timestamptz DEFAULT now());
 
 def handle_order(conn, msg_id: str, fields: dict) -> None:
-    event = json.loads(fields["data"])
+    order = json.loads(fields["data"])
     with conn.transaction():
         first_time = conn.execute(
             "INSERT INTO processed_events (event_id) VALUES (%s) "
             "ON CONFLICT DO NOTHING RETURNING event_id",
-            (event["event_id"],),
+            (order["event_id"],),
         ).fetchone() is not None
         if first_time:
-            conn.execute(
-                "UPDATE wallets SET balance = balance + %s WHERE user_id = %s",
-                (event["amount"], event["user_id"]),
-            )
-    r.xack(STREAM, GROUP, msg_id)        # after commit, for new and duplicate messages alike
+            conn.execute("INSERT INTO kitchen_log (order_id, dish) VALUES (%s, %s)",
+                         (order["order_id"], order["dish"]))
+    r.xack(STREAM, GROUP, msg_id)       # after the commit, for new and repeated tickets alike
 ```
 
-**Which ID to deduplicate on?** Use a **producer-generated `event_id`** inside the payload, not the stream entry ID. If a message is ever re-published (retry with backoff, DLQ replay, migration), it gets a new stream ID but keeps its `event_id`. The demo below dedups on the stream ID only because it never re-publishes.
+**Which id to use?** Use the `event_id` **your app put inside the message**, not the stream's entry id. If a message is ever added again (a retry, or a replay from the dead-letter stream), it gets a new entry id but keeps its `event_id`.
 
-Keep dedup markers at least as long as a message could possibly be redelivered (hours to days).
+### 18.7 When a cook crashes
 
-### 18.6 Crash recovery: pending messages and XAUTOCLAIM
+A crashed cook's tickets stay in the pending list **forever**, until someone takes them. You have two tools:
 
-If a consumer dies, its unacked messages stay in the PEL **forever** unless someone takes them. There are two recovery paths.
-
-**Path 1 — the same consumer restarts** (stable name): read your own history with id `0` before reading new messages.
-
-```python
-# On startup: finish what I was doing before I crashed
-for _, messages in r.xreadgroup(GROUP, CONSUMER, {STREAM: "0"}, count=1000) or []:
-    for msg_id, fields in messages:
-        if not fields:                       # entry was trimmed/deleted while pending
-            r.xack(STREAM, GROUP, msg_id)
-            continue
-        process(msg_id, fields)
-```
-
-**Path 2 — another consumer takes over** (the consumer is gone for good):
+| Situation | What to do |
+|---|---|
+| The **same** cook restarts (same name) | On startup, read with id `0` to get your own leftovers first |
+| The cook is **gone for good** | Another cook runs `XAUTOCLAIM` to take tickets idle for too long |
 
 ```mermaid
 sequenceDiagram
-    participant B as worker-B
+    participant Ravi
     participant R as Redis
-    participant K as Reclaimer (any healthy worker)
-    B->>R: XREADGROUP COUNT 3, id >
-    R-->>B: m7, m8, m9 (pending, owner worker-B)
-    Note over B: process crashes, no XACK
-    loop every few seconds
-        K->>R: XAUTOCLAIM orders order-workers K 60000 0-0
-        R-->>K: nothing idle for 60 s yet
+    participant Meena
+    Ravi->>R: XREADGROUP COUNT 3 >
+    R-->>Ravi: t7, t8, t9 (pending, owner Ravi)
+    Note over Ravi: process crashes, no XACK
+    loop every 30 seconds
+        Meena->>R: XAUTOCLAIM orders kitchen meena 60000 0-0
+        R-->>Meena: nothing idle for 60 s yet
     end
-    K->>R: XAUTOCLAIM (after 60 s of idle)
-    R-->>K: m7, m8, m9 (owner is now K, delivery count +1)
-    K->>K: process idempotently
-    K->>R: XACK m7 m8 m9
+    Meena->>R: XAUTOCLAIM (after 60 s of no activity)
+    R-->>Meena: t7, t8, t9 (owner is now Meena, delivery count +1)
+    Meena->>Meena: cook them (safely, see 18.6)
+    Meena->>R: XACK t7 t8 t9
 ```
 
 ```python
-CLAIM_IDLE_MS = 60_000
+def finish_my_leftovers(me: str) -> None:
+    """Call once when a cook starts."""
+    for _stream, messages in r.xreadgroup(GROUP, me, {STREAM: "0"}, count=1000) or []:
+        for msg_id, fields in messages:
+            if not fields:                      # entry was trimmed away meanwhile
+                r.xack(STREAM, GROUP, msg_id)
+                continue
+            print(me, "finishing leftover", msg_id)
+            r.xack(STREAM, GROUP, msg_id)
 
-def reclaim_stale(consumer: str) -> None:
+def take_over_abandoned(me: str, idle_ms: int = 60_000) -> None:
+    """Call every ~30 seconds from every cook."""
     start = "0-0"
     while True:
-        result = r.xautoclaim(STREAM, GROUP, consumer, CLAIM_IDLE_MS, start_id=start, count=50)
+        result = r.xautoclaim(STREAM, GROUP, me, idle_ms, start_id=start, count=50)
         start, claimed = result[0], result[1]
-        # result[2] (Redis 7+) lists IDs that were pending but no longer exist (trimmed);
-        # Redis removes them from the PEL for you.
         for msg_id, fields in claimed:
-            process(msg_id, fields)
-        if start == "0-0":                   # scanned the whole PEL
+            print(me, "took over", msg_id)
+            r.xack(STREAM, GROUP, msg_id)       # after doing the work
+        if start == "0-0":                      # looked through the whole pending list
             break
+
+finish_my_leftovers("ravi")
+take_over_abandoned("kumar", idle_ms=0)        # 0 only for this demo
+print(r.xpending(STREAM, GROUP)["pending"])    # 0
 ```
 
-Run this periodically inside every worker (simplest), or in one dedicated reclaimer process.
+**How long is "idle too long"?** The idle time starts when a ticket is **handed out**, not when the cook starts working on it. So it must be longer than the slowest time to finish a **whole batch** of tickets. See the next section.
 
-**Choosing `min-idle-time`:** idle time is measured from **delivery**, not from when your code starts working on a message. It must be longer than the worst-case time to process a whole **batch**, otherwise healthy-but-busy workers get their messages stolen. See the next section.
+### 18.8 The slow cook trap
 
-### 18.7 The slow consumer trap
-
-This happened in the demo below. worker-C read a batch of 5 messages, the first one took 3 seconds, and the reclaimer (with a 2-second threshold) took **all five** because they had all been idle since delivery.
+Ravi takes 5 tickets. The first one takes him 3 seconds. Meena claims anything idle for 2 seconds, so she takes **all 5**, including the one Ravi is cooking right now.
 
 ```mermaid
 sequenceDiagram
-    participant C as worker-C (slow)
+    participant Ravi as Ravi (slow)
     participant R as Redis
-    participant K as Reclaimer
-    C->>R: XREADGROUP COUNT 5
-    R-->>C: m10 to m14
-    Note over C: m10 takes 3 s, m11 to m14 wait in memory
-    K->>R: XAUTOCLAIM min-idle 2000
-    R-->>K: m10 to m14 (all idle for more than 2 s)
-    K->>R: apply + mark processed + XACK for m10 to m14
-    C->>R: apply m10
-    R-->>C: 0 = already processed, skipped
+    participant Meena
+    Ravi->>R: XREADGROUP COUNT 5
+    R-->>Ravi: t10 .. t14
+    Note over Ravi: t10 takes 3 s, t11..t14 are waiting
+    Meena->>R: XAUTOCLAIM idle 2000
+    R-->>Meena: t10 .. t14 (all idle more than 2 s)
+    Meena->>R: cooks t10..t14, XACK
+    Ravi->>R: finishes t10
+    Note over Ravi: t10 already done, skipped (thanks to 18.6)
 ```
 
-Idempotency saved correctness, but work was wasted. Fixes:
+Your "safe to repeat" check prevents wrong results, but the work was wasted. Fixes:
 
-1. Set `min-idle-time` well above the worst batch duration (e.g. 5–10× your p99).
+1. Set the claim time **much longer** than your slowest batch (5–10× is a good start).
 2. Use a small `COUNT` for slow jobs.
-3. For long jobs, send a **heartbeat**: re-claim your own messages with `JUSTID`, which resets their idle time without counting a new delivery.
+3. For long jobs, send a **heartbeat**: re-claim your own tickets with `JUSTID`. This resets the idle timer **without** increasing the delivery count.
+
+You can see the heartbeat in action:
+
+```text
+> XGROUP CREATE jobs video-team $ MKSTREAM
+OK
+> XADD jobs 1-0 task make-thumbnail
+"1-0"
+> XREADGROUP GROUP video-team ravi STREAMS jobs >
+1) 1) "jobs"
+   2) 1) 1) "1-0"
+         2) 1) "task"
+            2) "make-thumbnail"
+# idle time is now about 1500 ms
+> XPENDING jobs video-team - + 10
+1) 1) "1-0"
+   2) "ravi"
+   3) (integer) 1505
+   4) (integer) 1
+# heartbeat: "I'm still working on it"
+> XCLAIM jobs video-team ravi 0 1-0 JUSTID
+1) "1-0"
+# idle time is back to about 0, delivery count still 1
+> XPENDING jobs video-team - + 10
+1) 1) "1-0"
+   2) "ravi"
+   3) (integer) 4
+   4) (integer) 1
+```
 
 ```python
-def heartbeat(msg_ids: list[str]) -> None:
-    """Call every ~10 s while working on long-running messages."""
-    r.xclaim(STREAM, GROUP, CONSUMER, min_idle_time=0, message_ids=msg_ids, justid=True)
+def heartbeat(me: str, msg_ids: list[str]) -> None:
+    """Call every ~10 seconds while working on long tickets."""
+    r.xclaim(STREAM, GROUP, me, min_idle_time=0, message_ids=msg_ids, justid=True)
 ```
 
-### 18.8 Poison messages and the dead-letter stream
+### 18.9 Bad tickets (poison messages)
 
-A message that always fails (bad data, a bug) would be reclaimed and retried forever, wasting capacity. Track the **delivery count** and park it after N attempts.
+Some tickets **always** fail: broken data, a bug, a deleted product. Without a limit they would be retried forever.
+
+**Picture:** after three failed attempts, the head cook puts the ticket on a separate "problem orders" tray and tells the manager.
 
 ```mermaid
 flowchart TD
-    M["Reclaimed pending message"] --> D{"times_delivered above MAX?"}
-    D -- "no" --> T["Process it"]
-    T -- "success" --> ACK["XACK"]
-    T -- "error" --> STAY["Leave pending, retried after min-idle"]
-    D -- "yes" --> DLQ["XADD orders:dead with error details"]
+    M["Abandoned ticket taken over"] --> D{"Delivery count above the limit?"}
+    D -- "no" --> T["Try to cook it"]
+    T -- "works" --> ACK["XACK"]
+    T -- "fails" --> STAY["Leave it pending,<br/>it will be tried again later"]
+    D -- "yes" --> DLQ["XADD to orders:dead<br/>(the problem tray)"]
     DLQ --> ACK2["XACK the original"]
-    DLQ --> AL["Alert, then fix and replay"]
+    DLQ --> AL["Alert someone, fix, replay"]
 ```
 
 ```python
-MAX_DELIVERIES = 5
-DLQ = "orders:dead"
+MAX_TRIES = 5
+DEAD = f"{STREAM}:dead"
 
-def reclaim_with_dlq(consumer: str) -> None:
+def take_over_with_limit(me: str, idle_ms: int = 60_000) -> None:
     start = "0-0"
     while True:
-        result = r.xautoclaim(STREAM, GROUP, consumer, CLAIM_IDLE_MS, start_id=start, count=50)
+        result = r.xautoclaim(STREAM, GROUP, me, idle_ms, start_id=start, count=50)
         start, claimed = result[0], result[1]
         for msg_id, fields in claimed:
             info = r.xpending_range(STREAM, GROUP, min=msg_id, max=msg_id, count=1)
-            deliveries = info[0]["times_delivered"] if info else 0
-            if deliveries > MAX_DELIVERIES:
-                pipe = r.pipeline()                  # both or neither
-                pipe.xadd(DLQ, {**fields, "original_id": msg_id, "deliveries": deliveries})
+            tries = info[0]["times_delivered"] if info else 0
+            if tries > MAX_TRIES:
+                pipe = r.pipeline()                    # both steps, or neither
+                pipe.xadd(DEAD, {**fields, "original_id": msg_id, "tries": tries})
                 pipe.xack(STREAM, GROUP, msg_id)
                 pipe.execute()
+                print(msg_id, "moved to the problem tray")
                 continue
-            process(msg_id, fields)
+            # ... try to do the work, XACK on success ...
         if start == "0-0":
             break
 
-def replay_dead_letters(limit: int = 100) -> None:
-    """After fixing the bug, push parked messages back to the main stream."""
-    for dead_id, fields in r.xrange(DLQ, count=limit):
-        original = {k: v for k, v in fields.items() if k not in ("original_id", "deliveries", "error")}
+def replay_dead(limit: int = 100) -> None:
+    """After fixing the bug, put the problem tickets back on the rail."""
+    for dead_id, fields in r.xrange(DEAD, count=limit):
+        original = {k: v for k, v in fields.items() if k not in ("original_id", "tries")}
         pipe = r.pipeline()
         pipe.xadd(STREAM, original)
-        pipe.xdel(DLQ, dead_id)
+        pipe.xdel(DEAD, dead_id)
         pipe.execute()
 ```
 
-Alert whenever `XLEN orders:dead > 0`.
+Set an alert for "the problem tray is not empty" (`XLEN orders:dead > 0`).
 
-### 18.9 Full runnable demo: multiple consumers, crash, slow worker, poison message
+### 18.10 Retry later with growing waits
 
-This single script puts everything together. It starts **3 consumers in one group** plus a reclaimer:
+`XAUTOCLAIM` retries after a **fixed** wait. When a failure is temporary (the payment provider is down), it's kinder to wait longer each time: 10 s, 20 s, 40 s ...
 
-- `worker-A` is healthy.
-- `worker-B` **crashes** after 2 messages while still holding a batch (never acks it).
-- `worker-C` is **slow** on its first message, so its batch gets reclaimed.
-- One **poison** message always fails and ends up in the dead-letter stream.
+**How:** mark the failed ticket done, and put a copy into the delayed-job tray from [section 12](#12-delayed-jobs-do-this-later) with a later time. The mover puts it back on the rail when it's due.
 
-At the end it proves: every message was applied once, no message was applied twice, nothing is left pending, and the totals match exactly what the producer sent.
+```python
+def retry_later(msg_id: str, fields: dict, error: Exception, max_attempts: int = 5) -> None:
+    job = json.loads(fields["data"])                  # keeps the same event_id
+    job["attempt"] = job.get("attempt", 0) + 1
+    pipe = r.pipeline()                               # all steps together
+    if job["attempt"] > max_attempts:
+        pipe.xadd(DEAD, {"data": json.dumps(job), "error": str(error)[:500]})
+    else:
+        wait = min(5 * 2 ** job["attempt"], 3600)     # 10 s, 20 s, 40 s ... max 1 hour
+        pipe.zadd("delayed:orders", {json.dumps(job, sort_keys=True): time.time() + wait})
+    pipe.xack(STREAM, GROUP, msg_id)
+    pipe.execute()
+```
+
+Used in a cook:
+
+```python
+try:
+    handle(order)
+    r.xack(STREAM, GROUP, msg_id)
+except TemporaryError as exc:          # e.g. the payment service is down
+    retry_later(msg_id, fields, exc)
+```
+
+| Attempt | Wait before next try |
+|---|---|
+| 1 | 10 s |
+| 2 | 20 s |
+| 3 | 40 s |
+| 4 | 80 s |
+| 5 | 160 s |
+| 6 | dead-letter stream |
+
+### 18.11 Two teams on the same rail (fan-out)
+
+Billing must charge for every order, the kitchen must cook every order, and analytics must count every order. Give **each team its own group** on the same stream.
 
 ```mermaid
 flowchart LR
-    PR["Producer: 30 orders + 1 poison"] --> ST[("demo:orders")]
-    ST --> GR["Group: order-workers"]
-    GR --> WA["worker-A (healthy)"]
-    GR --> WB["worker-B (crashes)"]
-    GR --> WC["worker-C (slow)"]
-    GR --> RC["reclaimer (XAUTOCLAIM)"]
-    RC -- "after 3 failed deliveries" --> DL[("demo:orders:dead")]
-    WA & WC & RC -- "Lua: apply + mark + XACK" --> TO[("demo:totals")]
+    APP["App: XADD orders"] --> S[("Stream: orders")]
+    S --> G1["Group: kitchen"]
+    S --> G2["Group: billing"]
+    S --> G3["Group: analytics"]
+    G1 --> K1["Ravi"]
+    G1 --> K2["Meena"]
+    G2 --> B1["Anu"]
+    G3 --> A1["stats-1"]
+    G3 --> A2["stats-2"]
 ```
 
-Save as `streams_demo.py` and run it against a local Redis 7+:
+Continuing the redis-cli example from 18.3: the kitchen has finished all 4 orders. Now billing joins and starts from the very first order (`0`):
+
+```text
+> XGROUP CREATE orders billing 0
+OK
+> XREADGROUP GROUP billing anu COUNT 10 STREAMS orders >
+1) 1) "orders"
+   2) 1) 1) "1-0"
+         2) 1) "item"
+            2) "tea"
+      2) 1) "2-0"
+         2) 1) "item"
+            2) "coffee"
+      3) 1) "3-0"
+         2) 1) "item"
+            2) "dosa"
+      4) 1) "4-0"
+         2) 1) "item"
+            2) "vada"
+```
+
+Anu (billing) got all 4 orders, even though the kitchen team reads the same stream.
+
+- **Inside a team, the work is split. Each team gets everything.**
+- Teams are independent: if analytics is slow, the kitchen isn't affected.
+- A new team created with `0` can **replay** everything still on the rail.
+- Trimming must respect the **slowest** team ([18.13](#1813-the-rail-never-empties-by-itself)).
+
+### 18.12 Keeping things in order
+
+The rail keeps tickets in order, but with several cooks, **finishing** order is not guaranteed: ticket 2 can be done before ticket 1, and retries mix things up more.
+
+If order matters **per customer** (Asha's "place order" must happen before her "cancel order"), split the work into several rails and always send the same customer to the same rail. One cook works each rail.
+
+```mermaid
+flowchart LR
+    APP["App"] -- "crc32(customer) mod 4" --> P{"Pick a rail"}
+    P --> S0[("orders:0")]
+    P --> S1[("orders:1")]
+    P --> S2[("orders:2")]
+    P --> S3[("orders:3")]
+    S0 --> W0["cook for rail 0"]
+    S1 --> W1["cook for rail 1"]
+    S2 --> W2["cook for rail 2"]
+    S3 --> W3["cook for rail 3"]
+```
+
+```python
+import zlib
+
+RAILS = 4
+
+def rail_for(customer: str) -> str:
+    # Python's hash() changes between runs, so use a stable hash
+    return f"orders:{zlib.crc32(customer.encode()) % RAILS}"
+
+print(rail_for("asha"), rail_for("asha"), rail_for("ravi"))   # Asha always lands on the same rail
+```
+
+This is the same idea as Kafka partitions. More rails = more parallel work. One rail = strict order.
+
+### 18.13 The rail never empties by itself
+
+Acknowledged tickets are **not** deleted. Without cleanup, the stream grows until Redis runs out of memory.
+
+```text
+> XLEN orders
+(integer) 4
+# keep only the newest 2 entries
+> XTRIM orders MAXLEN 2
+(integer) 2
+> XLEN orders
+(integer) 2
+> XRANGE orders - +
+1) 1) "3-0"
+   2) 1) "item"
+      2) "dosa"
+2) 1) "4-0"
+   2) 1) "item"
+      2) "vada"
+```
+
+Two ways to clean up:
+
+```python
+# 1. While adding: keep about the last 1 million entries ("~" = approximately, much cheaper)
+r.xadd("orders", {"data": json.dumps({"event_id": "evt-100"})}, maxlen=1_000_000, approximate=True)
+
+# 2. By age: remove entries older than 7 days (entry ids start with a timestamp)
+week_ago_ms = int((time.time() - 7 * 86_400) * 1000)
+r.xtrim("orders", minid=f"{week_ago_ms}-0", approximate=True)
+```
+
+> **Careful:** trimming doesn't know about your teams. It can remove tickets that a slow team hasn't read yet, or tickets that are still pending. Keep far more history than your worst backlog, and alert on lag before it gets close.
+
+### 18.14 Cleaning up old cook names
+
+Consumer names are never removed automatically. After many deploys, `XINFO CONSUMERS` fills up with cooks that no longer exist.
+
+```python
+def remove_idle_cooks(stream: str, group: str, idle_ms: int = 3_600_000) -> None:
+    for cook in r.xinfo_consumers(stream, group):
+        if cook["pending"] == 0 and cook["idle"] > idle_ms:      # nothing unfinished
+            r.xgroup_delconsumer(stream, group, cook["name"])
+```
+
+> **Never delete a cook that still has pending tickets.** `XGROUP DELCONSUMER` throws those tickets away, and they will never be delivered again. Take them over first (`XAUTOCLAIM`), then delete the name.
+
+Other team commands:
+
+```python
+r.xgroup_setid("orders", "analytics", id="0")   # read everything again from the start
+r.xgroup_setid("orders", "analytics", id="$")   # skip the backlog, only new orders
+r.xgroup_destroy("orders", "analytics")         # delete the team
+```
+
+### 18.15 Is the kitchen healthy?
+
+```python
+def kitchen_health(stream: str, group: str) -> dict:
+    team = next(g for g in r.xinfo_groups(stream) if g["name"] == group)
+    oldest = r.xpending_range(stream, group, "-", "+", 1)
+    return {
+        "tickets_on_rail": r.xlen(stream),
+        "not_yet_taken": team.get("lag"),             # waiting for a cook
+        "taken_not_done": team["pending"],            # being cooked (or stuck)
+        "cooks": [(c["name"], c["pending"], c["idle"]) for c in r.xinfo_consumers(stream, group)],
+        "oldest_unfinished_ms": oldest[0]["time_since_delivered"] if oldest else 0,
+        "problem_tray": r.xlen(f"{stream}:dead"),
+    }
+
+print(kitchen_health(STREAM, GROUP))
+```
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `not_yet_taken` keeps growing | Orders arrive faster than cooks finish | Add cooks, make the work faster |
+| `taken_not_done` high and `oldest_unfinished_ms` large | Cooks are stuck or crashing | Check logs, check the take-over loop |
+| A cook with a huge `idle` and pending tickets | That process is dead | The take-over loop should pick up its tickets |
+| `problem_tray` > 0 | Bad tickets | Alert, fix, replay |
+| `tickets_on_rail` close to your MAXLEN | Trimming may remove unread orders | Keep more history or add cooks |
+
+On Kubernetes, **KEDA** can add or remove worker pods automatically based on a stream's pending count or lag, even down to zero when there's no work.
+
+### 18.16 Full runnable demo: three cooks, a crash and a bad order
+
+This script puts everything together:
+
+- The app puts **12 good orders and 1 broken order** on the rail.
+- **Three cooks** share the work in one team, so each order goes to one cook.
+- **Ravi** cooks his first order, then **crashes before saying done**, still holding 3 tickets.
+- The **supervisor** takes over tickets that nobody touched for 2 seconds.
+- Ravi's first order was already cooked, so the "already done?" check **skips it**.
+- The **broken order** fails 3 times and goes to the **dead-letter tray**.
+
+```mermaid
+flowchart LR
+    APP["App: 12 good orders + 1 broken"] --> RAIL[("kitchen:orders")]
+    RAIL --> TEAM["Team: cooks"]
+    TEAM --> RAVI["Ravi (crashes)"]
+    TEAM --> MEENA["Meena"]
+    TEAM --> KUMAR["Kumar"]
+    TEAM --> SUP["Supervisor<br/>(XAUTOCLAIM)"]
+    SUP -- "after 3 failures" --> DEADT[("kitchen:orders:dead")]
+    MEENA & KUMAR & SUP & RAVI -- "cook once (Lua) + XACK" --> MADE[("kitchen:cooked")]
+```
+
+Save it as `kitchen_demo.py`, then run:
 
 ```bash
 docker run -d -p 6379:6379 redis:7
 pip install "redis>=5"
-python streams_demo.py
+python kitchen_demo.py
 ```
 
 ```python
 """
-Redis Streams consumer-group demo (Redis 7+, redis-py 5+).
+kitchen_demo.py - Redis Streams consumer groups, explained with a kitchen.
 
-What it shows:
-  * 1 producer, 3 consumers in ONE group -> every message goes to exactly one consumer
-  * worker-B "crashes" while holding messages -> a reclaimer takes them over (XAUTOCLAIM)
-  * worker-C is too slow on one message -> it gets reclaimed, and the idempotent
-    Lua script stops the work from being applied twice
-  * a poison message is retried MAX_DELIVERIES times, then moved to a dead-letter stream
-  * at the end, totals are checked against what the producer sent
+The story:
+  * The app puts 12 good orders and 1 broken order on the order rail (a stream).
+  * Three cooks share the work in ONE group, so every order goes to ONE cook.
+  * Ravi cooks his first order, then crashes BEFORE saying "done" (XACK),
+    while still holding the rest of his tickets.
+  * The supervisor looks for tickets nobody has touched for 2 seconds
+    (XAUTOCLAIM) and finishes them.
+  * Ravi's first order was already cooked, so the "already cooked?" check skips it.
+  * The broken order fails every time and is moved to the dead-letter stream.
 
-Run:  docker run -d -p 6379:6379 redis:7     then     python streams_demo.py
+Run:  docker run -d -p 6379:6379 redis:7    then    python kitchen_demo.py
 """
-import random
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 
 import redis
 
-STREAM = "demo:orders"
-GROUP = "order-workers"
-DLQ = "demo:orders:dead"
-TOTALS = "demo:totals"          # hash: user -> total amount applied
-MAX_DELIVERIES = 3
-CLAIM_IDLE_MS = 2_000           # a message idle this long is considered abandoned
+STREAM = "kitchen:orders"        # the order rail
+GROUP = "cooks"                  # the kitchen team
+DEAD = "kitchen:orders:dead"     # the "problem orders" tray
+COOKED = "kitchen:cooked"        # hash: dish -> how many were cooked
+CLAIM_AFTER_MS = 2_000           # a ticket untouched for 2 s counts as abandoned
+MAX_TRIES = 3                    # after 3 failed tries, give up on an order
 
-pool = redis.ConnectionPool(host="localhost", port=6379, decode_responses=True)
+r = redis.Redis(decode_responses=True)
 stop = threading.Event()
+t0 = time.time()
 stats_lock = threading.Lock()
-handled_by = defaultdict(list)  # consumer -> [msg_id]   (who applied what)
-duplicates_prevented = Counter()
-T0 = time.time()
+cooked_by = Counter()            # cook -> orders cooked
+times_cooked = Counter()         # order id -> how many times it was really cooked
 
 
-def log(msg: str) -> None:
-    print(f"[{time.time() - T0:5.2f}s] {msg}", flush=True)
+def say(who: str, text: str) -> None:
+    print(f"[{time.time() - t0:4.1f}s] {who:10s} {text}", flush=True)
 
 
-def client() -> redis.Redis:
-    return redis.Redis(connection_pool=pool)
-
-
-# Apply the side effect, remember the message id, and ACK, all in ONE atomic step.
-# If the id was already processed (redelivery / reclaim), skip the work but still ACK.
-APPLY_AND_ACK = """
-local first_time = redis.call('SET', KEYS[2], '1', 'NX', 'EX', 86400)
-if first_time then
-  redis.call('HINCRBY', KEYS[3], ARGV[3], ARGV[4])
+# Cook the dish AND remember "this order is done" in ONE step.
+# Returns 1 = cooked now, 0 = this order was already cooked earlier.
+COOK_ONCE = r.register_script("""
+if redis.call('SET', KEYS[1], '1', 'NX', 'EX', 86400) then
+  redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+  return 1
 end
-redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
-if first_time then return 1 else return 0 end
-"""
-apply_and_ack = client().register_script(APPLY_AND_ACK)
+return 0
+""")
 
 
-def process(r: redis.Redis, consumer: str, msg_id: str, fields: dict, slow: bool = False) -> None:
-    """Business logic. Raises on failure -> message stays pending -> retried later."""
-    if fields.get("poison") == "1":
-        raise ValueError("cannot parse payload")
-    time.sleep(3 if slow else random.uniform(0.01, 0.05))     # simulate real work
-    applied = apply_and_ack(
-        keys=[STREAM, f"demo:processed:{msg_id}", TOTALS],
-        args=[GROUP, msg_id, fields["user"], fields["amount"]],
-    )
-    with stats_lock:
-        if applied:
-            handled_by[consumer].append(msg_id)
-        else:
-            duplicates_prevented[consumer] += 1
-            log(f"{consumer}: {msg_id} was already processed by someone else -> skipped, acked")
+def cook(who: str, msg_id: str, order: dict) -> None:
+    if "dish" not in order:
+        raise ValueError("order has no dish")
+    time.sleep(0.05)                                   # cooking takes a moment
+    done_key = f"kitchen:done:{order['order_id']}"
+    if COOK_ONCE(keys=[done_key, COOKED], args=[order["dish"]]):
+        say(who, f"cooked {order['dish']:6s} for order {order['order_id']}")
+        with stats_lock:
+            cooked_by[who] += 1
+            times_cooked[order["order_id"]] += 1
+    else:
+        say(who, f"order {order['order_id']} was already cooked -> skip it")
 
 
-def worker(name: str, crash_after: int | None = None, slow_once: bool = False) -> None:
-    r = client()
-    done = 0
-    # 1) After a restart, first finish MY OWN pending messages (id "0" = my PEL history).
-    for _, messages in r.xreadgroup(GROUP, name, {STREAM: "0"}, count=100) or []:
-        for msg_id, fields in messages:
-            if fields:
-                process(r, name, msg_id, fields)
-    # 2) Then read NEW messages (id ">" = never delivered to anyone in this group).
+def cook_worker(name: str, crash_after_first: bool = False) -> None:
     while not stop.is_set():
-        resp = r.xreadgroup(GROUP, name, {STREAM: ">"}, count=5, block=1000)
-        for _, messages in resp or []:
-            for i, (msg_id, fields) in enumerate(messages):
-                if crash_after is not None and done >= crash_after:
-                    held = [m for m, _ in messages[i:]]
-                    log(f"{name}: CRASHED while holding {held} (never acked)")
-                    return
+        # ">" = give me tickets nobody in my team has taken yet
+        reply = r.xreadgroup(GROUP, name, {STREAM: ">"}, count=3, block=500)
+        for _stream, messages in reply or []:
+            say(name, f"took tickets {[msg_id for msg_id, _ in messages]}")
+            for msg_id, order in messages:
                 try:
-                    process(r, name, msg_id, fields, slow=slow_once)
-                    slow_once = False
-                    done += 1
+                    cook(name, msg_id, order)
                 except Exception as exc:
-                    log(f"{name}: failed {msg_id} ({exc}) -> left pending for retry")
-
-
-def reclaimer(name: str = "reclaimer") -> None:
-    """Periodically take over messages idle > CLAIM_IDLE_MS (dead or stuck consumers)."""
-    r = client()
-    while not stop.is_set():
-        start = "0-0"
-        while True:
-            result = r.xautoclaim(STREAM, GROUP, name, CLAIM_IDLE_MS, start_id=start, count=50)
-            next_id, claimed = result[0], result[1]
-            for msg_id, fields in claimed:
-                info = r.xpending_range(STREAM, GROUP, min=msg_id, max=msg_id, count=1)
-                deliveries = info[0]["times_delivered"] if info else 0
-                if deliveries > MAX_DELIVERIES:
-                    r.xadd(DLQ, {**fields, "original_id": msg_id, "deliveries": deliveries})
-                    r.xack(STREAM, GROUP, msg_id)
-                    log(f"{name}: {msg_id} delivered {deliveries}x -> moved to dead-letter stream")
+                    say(name, f"FAILED order {order['order_id']} ({exc}) -> stays pending")
                     continue
-                log(f"{name}: claimed {msg_id} (delivery {deliveries})")
-                try:
-                    process(r, name, msg_id, fields)
-                except Exception as exc:
-                    log(f"{name}: retry of {msg_id} failed ({exc})")
-            if next_id == "0-0":
-                break
-            start = next_id
+                if crash_after_first:
+                    say(name, "CRASHED before XACK!")
+                    return
+                r.xack(STREAM, GROUP, msg_id)          # "done"
+
+
+def supervisor() -> None:
+    name = "supervisor"
+    while not stop.is_set():
+        # take tickets that nobody has touched for CLAIM_AFTER_MS
+        result = r.xautoclaim(STREAM, GROUP, name, CLAIM_AFTER_MS, start_id="0-0", count=10)
+        for msg_id, order in result[1]:
+            info = r.xpending_range(STREAM, GROUP, min=msg_id, max=msg_id, count=1)
+            tries = info[0]["times_delivered"]
+            if tries > MAX_TRIES:
+                pipe = r.pipeline()                    # both steps, or neither
+                pipe.xadd(DEAD, {**order, "tries": tries})
+                pipe.xack(STREAM, GROUP, msg_id)
+                pipe.execute()
+                say(name, f"order {order['order_id']} failed {tries - 1} times -> dead-letter tray")
+                continue
+            say(name, f"picked up abandoned ticket {msg_id} (delivery {tries})")
+            try:
+                cook(name, msg_id, order)
+                r.xack(STREAM, GROUP, msg_id)
+            except Exception as exc:
+                say(name, f"FAILED order {order['order_id']} again ({exc})")
         stop.wait(0.5)
 
 
-def produce(r: redis.Redis, n: int) -> dict:
-    expected = Counter()
-    for i in range(n):
-        user, amount = f"u{i % 3}", random.randint(1, 100)
-        r.xadd(STREAM, {"user": user, "amount": amount}, maxlen=10_000, approximate=True)
-        expected[user] += amount
-    r.xadd(STREAM, {"user": "u0", "amount": 0, "poison": "1"})
-    log(f"producer: added {n} orders + 1 poison message")
-    return expected
-
-
 def main() -> None:
-    r = client()
-    r.delete(STREAM, DLQ, TOTALS, *r.scan_iter("demo:processed:*"))
+    r.delete(STREAM, DEAD, COOKED, *r.scan_iter("kitchen:done:*"))
     r.xgroup_create(STREAM, GROUP, id="0", mkstream=True)
-    expected = produce(r, 30)
 
-    threads = [
-        threading.Thread(target=worker, args=("worker-A",)),
-        threading.Thread(target=worker, args=("worker-B",), kwargs={"crash_after": 2}),
-        threading.Thread(target=worker, args=("worker-C",), kwargs={"slow_once": True}),
-        threading.Thread(target=reclaimer),
-    ]
-    for t in threads:
+    dishes = ["dosa", "idli", "vada", "pongal"]
+    for n in range(1, 14):
+        order = {"order_id": n, "dish": dishes[n % 4]}
+        if n == 7:
+            order = {"order_id": n, "note": "???"}      # a broken order
+        # small ids (1-0, 2-0 ...) keep the output readable; real apps use "*"
+        r.xadd(STREAM, order, id=f"{n}-0")
+    say("app", "put 13 orders on the rail (order 7 is broken)")
+
+    ravi = threading.Thread(target=cook_worker, args=("ravi",), kwargs={"crash_after_first": True})
+    ravi.start()
+    time.sleep(0.2)                                    # let Ravi grab his tickets first
+    others = [threading.Thread(target=cook_worker, args=("meena",)),
+              threading.Thread(target=cook_worker, args=("kumar",)),
+              threading.Thread(target=supervisor)]
+    for t in others:
         t.start()
 
-    last_id = r.xinfo_stream(STREAM)["last-generated-id"]
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        group = next(g for g in r.xinfo_groups(STREAM) if g["name"] == GROUP)
-        if group["last-delivered-id"] == last_id and group["pending"] == 0:
+    while True:                                        # wait until all work is finished
+        group = r.xinfo_groups(STREAM)[0]
+        if group["lag"] == 0 and group["pending"] == 0:
             break
         time.sleep(0.2)
-    time.sleep(3.5)  # let the slow worker finish so we can see the duplicate being skipped
     stop.set()
-    for t in threads:
+    for t in [ravi, *others]:
         t.join()
 
     print("\n=== RESULT ===")
-    all_ids = [m for ids in handled_by.values() for m in ids]
-    for consumer, ids in sorted(handled_by.items()):
-        print(f"{consumer:10s} applied {len(ids):2d} messages")
-    print(f"messages applied twice      : {len(all_ids) - len(set(all_ids))}")
-    print(f"duplicates prevented (Lua)  : {dict(duplicates_prevented)}")
-    print(f"dead-letter stream entries  : {r.xlen(DLQ)}")
-    print(f"pending after run           : {r.xpending(STREAM, GROUP)['pending']}")
-    actual = {k: int(v) for k, v in r.hgetall(TOTALS).items()}
-    print(f"totals match producer       : {actual == dict(expected)}")
+    print("orders cooked by each cook :", dict(sorted(cooked_by.items())))
+    print("good orders cooked         :", len(times_cooked), "of 12")
+    print("orders cooked twice        :", sum(1 for c in times_cooked.values() if c > 1))
+    print("dishes made                :", dict(sorted(r.hgetall(COOKED).items())))
+    print("orders in dead-letter tray :", [o["order_id"] for _, o in r.xrange(DEAD)])
+    print("tickets still pending      :", r.xpending(STREAM, GROUP)["pending"])
 
 
 if __name__ == "__main__":
     main()
 ```
 
-Output from a real run (timings and IDs will differ on yours):
+Real output (times will differ a little on your machine):
 
 ```text
-[ 0.01s] producer: added 30 orders + 1 poison message
-[ 0.08s] worker-B: CRASHED while holding ['1791284547337-7', '1791284547337-8', '1791284547337-9'] (never acked)
-[ 0.66s] worker-A: failed 1791284547339-2 (cannot parse payload) -> left pending for retry
-[ 2.02s] reclaimer: claimed 1791284547337-7 (delivery 2)
-[ 2.06s] reclaimer: claimed 1791284547337-8 (delivery 2)
-[ 2.10s] reclaimer: claimed 1791284547337-9 (delivery 2)
-[ 2.14s] reclaimer: claimed 1791284547338-0 (delivery 2)
-[ 2.18s] reclaimer: claimed 1791284547338-1 (delivery 2)
-[ 2.21s] reclaimer: claimed 1791284547338-2 (delivery 2)
-[ 2.24s] reclaimer: claimed 1791284547338-3 (delivery 2)
-[ 2.28s] reclaimer: claimed 1791284547338-4 (delivery 2)
-[ 2.80s] reclaimer: claimed 1791284547339-2 (delivery 2)
-[ 2.80s] reclaimer: retry of 1791284547339-2 failed (cannot parse payload)
-[ 3.01s] worker-C: 1791284547338-0 was already processed by someone else -> skipped, acked
-[ 3.05s] worker-C: 1791284547338-1 was already processed by someone else -> skipped, acked
-[ 3.10s] worker-C: 1791284547338-2 was already processed by someone else -> skipped, acked
-[ 3.11s] worker-C: 1791284547338-3 was already processed by someone else -> skipped, acked
-[ 3.16s] worker-C: 1791284547338-4 was already processed by someone else -> skipped, acked
-[ 4.80s] reclaimer: claimed 1791284547339-2 (delivery 3)
-[ 4.80s] reclaimer: retry of 1791284547339-2 failed (cannot parse payload)
-[ 6.80s] reclaimer: 1791284547339-2 delivered 4x -> moved to dead-letter stream
+[ 0.0s] app        put 13 orders on the rail (order 7 is broken)
+[ 0.0s] ravi       took tickets ['1-0', '2-0', '3-0']
+[ 0.1s] ravi       cooked idli   for order 1
+[ 0.1s] ravi       CRASHED before XACK!
+[ 0.2s] meena      took tickets ['4-0', '5-0', '6-0']
+[ 0.2s] kumar      took tickets ['7-0', '8-0', '9-0']
+[ 0.2s] kumar      FAILED order 7 (order has no dish) -> stays pending
+[ 0.3s] meena      cooked dosa   for order 4
+[ 0.3s] kumar      cooked dosa   for order 8
+[ 0.3s] meena      cooked idli   for order 5
+[ 0.3s] kumar      cooked idli   for order 9
+[ 0.3s] kumar      took tickets ['10-0', '11-0', '12-0']
+[ 0.4s] meena      cooked vada   for order 6
+[ 0.4s] meena      took tickets ['13-0']
+[ 0.4s] kumar      cooked vada   for order 10
+[ 0.4s] meena      cooked idli   for order 13
+[ 0.4s] kumar      cooked pongal for order 11
+[ 0.5s] kumar      cooked dosa   for order 12
+[ 2.2s] supervisor picked up abandoned ticket 1-0 (delivery 2)
+[ 2.3s] supervisor order 1 was already cooked -> skip it
+[ 2.3s] supervisor picked up abandoned ticket 2-0 (delivery 2)
+[ 2.3s] supervisor cooked vada   for order 2
+[ 2.3s] supervisor picked up abandoned ticket 3-0 (delivery 2)
+[ 2.4s] supervisor cooked pongal for order 3
+[ 2.4s] supervisor picked up abandoned ticket 7-0 (delivery 2)
+[ 2.4s] supervisor FAILED order 7 again (order has no dish)
+[ 4.4s] supervisor picked up abandoned ticket 7-0 (delivery 3)
+[ 4.4s] supervisor FAILED order 7 again (order has no dish)
+[ 6.4s] supervisor order 7 failed 3 times -> dead-letter tray
 
 === RESULT ===
-reclaimer  applied  8 messages
-worker-A   applied 20 messages
-worker-B   applied  2 messages
-messages applied twice      : 0
-duplicates prevented (Lua)  : {'worker-C': 5}
-dead-letter stream entries  : 1
-pending after run           : 0
-totals match producer       : True
+orders cooked by each cook : {'kumar': 5, 'meena': 4, 'ravi': 1, 'supervisor': 2}
+good orders cooked         : 12 of 12
+orders cooked twice        : 0
+dishes made                : {'dosa': '3', 'idli': '4', 'pongal': '2', 'vada': '3'}
+orders in dead-letter tray : ['7']
+tickets still pending      : 0
 ```
 
-How to read it:
+**How to read it**
 
-- worker-B crashed holding three messages. After 2 s of idle, the reclaimer claimed them (delivery count 2) and processed them. **Nothing was lost.**
-- worker-C's first message took 3 s, so its whole batch was reclaimed and processed by the reclaimer. When worker-C finally finished, the Lua script reported "already processed" five times. **Nothing was applied twice.**
-- The poison message failed on deliveries 1, 2 and 3, and was moved to `demo:orders:dead` on the 4th claim.
-- `totals match producer : True` is the end-to-end proof of effectively-once processing.
+- **Each ticket went to one cook.** Ravi took tickets 1–3, and Meena and Kumar shared the rest, three at a time. No ticket was handed to two cooks.
+- **Nothing was lost.** Ravi crashed holding tickets 1, 2 and 3. Two seconds later the supervisor took them over.
+- **Nothing was cooked twice.** Order 1 had already been cooked by Ravi before he crashed, so the supervisor's "already done?" check skipped it.
+- **The broken order didn't block anyone.** Order 7 failed, was retried, and after 3 failures went to the dead-letter tray. Everyone else kept working.
+- **`good orders cooked: 12 of 12`** and **`tickets still pending: 0`** prove the whole thing worked.
 
-Try changing things: set `count=1` in the workers and only the slow message itself gets reclaimed instead of the whole batch; set `CLAIM_IDLE_MS = 5000` and worker-C keeps its batch, so no work is wasted (crash recovery just takes longer).
+Things to try:
 
-### 18.10 Production worker template (asyncio)
+- Set `CLAIM_AFTER_MS = 10_000`: recovery takes longer, but slow cooks are never interrupted.
+- Remove `crash_after_first=True`: Ravi behaves normally and the supervisor has only the broken order to deal with.
+- Change `count=3` to `count=1` in `cook_worker`: each cook takes one ticket at a time, so a crash leaves at most one ticket behind.
 
-A worker you can run as many copies of as you like. It:
+### 18.17 A worker for production
 
-- creates the group if missing,
-- resumes its own pending messages on startup,
-- reclaims stale messages from dead consumers every 30 s and dead-letters poison ones,
-- reads new messages with a blocking read,
-- shuts down cleanly on `SIGTERM` (Kubernetes) or `Ctrl+C`.
+The demo uses threads to keep everything in one file. In a real app each cook is its **own process** (or Kubernetes pod). This async worker:
+
+- creates the team if it doesn't exist,
+- finishes its **own leftovers** on startup,
+- every 30 s takes over **abandoned tickets** and moves bad ones to the dead-letter stream,
+- waits for **new tickets** with a blocking read,
+- **shuts down cleanly** on `Ctrl+C` or Kubernetes `SIGTERM`.
 
 ```python
-"""worker.py - production-style Redis Streams consumer (redis.asyncio).
-
-Run many copies with different CONSUMER_NAME values.
 """
-import asyncio, json, logging, os, signal, socket
+worker.py - a production-style Redis Streams worker (asyncio).
+
+Start as many copies as you like, each with its own name:
+    CONSUMER_NAME=cook-1 python worker.py
+    CONSUMER_NAME=cook-2 python worker.py
+"""
+import asyncio
+import json
+import logging
+import os
+import signal
+import socket
+
 import redis.asyncio as aioredis
 
-STREAM, GROUP, DLQ = "orders", "order-workers", "orders:dead"
+STREAM, GROUP, DEAD = "orders", "kitchen", "orders:dead"
 CONSUMER = os.getenv("CONSUMER_NAME") or f"{socket.gethostname()}-{os.getpid()}"
-BATCH, BLOCK_MS = 10, 5_000
-CLAIM_IDLE_MS, MAX_DELIVERIES = 60_000, 5
-RECLAIM_EVERY_S = 30
+BATCH = 10                  # tickets per read
+BLOCK_MS = 5_000            # wait up to 5 s for new tickets
+CLAIM_AFTER_MS = 60_000     # take over tickets nobody touched for 60 s
+MAX_TRIES = 5               # then move the ticket to the dead-letter stream
+RECLAIM_EVERY_S = 30        # how often to look for abandoned tickets
 
 log = logging.getLogger(CONSUMER)
-r = aioredis.Redis(host="localhost", port=6379, decode_responses=True,
-                   socket_timeout=BLOCK_MS / 1000 + 5, health_check_interval=30)
+r = aioredis.Redis(
+    host="localhost", port=6379, decode_responses=True,
+    socket_timeout=BLOCK_MS / 1000 + 5,   # must be longer than the BLOCK wait
+    health_check_interval=30,
+)
 
-async def ensure_group():
+
+async def ensure_group() -> None:
     try:
         await r.xgroup_create(STREAM, GROUP, id="$", mkstream=True)
     except aioredis.ResponseError as e:
-        if "BUSYGROUP" not in str(e):
+        if "BUSYGROUP" not in str(e):     # BUSYGROUP = the group already exists
             raise
 
-async def handle(msg_id, fields):
-    """Your business logic. Must be idempotent (dedup on order["event_id"], see 18.5)."""
-    order = json.loads(fields["data"])
-    log.info("processing %s -> %s", msg_id, order)
 
-async def process(msg_id, fields):
-    if not fields:
+async def handle(order: dict) -> None:
+    """Your business logic. Make it safe to run twice (see section 18.6)."""
+    log.info("cooking %s", order)
+
+
+async def process(msg_id: str, fields: dict) -> None:
+    if not fields:                        # entry was trimmed away while pending
         await r.xack(STREAM, GROUP, msg_id)
         return
     try:
-        await handle(msg_id, fields)
-        await r.xack(STREAM, GROUP, msg_id)
+        await handle(json.loads(fields["data"]))
+        await r.xack(STREAM, GROUP, msg_id)                # "done"
     except Exception:
-        log.exception("failed %s, leaving it pending for retry", msg_id)
+        log.exception("failed %s, it stays pending and will be retried", msg_id)
 
-async def reclaim():
+
+async def reclaim_abandoned() -> None:
     start = "0-0"
     while True:
-        result = await r.xautoclaim(STREAM, GROUP, CONSUMER, CLAIM_IDLE_MS, start_id=start, count=BATCH)
+        result = await r.xautoclaim(STREAM, GROUP, CONSUMER, CLAIM_AFTER_MS,
+                                    start_id=start, count=BATCH)
         start, claimed = result[0], result[1]
         for msg_id, fields in claimed:
             info = await r.xpending_range(STREAM, GROUP, min=msg_id, max=msg_id, count=1)
-            if info and info[0]["times_delivered"] > MAX_DELIVERIES:
-                await r.xadd(DLQ, {**fields, "original_id": msg_id})
-                await r.xack(STREAM, GROUP, msg_id)
-                log.warning("dead-lettered %s", msg_id)
+            if info and info[0]["times_delivered"] > MAX_TRIES:
+                pipe = r.pipeline()                         # both steps, or neither
+                pipe.xadd(DEAD, {**fields, "original_id": msg_id})
+                pipe.xack(STREAM, GROUP, msg_id)
+                await pipe.execute()
+                log.warning("moved %s to the dead-letter stream", msg_id)
             else:
                 await process(msg_id, fields)
-        if start == "0-0":
+        if start == "0-0":                # went through the whole pending list
             return
 
-async def run(stop):
+
+async def run(stop: asyncio.Event) -> None:
     await ensure_group()
+
+    # 1. After a restart, finish MY OWN unfinished tickets first (id "0")
     for _, msgs in await r.xreadgroup(GROUP, CONSUMER, {STREAM: "0"}, count=1000) or []:
         for msg_id, fields in msgs:
             await process(msg_id, fields)
+
     loop = asyncio.get_running_loop()
     last_reclaim = 0.0
     while not stop.is_set():
+        # 2. Now and then, take over tickets from cooks that disappeared
         if loop.time() - last_reclaim > RECLAIM_EVERY_S:
-            await reclaim()
+            await reclaim_abandoned()
             last_reclaim = loop.time()
-        resp = await r.xreadgroup(GROUP, CONSUMER, {STREAM: ">"}, count=BATCH, block=BLOCK_MS)
-        for _, msgs in resp or []:
+        # 3. Read NEW tickets (id ">"), waiting up to BLOCK_MS for them
+        reply = await r.xreadgroup(GROUP, CONSUMER, {STREAM: ">"}, count=BATCH, block=BLOCK_MS)
+        for _, msgs in reply or []:
             for msg_id, fields in msgs:
                 await process(msg_id, fields)
     log.info("stopped cleanly")
 
-async def main():
+
+async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(message)s")
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    for sig in (signal.SIGTERM, signal.SIGINT):    # Kubernetes sends SIGTERM on shutdown
         loop.add_signal_handler(sig, stop.set)
     await run(stop)
     await r.aclose()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-Run three consumers:
+Run three cooks:
 
 ```bash
-CONSUMER_NAME=worker-1 python worker.py &
-CONSUMER_NAME=worker-2 python worker.py &
-CONSUMER_NAME=worker-3 python worker.py &
+CONSUMER_NAME=cook-1 python worker.py &
+CONSUMER_NAME=cook-2 python worker.py &
+CONSUMER_NAME=cook-3 python worker.py &
 ```
 
-A FastAPI endpoint that produces work:
+The app side (FastAPI) that adds orders:
 
 ```python
 import json
@@ -1733,21 +2536,21 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 
 app = FastAPI()
-r = aioredis.Redis(decode_responses=True)
+ar = aioredis.Redis(decode_responses=True)
 
 @app.post("/orders")
-async def create_order(order: dict):
-    event = {"event_id": str(uuid.uuid4()), **order}
-    msg_id = await r.xadd("orders", {"data": json.dumps(event)},
-                          maxlen=1_000_000, approximate=True)
+async def place_order(order: dict):
+    event = {"event_id": str(uuid.uuid4()), **order}      # the id used to avoid duplicates
+    msg_id = await ar.xadd("orders", {"data": json.dumps(event)},
+                           maxlen=1_000_000, approximate=True)
     return {"queued": msg_id, "event_id": event["event_id"]}
 ```
 
-On Kubernetes, use the pod name as the consumer name and give pods enough time to finish on shutdown:
+On Kubernetes, use the pod name as the cook name and give pods time to finish:
 
 ```yaml
 spec:
-  terminationGracePeriodSeconds: 60      # > BLOCK time + longest batch
+  terminationGracePeriodSeconds: 60      # longer than BLOCK + your slowest batch
   containers:
     - name: worker
       env:
@@ -1757,513 +2560,435 @@ spec:
               fieldPath: metadata.name
 ```
 
-**Concurrency inside one worker.** The template processes one message at a time. For I/O-bound work, process a batch concurrently with a cap:
+**Doing several tickets at once inside one worker.** The template handles one ticket at a time. If the work is mostly waiting on the network, handle a batch together, with a limit:
 
 ```python
-sem = asyncio.Semaphore(20)
+limit = asyncio.Semaphore(20)            # at most 20 at the same time
 
-async def guarded(msg_id, fields):
-    async with sem:
+async def limited(msg_id, fields):
+    async with limit:
         await process(msg_id, fields)
 
-# inside the read loop
-for _, msgs in resp or []:
-    await asyncio.gather(*(guarded(m, f) for m, f in msgs))
+# inside the read loop:
+for _, msgs in reply or []:
+    await asyncio.gather(*(limited(m, f) for m, f in msgs))
 ```
 
-**Gotcha: socket timeout vs BLOCK.** A blocking `XREADGROUP ... BLOCK 5000` keeps the socket silent for up to 5 s. If the client's `socket_timeout` is shorter, you get `TimeoutError`s. Always set `socket_timeout` larger than your `BLOCK` (the template uses `BLOCK + 5 s`).
+> **Gotcha:** a read with `block=5000` keeps the connection silent for up to 5 seconds. If the client's `socket_timeout` is shorter, you'll get `TimeoutError`s. Always set `socket_timeout` longer than `BLOCK` (the template uses BLOCK + 5 s).
 
-### 18.11 Fan-out with multiple groups
+### 18.18 Three levels of delivery promise
 
-Several services need the same event: billing must charge, email must send a receipt, analytics must count. Give each service **its own group** on the same stream.
-
-```mermaid
-flowchart LR
-    P["Order service<br/>XADD orders"] --> S[("Stream: orders")]
-    S --> G1["Group: billing"]
-    S --> G2["Group: email"]
-    S --> G3["Group: analytics"]
-    G1 --> B1["billing-1"]
-    G1 --> B2["billing-2"]
-    G2 --> E1["email-1"]
-    G3 --> A1["analytics-1"]
-    G3 --> A2["analytics-2"]
-    G3 --> A3["analytics-3"]
-```
-
-```python
-for group in ("billing", "email", "analytics"):
-    try:
-        r.xgroup_create("orders", group, id="$", mkstream=True)
-    except redis.ResponseError as e:
-        if "BUSYGROUP" not in str(e):
-            raise
-
-# billing workers read with GROUP billing, email workers with GROUP email, ...
-r.xreadgroup("billing", "billing-1", {"orders": ">"}, count=10, block=5000)
-r.xreadgroup("email", "email-1", {"orders": ">"}, count=10, block=5000)
-```
-
-- **Every group gets every message.** Inside a group, the work is split.
-- Groups are independent: a slow email service doesn't slow billing down.
-- Adding a new group later with id `0` lets a new service **replay history** that is still in the stream.
-- Retention must respect the **slowest** group ([18.14](#1814-retention-and-trimming)).
-
-### 18.12 Ordering and partitioning
-
-A stream stores entries in order. But with several consumers in a group, **processing** order is not guaranteed: m2 can finish before m1, and retries move messages even further out of order.
-
-If order matters **per entity** (all events of order #42 must apply in sequence), partition by key: N streams, route each key to one stream with a stable hash, and have one active consumer per stream.
-
-```mermaid
-flowchart LR
-    P["Producer"] -- "crc32(order_id) mod 4" --> R{"Router"}
-    R --> S0[("orders:0")]
-    R --> S1[("orders:1")]
-    R --> S2[("orders:2")]
-    R --> S3[("orders:3")]
-    S0 --> W0["consumer for partition 0"]
-    S1 --> W1["consumer for partition 1"]
-    S2 --> W2["consumer for partition 2"]
-    S3 --> W3["consumer for partition 3"]
-```
-
-```python
-import zlib
-
-PARTITIONS = 4
-
-def stream_for(key: str) -> str:
-    # Python's built-in hash() changes between processes, so use a stable hash
-    return f"orders:{zlib.crc32(key.encode()) % PARTITIONS}"
-
-r.xadd(stream_for("order-42"), {"data": json.dumps(event)})
-```
-
-This is the same idea as Kafka partitions. Ordering costs parallelism: one partition is processed by one consumer at a time. For strict ordering, also process each partition's messages one by one and don't skip a failing message (park the whole partition or send it to a per-key retry path).
-
-### 18.13 Retries with backoff
-
-`XAUTOCLAIM` gives you a **fixed** retry delay (the `min-idle-time`). For exponential backoff, ack the failed message and re-schedule a copy through the delayed queue from [section 12](#12-delayed-jobs-with-sorted-sets):
-
-```python
-import json
-import time
-
-MAX_ATTEMPTS = 5
-
-def retry_later(msg_id: str, fields: dict, error: Exception) -> None:
-    job = json.loads(fields["data"])                  # keeps its event_id
-    job["attempt"] = job.get("attempt", 0) + 1
-    pipe = r.pipeline()                               # MULTI/EXEC: both or neither
-    if job["attempt"] > MAX_ATTEMPTS:
-        pipe.xadd(DLQ, {"data": json.dumps(job), "error": str(error)[:500], "original_id": msg_id})
-    else:
-        delay = min(5 * 2 ** job["attempt"], 3600)    # 10 s, 20 s, 40 s ... up to 1 h
-        pipe.zadd("delayed:orders", {json.dumps(job, sort_keys=True): time.time() + delay})
-    pipe.xack(STREAM, GROUP, msg_id)
-    pipe.execute()
-
-# in the worker
-try:
-    handle(msg_id, fields)
-    r.xack(STREAM, GROUP, msg_id)
-except TemporaryError as exc:                         # e.g. downstream API is down
-    retry_later(msg_id, fields, exc)
-```
-
-The mover loop from section 12 puts the job back into the stream when it's due. Because the retried copy gets a **new stream ID**, deduplication must use the `event_id` inside the payload.
-
-### 18.14 Retention and trimming
-
-Acked entries are **not** deleted. Without trimming, a stream grows until Redis runs out of memory.
-
-```python
-# Cap by count while producing (cheap, approximate with ~)
-r.xadd("orders", {"data": payload}, maxlen=1_000_000, approximate=True)
-
-# Cap by age: drop entries older than 7 days (IDs are timestamps)
-week_ago_ms = int((time.time() - 7 * 86_400) * 1000)
-r.xtrim("orders", minid=f"{week_ago_ms}-0", approximate=True)
-```
-
-- `~` (approximate) trims whole internal nodes and is much cheaper than exact trimming. The stream may keep a few extra entries.
-- Trimming does not care about consumer groups. It can remove entries that are **still pending** or **not yet delivered** to a slow group. Pending ones that were trimmed come back from `XAUTOCLAIM` in its third result (deleted IDs) and are dropped from the PEL, so they are effectively lost. Size retention well above the worst backlog of the slowest group, and alert on lag before it gets close.
-- Prefer trimming over `XDEL` for retention.
-
-### 18.15 Consumer housekeeping
-
-Consumers are never removed automatically, so after many deploys `XINFO CONSUMERS` fills up with dead names.
-
-```python
-def remove_idle_consumers(stream: str, group: str, idle_ms: int = 3_600_000) -> None:
-    for c in r.xinfo_consumers(stream, group):
-        if c["pending"] == 0 and c["idle"] > idle_ms:
-            r.xgroup_delconsumer(stream, group, c["name"])
-```
-
-**Never delete a consumer that still has pending messages.** `XGROUP DELCONSUMER` drops its PEL entries, so those messages will never be redelivered. Claim them first (`XAUTOCLAIM`), then delete.
-
-Other group operations:
-
-```python
-r.xgroup_setid("orders", "analytics", id="0")   # replay everything still in the stream
-r.xgroup_setid("orders", "analytics", id="$")   # skip the backlog, only new messages
-r.xgroup_destroy("orders", "analytics")         # remove the group entirely
-```
-
-### 18.16 Monitoring and autoscaling
-
-```python
-def stream_health(stream: str, group: str) -> dict:
-    g = next(x for x in r.xinfo_groups(stream) if x["name"] == group)
-    oldest = r.xpending_range(stream, group, "-", "+", 1)
-    return {
-        "length": r.xlen(stream),
-        "lag": g.get("lag"),                    # entries not yet delivered to the group (Redis 7+)
-        "pending": g["pending"],                # delivered but not acked
-        "consumers": [(c["name"], c["pending"], c["idle"]) for c in r.xinfo_consumers(stream, group)],
-        "oldest_pending_idle_ms": oldest[0]["time_since_delivered"] if oldest else 0,
-        "dead_letters": r.xlen(f"{stream}:dead"),
-    }
-# {'length': 6, 'lag': 0, 'pending': 0, 'consumers': [('w1', 0, 1003), ('w2', 0, 1001)],
-#  'oldest_pending_idle_ms': 0, 'dead_letters': 0}
-```
-
-| Signal | What it means | Action |
+| Level | How | Use for |
 |---|---|---|
-| `lag` keeps growing | Producers are faster than consumers | Add consumers, optimise the handler |
-| `pending` high, oldest pending idle is large | Workers are stuck or crashing | Check logs, check reclaimer |
-| A consumer's `idle` is huge and it has pending | That process is dead | Reclaimer should take its messages |
-| `dead_letters > 0` | Poison messages | Alert, fix, replay |
-| `length` near your MAXLEN | Retention may cut unprocessed data | Increase retention or capacity |
+| **At most once** (may lose) | Pub/Sub, or `XREADGROUP ... NOACK` (no pending list) | Metrics, logs, "who's online" |
+| **At least once** (may repeat) | `XREADGROUP` + `XACK` after the work | The normal setting |
+| **Effectively once** | At least once + work that is safe to repeat ([18.6](#186-can-work-happen-twice-and-how-to-stop-it)) | Payments, stock, emails, anything a customer sees |
 
-On Kubernetes, **KEDA** has a Redis Streams scaler that can scale your worker Deployment based on pending entries or lag, including scaling to zero when idle.
+### 18.19 Streams quick reference
 
-### 18.17 Delivery semantics and NOACK
+**Special ids**
 
-| Mode | How | Use when |
+| You write | In | Means |
 |---|---|---|
-| At-most-once | Pub/Sub, or `XREADGROUP ... NOACK` (no PEL entry is created) | Losing a message is fine: metrics, logs, presence |
-| At-least-once | `XREADGROUP` + `XACK` after the work | The default for real work |
-| Effectively-once | At-least-once + idempotent handler (18.5) | Payments, inventory, emails, anything user-visible |
+| `*` | `XADD` | Make the id for me (from the current time) |
+| `$` | `XGROUP CREATE` | The team only reads orders added from now on |
+| `0` | `XGROUP CREATE` | The team starts from the very first order |
+| `>` | `XREADGROUP` | New tickets nobody in my team has taken |
+| `0` | `XREADGROUP` | **My own** unfinished tickets |
+| `-` and `+` | `XRANGE`, `XPENDING` | Smallest and largest possible id |
 
-### 18.18 Streams vs Pub/Sub vs Lists vs Kafka
+**Commands**
 
-| | Pub/Sub | List (`BRPOP` / `LMOVE`) | Stream + consumer group | Kafka |
+| Command | In plain words |
+|---|---|
+| `XADD key * field value` | Put a ticket on the rail |
+| `XLEN key` | How many tickets are on the rail |
+| `XRANGE key - + COUNT n` | Look at tickets (no team, nothing changes) |
+| `XREAD BLOCK ms STREAMS key id` | Read without a team: every reader sees everything |
+| `XGROUP CREATE key group id MKSTREAM` | Create a team |
+| `XREADGROUP GROUP g c COUNT n BLOCK ms STREAMS key >` | Cook `c` of team `g` takes new tickets |
+| `XACK key group id ...` | "Done" |
+| `XPENDING key group` | Summary of unfinished tickets |
+| `XPENDING key group - + n` | Unfinished tickets with owner, idle time and delivery count |
+| `XAUTOCLAIM key group c min-idle 0-0` | Take tickets that were idle too long |
+| `XCLAIM key group c 0 id JUSTID` | Heartbeat: reset idle time without counting a delivery |
+| `XINFO GROUPS key` / `XINFO CONSUMERS key group` | Team and cook status |
+| `XTRIM key MAXLEN ~ n` / `MINID ~ id` | Remove old tickets |
+| `XGROUP SETID key group id` | Move the team's position (replay or skip) |
+| `XGROUP DELCONSUMER key group c` | Remove a cook name (and its pending tickets!) |
+
+### 18.20 Streams vs Pub/Sub vs Lists vs Kafka
+
+| | Pub/Sub | List | Stream + group | Kafka |
 |---|---|---|---|---|
 | Message kept if nobody is listening | No | Yes | Yes | Yes |
-| Acks and redelivery | No | Manual (`LMOVE` to a processing list) | Built in (PEL, `XAUTOCLAIM`) | Built in (offsets) |
-| Work sharing between workers | No | Yes | Yes | Yes (per partition) |
-| Fan-out to several services | Yes | No | Yes (one group each) | Yes (one consumer group each) |
-| Replay history | No | No | Yes, while retained | Yes, long retention |
-| Ordering | Per channel | Per list | Per stream, not across parallel consumers | Per partition |
-| Data size | n/a | RAM | RAM | Disk (TBs, months) |
-| Operational cost | You already run Redis | You already run Redis | You already run Redis | A separate cluster |
+| "Done" receipts and retries | No | Do it yourself | Built in | Built in |
+| Several workers share the work | No | Yes | Yes | Yes |
+| Several teams each get everything | Yes | No | Yes | Yes |
+| Read old messages again | No | No | Yes, until trimmed | Yes, kept for long |
+| Where data lives | Not stored | Memory | Memory | Disk (huge, months) |
+| Extra system to run | No | No | No | Yes, a whole cluster |
 
 Rules of thumb:
 
-- **Redis Streams**: most product job queues and internal events at moderate volume, when you already run Redis and retention of hours to days is enough.
-- **Kafka (or similar)**: very high throughput, long retention, many teams consuming the same events, stream processing.
-- **A task framework** (Celery, RQ, Dramatiq, arq, Taskiq): when you want scheduling, retries and result storage without building them yourself.
+- **Redis Streams:** job queues and events inside your product, moderate volume, keeping hours to days of history, and you already run Redis.
+- **Kafka (or similar):** huge volume, history kept for weeks or months, many teams reading the same events.
+- **A task library** (Celery, RQ, Dramatiq, arq, Taskiq): you want scheduling, retries and results without building them yourself.
 
 ---
 
-# Part 5 — Running Redis in production
+# Part 5 — Running Redis for real
 
-## 19. Persistence
+## 19. Saving data to disk
 
-Redis keeps data in RAM, but it can write it to disk so it survives restarts.
+Redis keeps data in RAM, which is lost when the server stops. To survive restarts, Redis can also write to disk in two ways.
+
+**Picture:**
+- **RDB** = taking a **photo of the whiteboard** every few minutes. Small and quick to restore, but you lose whatever was written after the last photo.
+- **AOF** = keeping a **diary of every change**. Bigger, but you lose at most about one second.
 
 ```mermaid
 flowchart LR
-    W["Writes"] --> MEM[("In-memory dataset")]
-    MEM -- "periodic snapshot (fork)" --> RDB["RDB file<br/>compact, fast restart,<br/>loses writes since last snapshot"]
-    MEM -- "append every write" --> AOF["AOF log<br/>fsync every second by default,<br/>loses at most ~1 s"]
-    RDB & AOF --> RESTART["Restart: load AOF if enabled, else RDB"]
+    W["Writes"] --> MEM[("Data in memory")]
+    MEM -- "photo every few minutes" --> RDB["RDB file<br/>small, fast restart,<br/>may lose minutes"]
+    MEM -- "diary of every write" --> AOF["AOF file<br/>loses about 1 second at most"]
+    RDB & AOF --> RESTART["After a restart, Redis loads them back"]
 ```
 
-| Mode | Data loss on crash | Notes |
+| Setting | Data lost if Redis crashes | Good for |
 |---|---|---|
-| None | Everything | Fine for a pure cache that can be rebuilt |
-| RDB only | Minutes (since last snapshot) | Small files, good for backups |
-| AOF `everysec` | About 1 second | The usual choice for queues, sessions, durable data |
-| AOF `always` | Almost none | Much slower writes |
-| RDB + AOF | About 1 second | Common production setup; AOF is rewritten with an RDB preamble |
+| Nothing saved | Everything | A pure cache you can rebuild |
+| RDB only | Minutes | Backups, data that's OK to lose a little of |
+| AOF, write every second | About 1 second | Queues, sessions, most real data |
+| AOF, write on every change | Almost nothing | Rarely worth it: much slower |
+| RDB + AOF | About 1 second | The usual production choice |
 
 ```conf
 # redis.conf
 appendonly yes
 appendfsync everysec
-save 3600 1 300 100 60 10000      # snapshot rules for RDB
+save 3600 1 300 100 60 10000      # RDB photo rules: after 3600 s if 1 change, etc.
 ```
 
-Snapshots and AOF rewrites `fork()` the process. With a large dataset, the fork can pause Redis for a moment and temporarily need extra memory (copy-on-write). Leave memory headroom (≈ 30–50% spare on write-heavy instances).
+Two practical notes:
 
-Back up RDB files off the machine. Persistence protects against restarts, not against disk loss or `FLUSHALL`.
+- Saving uses a copy of the process (`fork`). With a lot of data it briefly needs extra memory. Leave free RAM (around 30–50% on busy servers).
+- Copy backup files to another machine. Saving to disk protects against restarts, not against a dead disk or someone running `FLUSHALL`.
 
 ---
 
-## 20. Memory and eviction
+## 20. When memory is full
 
-### Set a limit and a policy
+**Picture:** a fridge that is full. You must decide: throw out the oldest food, the food nobody eats, or stop putting new food in.
+
+Set a limit and a rule:
 
 ```conf
 maxmemory 4gb
 maxmemory-policy allkeys-lru
 ```
 
-| Policy | Evicts | Use for |
+| Rule (policy) | What gets thrown out | Use for |
 |---|---|---|
-| `noeviction` | Nothing; writes fail with an OOM error | Queues, streams, sessions, primary data |
-| `allkeys-lru` | Least recently used, any key | Pure cache |
-| `allkeys-lfu` | Least frequently used, any key | Cache with stable hot keys |
-| `volatile-lru` / `volatile-lfu` | Only keys that have a TTL | Mixed instance: cache keys have TTLs, durable keys don't |
-| `volatile-ttl` | Keys closest to expiry | Rarely the best choice |
-| `allkeys-random` / `volatile-random` | Random | Rarely the best choice |
+| `noeviction` | Nothing. New writes fail with an "out of memory" error | Queues, streams, sessions, locks: data you can't lose silently |
+| `allkeys-lru` | Keys not used for the longest time | A pure cache |
+| `allkeys-lfu` | Keys used the least often | A cache with some always-popular keys |
+| `volatile-lru` / `volatile-lfu` | Only keys that have a TTL | A mixed server where only cache keys have TTLs |
 
-**Danger:** if one instance holds both cache entries and durable data (streams, locks, idempotency keys), `allkeys-lru` may evict your **stream or locks**. Use separate instances for cache and durable data, or `volatile-*` policies with TTLs only on cache keys. With `noeviction`, your code must handle `OOM command not allowed` errors.
+> **Danger:** if one Redis server holds both your **cache** and your **order stream**, `allkeys-lru` may throw away the stream or your locks. Use a separate Redis for the cache, or a `volatile-*` rule with TTLs only on cache keys.
 
-### Find and avoid big keys
+### Never use `KEYS *` in production
 
-```bash
-redis-cli --bigkeys          # largest key per type
-redis-cli --memkeys          # largest keys by memory
-redis-cli MEMORY USAGE user:42
+`KEYS` looks at every key in one go and freezes Redis while it does. `SCAN` looks a small piece at a time.
+
+```text
+> MSET cache:menu:1 a cache:menu:2 b cache:menu:3 c session:abc x
+OK
+# SCAN <cursor> MATCH <pattern> COUNT <how many to look at per step>
+> SCAN 0 MATCH cache:menu:* COUNT 100
+1) "0"
+2) 1) "cache:menu:3"
+   2) "cache:menu:1"
+   3) "cache:menu:2"
 ```
 
-- Keep collections bounded: trim lists (`LTRIM`), streams (`MAXLEN`), sorted sets (`ZREMRANGEBYRANK`).
-- Split huge hashes into buckets (`user:42:events:2026-10`).
-- Small hashes, lists, sets and sorted sets use a compact encoding (listpack). Many small objects are cheaper than one giant one.
-- Delete big keys with `UNLINK` (frees memory in the background) instead of `DEL`.
-
-### Never use KEYS in production
-
-`KEYS pattern` scans the whole keyspace in one blocking call. Use `SCAN`, which walks the keyspace in small steps.
+The first line of the reply is the **cursor**. `"0"` means "finished". Otherwise, call `SCAN` again with that number. In Python, `scan_iter` does the looping for you:
 
 ```python
-# bad
-for key in r.keys("cache:product:*"):
-    r.delete(key)
-
-# good: incremental, non-blocking, batched deletes
 batch = []
-for key in r.scan_iter(match="cache:product:*", count=1000):
+for key in r.scan_iter(match="cache:menu:*", count=1000):
     batch.append(key)
     if len(batch) >= 500:
-        r.unlink(*batch)
+        r.unlink(*batch)        # delete in batches
         batch.clear()
 if batch:
     r.unlink(*batch)
+print(r.exists("cache:menu:1"))  # 0
 ```
 
-The same applies inside collections: `HSCAN`, `SSCAN`, `ZSCAN` instead of `HGETALL` / `SMEMBERS` / `ZRANGE 0 -1` on big keys.
+The same goes for big collections: use `HSCAN`, `SSCAN` and `ZSCAN` instead of `HGETALL`, `SMEMBERS` and `ZRANGE 0 -1` on huge keys.
+
+### Big keys
+
+A list with 10 million items is slow to read, slow to delete and hard to move.
+
+```text
+> HSET user:1 name Asha city Chennai plan pro
+(integer) 3
+# how many bytes does this key use?
+> MEMORY USAGE user:1
+(integer) 96
+# delete in the background, without freezing Redis
+> UNLINK user:1
+(integer) 1
+```
+
+```bash
+redis-cli --bigkeys      # biggest key of each type
+redis-cli --memkeys      # biggest keys by memory
+```
+
+- Keep collections bounded: `LTRIM` lists, `MAXLEN` streams, `ZREMRANGEBYRANK` sorted sets.
+- Split huge hashes into smaller ones (`user:1:orders:2026-10`).
+- Delete big keys with `UNLINK`, not `DEL`.
 
 ---
 
-## 21. Replication, Sentinel and Cluster
+## 21. Copies, failover and clusters
 
-### Replication
+### Replication: a copy that follows along
 
-A primary streams its writes to one or more replicas. Replication is **asynchronous**: a write acknowledged by the primary can be lost if the primary dies before replicas receive it. `WAIT n timeout` blocks until `n` replicas have the write, which narrows (but does not remove) that window.
+**Picture:** an assistant who copies everything written on the main whiteboard onto a second whiteboard.
 
-Replicas can serve reads, but they may be slightly behind (read-your-own-write can fail).
+The copy (replica) can serve reads and take over if the main one dies. The copying happens **a moment later** (asynchronously), so:
 
-### Sentinel: automatic failover for one primary
+- a write can be lost if the main server dies before the copy receives it,
+- a read from the copy might be a fraction of a second behind.
+
+### Sentinel: automatic takeover
+
+**Picture:** three managers watch the main whiteboard. If they agree it's gone, they promote the assistant's copy to be the new main board and tell everyone where it is.
 
 ```mermaid
 flowchart TD
-    APP["App with Sentinel-aware client"] -- "who is the primary?" --> SEN["Sentinels (3 or more, quorum)"]
-    SEN -- "monitor" --> P[("Primary")]
-    SEN -- "monitor" --> R1[("Replica 1")]
-    SEN -- "monitor" --> R2[("Replica 2")]
-    P -- "async replication" --> R1
-    P -- "async replication" --> R2
+    APP["App"] -- "where is the main Redis?" --> SEN["3 Sentinels (they vote)"]
+    SEN -- "watch" --> P[("Main")]
+    SEN -- "watch" --> R1[("Copy 1")]
+    SEN -- "watch" --> R2[("Copy 2")]
+    P -- "copies changes" --> R1
+    P -- "copies changes" --> R2
     APP -- "reads and writes" --> P
 ```
-
-When the primary fails, the Sentinels agree, promote a replica, and clients ask Sentinel for the new address.
 
 ```python
 from redis.sentinel import Sentinel
 
 sentinel = Sentinel([("sentinel-1", 26379), ("sentinel-2", 26379), ("sentinel-3", 26379)],
                     socket_timeout=0.5)
-primary = sentinel.master_for("mymaster", decode_responses=True)    # writes
-replica = sentinel.slave_for("mymaster", decode_responses=True)     # reads that can be stale
-primary.set("k", "v")
+main = sentinel.master_for("mymaster", decode_responses=True)    # for writes
+copy = sentinel.slave_for("mymaster", decode_responses=True)     # for reads that may lag
+main.set("menu:title", "Tiffin Express")
 ```
 
-### Cluster: sharding across many primaries
+### Cluster: split the data across many servers
 
-The keyspace is split into **16,384 hash slots**. Each key maps to a slot with `CRC16(key) mod 16384`, and each primary owns a range of slots.
+**Picture:** one whiteboard is full, so you use several. A simple rule decides which board each key goes on.
+
+Redis Cluster splits keys into **16,384 slots**. Each key's slot comes from its name, and each server owns a range of slots.
 
 ```mermaid
 flowchart TD
-    C["Client: key user:42"] --> H["slot = CRC16(key) mod 16384"]
-    H --> N1["Primary A<br/>slots 0 to 5460"]
-    H --> N2["Primary B<br/>slots 5461 to 10922"]
-    H --> N3["Primary C<br/>slots 10923 to 16383"]
-    N1 --> R1["Replica A1"]
-    N2 --> R2["Replica B1"]
-    N3 --> R3["Replica C1"]
+    C["Key: user:42:cart"] --> H["slot = CRC16(key) mod 16384"]
+    H --> N1["Server A<br/>slots 0 to 5460"]
+    H --> N2["Server B<br/>slots 5461 to 10922"]
+    H --> N3["Server C<br/>slots 10923 to 16383"]
+    N1 --> R1["Copy of A"]
+    N2 --> R2["Copy of B"]
+    N3 --> R3["Copy of C"]
+```
+
+**The big rule:** a command, transaction or Lua script that uses several keys only works if all the keys are in the **same slot**. You control this with **hash tags**: only the part inside `{ }` decides the slot.
+
+```python
+from redis.crc import key_slot
+
+for key in ["user:42:name", "user:42:cart", "{user:42}:name", "{user:42}:cart"]:
+    print(f"{key:16s} -> slot {key_slot(key.encode())}")
+# user:42:name     -> slot 6755
+# user:42:cart     -> slot 12984     different servers: can't be used together
+# {user:42}:name   -> slot 15880
+# {user:42}:cart   -> slot 15880     same slot: OK in one command or script
 ```
 
 ```python
 from redis.cluster import RedisCluster
 
 rc = RedisCluster(host="cluster-node-1", port=6379, decode_responses=True)
-rc.set("user:42:name", "Asha")      # the client routes to the right node automatically
+rc.mset({"{user:42}:name": "Asha", "{user:42}:plan": "pro"})   # works: same slot
 ```
 
-The big rule: **multi-key commands, transactions and Lua scripts only work when all keys are in the same slot.** Control this with **hash tags**: only the part inside `{...}` is hashed.
+For the Streams patterns in this guide, give the stream, its dead-letter stream and its "done" markers the same tag, e.g. `{orders}:stream`, `{orders}:dead`, `{orders}:done:evt-1`. But don't put *everything* under one tag, or one server does all the work.
 
-```python
-# Same slot: both hash on "user:42"
-rc.mset({"{user:42}:name": "Asha", "{user:42}:plan": "pro"})
-
-# The stream, its dedup markers and totals used by one Lua script must share a tag
-STREAM = "{orders}:stream"
-DLQ = "{orders}:dead"
-marker = f"{{orders}}:processed:{event_id}"
-```
-
-Don't put everything under one tag, or one node gets all the traffic (a hot shard). A single stream lives on a single node; to spread a big stream workload, use partitioned streams with different tags ([18.12](#1812-ordering-and-partitioning)).
-
-| Setup | Scales writes | Automatic failover | Complexity |
+| Setup | More write capacity | Automatic takeover | Effort |
 |---|---|---|---|
-| Single instance | No | No | Lowest |
-| Primary + replicas + Sentinel | No (reads only) | Yes | Medium |
-| Cluster | Yes | Yes | Highest; multi-key rules apply |
+| One server | No | No | Lowest |
+| Main + copies + Sentinel | No (more reads only) | Yes | Medium |
+| Cluster | Yes | Yes | Highest, and the same-slot rule applies |
 
 ---
 
 ## 22. Security
 
-- **Never expose Redis to the internet.** Keep it in a private network, restrict with security groups / network policies, and keep `protected-mode yes`.
-- **Use ACL users**, one per application role, with only the commands and key patterns it needs:
-  ```
-  ACL SETUSER orders-worker on >change-me ~orders* ~{orders}* +xreadgroup +xack +xautoclaim +xclaim +xpending +xadd +xinfo +xgroup +ping
-  ACL SETUSER cache-app on >change-me ~cache:* +get +set +del +unlink +expire +ttl +mget +ping
-  ACL SETUSER default off
-  ```
-- **Block dangerous commands** for app users: `FLUSHALL`, `FLUSHDB`, `CONFIG`, `DEBUG`, `KEYS`, `SHUTDOWN` (the ACL category `-@dangerous` covers most of them).
-- **Encrypt in transit** with TLS:
-  ```python
-  r = redis.Redis(
-      host="redis.internal", port=6380,
-      username="orders-worker", password=os.environ["REDIS_PASSWORD"],
-      ssl=True, ssl_cert_reqs="required", ssl_ca_certs="/etc/ssl/redis-ca.pem",
-      decode_responses=True,
-  )
-  ```
-- Keep secrets in a secret manager, not in code.
-- Validate any user input that becomes part of a key name.
-- Don't `pickle.loads` data from Redis that another service could have written.
+1. **Never put Redis on the public internet.** Keep it on a private network.
+2. **Give each app its own user** with only the commands and keys it needs (ACLs).
+3. **Block dangerous commands** like `FLUSHALL`, `CONFIG`, `KEYS` for app users.
+4. **Use TLS** so passwords and data are encrypted on the network.
+5. Keep passwords in a secret manager, not in code.
+
+An ACL user for the kitchen workers: it may use stream commands on `orders*` keys, and nothing else.
+
+```text
+> ACL SETUSER kitchen-worker on >s3cret ~orders* +@stream +ping
+OK
+```
+
+What that worker sees when it logs in as `kitchen-worker`:
+
+```text
+> XLEN orders
+(integer) 2
+> GET user:1
+(error) NOPERM this user has no permissions to run the 'get' command
+> FLUSHALL
+(error) NOPERM this user has no permissions to run the 'flushall' command
+> XLEN secret:stuff
+(error) NOPERM this user has no permissions to access one of the keys used as arguments
+```
+
+Connecting with a user, password and TLS from Python:
+
+```python
+import os
+
+r = redis.Redis(
+    host="redis.internal", port=6380,
+    username="kitchen-worker", password=os.environ["REDIS_PASSWORD"],
+    ssl=True, ssl_cert_reqs="required", ssl_ca_certs="/etc/ssl/redis-ca.pem",
+    decode_responses=True,
+)
+```
 
 ---
 
-## 23. Observability and operations
+## 23. Watching Redis health
 
-Metrics worth a dashboard and alerts (from `INFO`, or the Prometheus `redis_exporter`):
-
-| Metric | Why |
+| Number to watch | Why it matters |
 |---|---|
-| `used_memory` vs `maxmemory` | Approaching the limit means eviction or OOM errors |
-| `mem_fragmentation_ratio` | Much above 1.5 wastes RAM; consider `activedefrag yes` |
-| `evicted_keys` | Non-zero on a durable instance is an incident |
-| `keyspace_hits` / `keyspace_misses` | Cache hit ratio |
-| `connected_clients`, `rejected_connections` | Connection leaks, pool misconfiguration |
-| `blocked_clients` | Clients in `BLOCK` reads (normal for stream workers) |
-| `instantaneous_ops_per_sec` | Load |
-| `latest_fork_usec` | Long forks cause latency spikes |
-| Replication offset lag | Replicas falling behind |
-| Stream lag / pending / DLQ length | Queue health ([18.16](#1816-monitoring-and-autoscaling)) |
+| Memory used vs `maxmemory` | Close to the limit = keys thrown out or "out of memory" errors |
+| `evicted_keys` | Above 0 on a server holding queues or sessions = an incident |
+| Cache hit ratio (`keyspace_hits` / all lookups) | Low = the cache isn't helping |
+| `connected_clients` | Suddenly rising = connections not being reused (pool problem) |
+| Slow log | Which commands are slow |
+| Stream lag, pending, dead-letter size | Queue health ([18.15](#1815-is-the-kitchen-healthy)) |
 
 ```python
 stats = r.info("stats")
 hits, misses = stats["keyspace_hits"], stats["keyspace_misses"]
-print("cache hit ratio:", round(hits / max(hits + misses, 1), 3))
+print("cache hit ratio:", round(hits / max(hits + misses, 1), 2))
 print("evicted keys   :", stats["evicted_keys"])
+print("memory used    :", r.info("memory")["used_memory_human"])
 ```
 
-Debugging tools:
+Handy commands when something is slow:
 
 ```bash
-redis-cli SLOWLOG GET 10          # slowest recent commands
-redis-cli LATENCY DOCTOR          # latency analysis
-redis-cli --latency               # live round-trip latency
-redis-cli CLIENT LIST             # who is connected, what they are doing
-redis-cli MONITOR                 # every command live; debugging only, very heavy
+redis-cli SLOWLOG GET 10        # the 10 slowest recent commands
+redis-cli --latency             # live round-trip time
+redis-cli LATENCY DOCTOR        # Redis explains latency problems in words
+redis-cli CLIENT LIST           # who is connected and what they are doing
+redis-cli MONITOR               # shows every command live; for debugging only, very heavy
 ```
 
----
-
-## 24. Managed services and forks
-
-Running Redis yourself means handling failover, backups, upgrades and memory tuning. Managed options include AWS ElastiCache (and MemoryDB when you need durability with a multi-AZ transaction log), Google Memorystore, Azure's managed Redis offerings, Redis Cloud, and Upstash (serverless, also reachable over HTTP).
-
-In 2024 Redis changed its license, and the Linux Foundation started **Valkey**, an open-source fork of Redis 7.2. Redis 8 later added an AGPLv3 license option. For everything in Parts 1–5 of this guide, Redis and Valkey behave the same and work with the same clients (`redis-py`). The extra modules differ: Redis 8 bundles JSON, the Query Engine and vector search, while Valkey has its own module ecosystem. Check which one your cloud provider runs before relying on module features.
+For dashboards, the Prometheus `redis_exporter` exposes all of these numbers.
 
 ---
 
-# Part 6 — Redis in AI / LLM applications
+## 24. Managed Redis and Valkey
 
-## 25. Redis in AI / LLM applications
+Running Redis yourself means handling backups, failover, upgrades and memory tuning. Managed services do this for you: AWS ElastiCache (and MemoryDB when you need stronger durability), Google Memorystore, Azure's managed Redis, Redis Cloud, and Upstash (pay per request, also works over HTTP).
 
-LLM apps are slow and expensive per call, and they keep a lot of short-lived state. Redis fits several needs at once.
+In 2024 Redis changed its license, and the Linux Foundation started **Valkey**, an open-source copy (fork) of Redis 7.2. Redis 8 later added an open-source license option again. For everything in Parts 1–5, Redis and Valkey behave the same and use the same Python client. Extras like JSON, search and vector search differ, so check what your provider runs before relying on them.
+
+---
+
+# Part 6 — Redis in AI apps
+
+## 25. Redis in AI apps
+
+AI (LLM) calls are **slow** (seconds) and **cost money** per call, and AI apps keep a lot of short-lived state. Redis helps in five ways.
 
 ```mermaid
 flowchart LR
-    U["User request"] --> API["API server"]
-    API --> RL["Token budget and<br/>provider rate limit"]
-    API --> SC["Exact / semantic cache"]
-    API --> MEM["Chat memory (list + TTL)"]
-    API --> Q["Stream: long agent jobs"]
-    Q --> W["Agent workers"]
-    W --> TOK["Stream per answer:<br/>resumable token streaming"]
-    TOK --> API
-    RL & SC & MEM & Q & TOK --- R[("Redis")]
+    U["User question"] --> API["API server"]
+    API --> B["1. Token budget per user"]
+    API --> C["2. Exact cache / 3. Similar-question cache"]
+    API --> M["4. Chat memory"]
+    API --> Q["Stream: long AI jobs"]
+    Q --> W["AI workers"]
+    W --> S["5. Answer stream (resumable)"]
+    S --> API
+    B & C & M & Q & S --- R[("Redis")]
 ```
 
-### 25.1 Exact-match LLM cache
+### 25.1 Exact cache: same question, same answer
 
-Start here. Same model + same messages + same parameters → reuse the answer.
+If the model, the messages and the settings are exactly the same, reuse the saved answer.
 
 ```python
 import hashlib
-import json
 
-def llm_cache_key(model: str, messages: list, **params) -> str:
-    raw = json.dumps({"model": model, "messages": messages, **params}, sort_keys=True)
+def llm_cache_key(model: str, messages: list, **settings) -> str:
+    raw = json.dumps({"model": model, "messages": messages, **settings}, sort_keys=True)
     return "llm:exact:" + hashlib.sha256(raw.encode()).hexdigest()
 
-def cached_completion(call_llm, model: str, messages: list, ttl: int = 86_400, **params) -> str:
-    key = llm_cache_key(model, messages, **params)
-    if (hit := r.get(key)) is not None:
-        return hit
-    answer = call_llm(model=model, messages=messages, **params)
+def cached_llm_call(call_llm, model: str, messages: list, ttl: int = 86_400, **settings) -> str:
+    key = llm_cache_key(model, messages, **settings)
+    saved = r.get(key)
+    if saved is not None:
+        return saved                                   # free and instant
+    answer = call_llm(model=model, messages=messages, **settings)
     r.set(key, answer, ex=ttl)
     return answer
+
+calls = 0
+def fake_llm(**kwargs) -> str:
+    global calls
+    calls += 1
+    return "Our best seller is masala dosa."
+
+question = [{"role": "user", "content": "What is your best seller?"}]
+cached_llm_call(fake_llm, "some-model", question, temperature=0)
+cached_llm_call(fake_llm, "some-model", question, temperature=0)
+print("real LLM calls:", calls)    # real LLM calls: 1
 ```
 
-Only cache deterministic-enough calls (e.g. `temperature=0`), and include anything that changes the answer (system prompt version, tool list, tenant) in the key.
+Only cache answers that should be the same every time (e.g. `temperature=0`), and put everything that changes the answer into the key (system prompt version, tools, customer).
 
-### 25.2 Semantic cache (vector search)
+### 25.2 Similar-question cache (semantic cache)
 
-Reuse an answer when a **similar** question was asked before ("How do I reset my password?" ≈ "forgot password, how to reset").
+"How do I reset my password?" and "forgot my password, help" are different text but the same question. A semantic cache turns each question into an **embedding** (a list of numbers that captures the meaning) and reuses the answer of the **closest** earlier question, if it's close enough.
 
 ```mermaid
 flowchart TD
-    Q["User question"] --> E["Create embedding"]
-    E --> S{"KNN search in Redis:<br/>closest cached question<br/>within distance threshold?"}
-    S -- "yes" --> HIT["Return cached answer, no LLM call"]
-    S -- "no" --> LLM["Call the LLM"]
-    LLM --> ST["Store embedding + answer with TTL"]
-    ST --> ANS["Return answer"]
+    Q["New question"] --> E["Turn it into an embedding"]
+    E --> S{"Search Redis for the closest<br/>earlier question. Close enough?"}
+    S -- "yes" --> HIT["Return the saved answer<br/>(no LLM call)"]
+    S -- "no" --> LLM["Ask the LLM"]
+    LLM --> ST["Save embedding + answer, with a TTL"]
+    ST --> ANS["Return the answer"]
 ```
 
-Requires Redis 8+ (Query Engine built in), Redis Stack, or a managed Redis with vector search.
+This needs Redis 8 (search built in), Redis Stack, or a managed Redis with vector search.
 
 ```python
 import uuid
@@ -2271,7 +2996,7 @@ import uuid
 import numpy as np
 import redis
 
-rb = redis.Redis()          # binary-safe client: embeddings are raw bytes
+rb = redis.Redis()          # no decode_responses: embeddings are raw bytes
 DIM = 1536                  # must match your embedding model
 
 def create_index() -> None:
@@ -2280,7 +3005,7 @@ def create_index() -> None:
             "FT.CREATE", "idx:llmcache", "ON", "HASH", "PREFIX", "1", "llmcache:",
             "SCHEMA",
             "tenant", "TAG",
-            "response", "TEXT",
+            "answer", "TEXT",
             "embedding", "VECTOR", "HNSW", "6",
             "TYPE", "FLOAT32", "DIM", DIM, "DISTANCE_METRIC", "COSINE",
         )
@@ -2288,140 +3013,212 @@ def create_index() -> None:
         if "Index already exists" not in str(e):
             raise
 
-def to_bytes(vec) -> bytes:
-    return np.asarray(vec, dtype=np.float32).tobytes()
+def to_bytes(vector) -> bytes:
+    return np.asarray(vector, dtype=np.float32).tobytes()
 
-def semantic_lookup(tenant: str, query_vec, max_distance: float = 0.10) -> str | None:
+def find_similar(tenant: str, question_vector, max_distance: float = 0.10) -> str | None:
+    # tenant ids should be simple letters/numbers (special characters need escaping in TAG queries)
     res = rb.execute_command(
         "FT.SEARCH", "idx:llmcache",
         f"(@tenant:{{{tenant}}})=>[KNN 1 @embedding $vec AS dist]",
-        "PARAMS", "2", "vec", to_bytes(query_vec),
-        "RETURN", "2", "response", "dist",
+        "PARAMS", "2", "vec", to_bytes(question_vector),
+        "RETURN", "2", "answer", "dist",
         "DIALECT", "2",
     )
     if res[0] == 0:
         return None
     fields = dict(zip(res[2][::2], res[2][1::2]))
-    if float(fields[b"dist"]) <= max_distance:     # cosine distance: 0 = identical
-        return fields[b"response"].decode()
+    if float(fields[b"dist"]) <= max_distance:     # 0 = identical meaning
+        return fields[b"answer"].decode()
     return None
 
-def semantic_store(tenant: str, query_vec, response: str, ttl: int = 86_400) -> None:
+def save_answer(tenant: str, question_vector, answer: str, ttl: int = 86_400) -> None:
     key = f"llmcache:{uuid.uuid4().hex}"
     pipe = rb.pipeline()
-    pipe.hset(key, mapping={"tenant": tenant, "response": response, "embedding": to_bytes(query_vec)})
+    pipe.hset(key, mapping={"tenant": tenant, "answer": answer, "embedding": to_bytes(question_vector)})
     pipe.expire(key, ttl)
     pipe.execute()
 ```
 
-Be careful with semantic caching:
+Be careful:
 
-- **Isolate tenants and users** (the `tenant` tag filter above). Never serve one customer's answer to another.
-- Don't cache answers that depend on personal data, live data or time ("what's my balance?", "today's price").
-- Tune `max_distance` on real traffic. Too loose returns wrong answers confidently.
-- Higher-level libraries (RedisVL, LangChain's Redis cache) wrap this pattern if you prefer not to write FT commands.
+- **Keep each customer separate** (the `tenant` filter above). Never show one customer's answer to another.
+- Don't cache answers about personal or live data ("what's my order status?", "today's price").
+- Tune `max_distance` on real questions. Too loose gives confidently wrong answers.
+- Libraries like RedisVL or LangChain's Redis cache wrap this if you'd rather not write the commands.
 
-### 25.3 Chat memory with automatic cleanup
+### 25.3 Chat memory that cleans itself up
 
 ```python
-def add_turn(session_id: str, role: str, content: str, max_turns: int = 20, ttl: int = 3600) -> None:
+def add_message(session_id: str, role: str, content: str, keep: int = 20, ttl: int = 3600) -> None:
     key = f"chat:{session_id}"
     pipe = r.pipeline()
     pipe.rpush(key, json.dumps({"role": role, "content": content}))
-    pipe.ltrim(key, -max_turns, -1)     # keep only the last N turns
-    pipe.expire(key, ttl)               # forget idle conversations
+    pipe.ltrim(key, -keep, -1)       # keep only the last 20 messages
+    pipe.expire(key, ttl)            # forget the chat after 1 hour of silence
     pipe.execute()
 
 def get_history(session_id: str) -> list[dict]:
     return [json.loads(m) for m in r.lrange(f"chat:{session_id}", 0, -1)]
+
+for i in range(25):
+    add_message("s1", "user", f"message {i}")
+history = get_history("s1")
+print(len(history), history[0]["content"], "...", history[-1]["content"])   # 20 message 5 ... message 24
 ```
 
-For agent frameworks, LangGraph offers a Redis checkpointer (`langgraph-checkpoint-redis`) to persist graph state between steps and across servers.
+For agent frameworks, LangGraph has a Redis "checkpointer" package (`langgraph-checkpoint-redis`) that saves agent state between steps and across servers.
 
-### 25.4 Token budgets per user
+### 25.4 Token budget per user
 
-Reserve an estimate before the call, settle with the real usage after.
+Reserve an estimate before the call, then correct it with the real number after.
 
 ```python
-import time
-
 DAILY_TOKEN_LIMIT = 200_000
 
-def _budget_key(user_id: str) -> str:
-    return f"llm:tokens:{user_id}:{time.strftime('%Y%m%d')}"
+def budget_key(user: str) -> str:
+    return f"llm:tokens:{user}:{time.strftime('%Y%m%d')}"     # a new counter every day
 
-def reserve_tokens(user_id: str, estimate: int) -> bool:
-    key = _budget_key(user_id)
+def reserve_tokens(user: str, estimate: int) -> bool:
+    key = budget_key(user)
     pipe = r.pipeline()
     pipe.incrby(key, estimate)
     pipe.expire(key, 2 * 86_400, nx=True)
     used, _ = pipe.execute()
     if used > DAILY_TOKEN_LIMIT:
-        r.decrby(key, estimate)          # give the reservation back
+        r.decrby(key, estimate)          # give it back, refuse the call
         return False
     return True
 
-def settle_tokens(user_id: str, estimate: int, actual: int) -> None:
-    r.incrby(_budget_key(user_id), actual - estimate)
+def settle_tokens(user: str, estimate: int, actual: int) -> None:
+    r.incrby(budget_key(user), actual - estimate)
+
+print(reserve_tokens("asha", 150_000))   # True
+print(reserve_tokens("asha", 100_000))   # False: would go over 200,000
+settle_tokens("asha", 150_000, 40_000)   # the call only used 40,000
+print(reserve_tokens("asha", 100_000))   # True
 ```
 
-To stay under a **provider's** tokens-per-minute limit across all your servers, reuse the token bucket from [8.3](#83-token-bucket-lua-server-time) with `cost` = estimated tokens:
+To stay under the AI provider's tokens-per-minute limit across **all** your servers, reuse the token bucket from [8.3](#83-token-bucket-bursts-are-ok-but-a-steady-average) with `cost` = estimated tokens:
 
 ```python
-TPM = 90_000
+TPM = 90_000     # provider limit: tokens per minute
 if not allow_token_bucket("provider:llm", capacity=TPM, per_sec=TPM / 60, cost=estimated_tokens):
-    ...  # queue the request or return 429
+    ...          # queue the request or reply 429
 ```
 
-### 25.5 Resumable token streaming with Streams
+### 25.5 Resumable answer streaming
 
-Write each generated chunk to a per-answer stream. The client-facing endpoint (SSE or WebSocket) reads with `XREAD` from the last ID it sent. If the user's connection drops, the client reconnects with that ID (SSE's `Last-Event-ID`) and continues where it stopped. The worker generating the answer can even run on a different server.
+AI answers arrive word by word. If the user's connection drops halfway, you don't want to start again (and pay again).
+
+**Idea:** the worker writes each piece of the answer to a stream. The API server reads from the stream and sends pieces to the browser, remembering the last id it sent. When the browser reconnects, it continues **from that id**. (Server-Sent Events have this built in through the `Last-Event-ID` header.)
+
+```mermaid
+sequenceDiagram
+    participant LLM as AI worker
+    participant R as Redis stream llm:answer:s1
+    participant API as API server
+    participant B as Browser
+    LLM->>R: XADD "Your", "masala", "dosa", ...
+    API->>R: XREAD from 0
+    R-->>API: "Your", "masala", "dosa"
+    API-->>B: Your masala dosa
+    Note over B: connection drops
+    B->>API: reconnect, last id = id of "dosa"
+    API->>R: XREAD after that id
+    R-->>API: "is", "on", "the", "way!"
+    API-->>B: is on the way!
+```
 
 ```python
+"""llm_stream.py - stream an AI answer through Redis so a dropped connection can resume."""
+import asyncio
+
 import redis.asyncio as aioredis
 
-ar = aioredis.Redis(decode_responses=True)
+r = aioredis.Redis(decode_responses=True)
 
-async def stream_answer(session_id: str, chunks) -> None:
-    """Runs in the worker that calls the LLM."""
-    key = f"llm:stream:{session_id}"
+
+async def write_answer(session_id: str, chunks) -> None:
+    """Runs where the LLM is called: save each piece of text as it arrives."""
+    key = f"llm:answer:{session_id}"
     async for chunk in chunks:
-        await ar.xadd(key, {"t": chunk}, maxlen=10_000, approximate=True)
-    await ar.xadd(key, {"done": "1"})
-    await ar.expire(key, 3600)
+        await r.xadd(key, {"t": chunk}, maxlen=10_000, approximate=True)
+    await r.xadd(key, {"done": "1"})
+    await r.expire(key, 3600)                       # forget the answer after an hour
+
 
 async def read_answer(session_id: str, last_id: str = "0"):
-    """Runs in the API server; yields (id, text) pairs to send as SSE events."""
-    key = f"llm:stream:{session_id}"
+    """Runs in the API server. Yields (id, text). To resume, pass the last id you sent."""
+    key = f"llm:answer:{session_id}"
     while True:
-        resp = await ar.xread({key: last_id}, block=15_000, count=100)
-        if not resp:
-            return                            # timed out, generator is gone
-        for _, entries in resp:
+        reply = await r.xread({key: last_id}, block=15_000, count=100)
+        if not reply:
+            return                                  # nothing for 15 s: give up
+        for _key, entries in reply:
             for entry_id, fields in entries:
                 last_id = entry_id
                 if fields.get("done"):
                     return
                 yield entry_id, fields["t"]
+
+
+async def fake_llm():
+    for word in ["Your ", "masala ", "dosa ", "is ", "on ", "the ", "way!"]:
+        await asyncio.sleep(0.05)                   # pretend the model is thinking
+        yield word
+
+
+async def main() -> None:
+    await r.delete("llm:answer:s1")
+    writer = asyncio.create_task(write_answer("s1", fake_llm()))
+
+    seen, last_id = [], "0"
+    async for entry_id, text in read_answer("s1"):
+        seen.append(text)
+        last_id = entry_id
+        if len(seen) == 3:
+            print("browser got     :", "".join(seen), " <- connection drops here")
+            break
+
+    rest = [text async for _, text in read_answer("s1", last_id=last_id)]
+    print("after reconnect :", "".join(rest))
+    print("full answer     :", "".join(seen + rest))
+    await writer
+    await r.aclose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-This uses plain `XREAD` (no group) because every reader should see every chunk. Long-running agent jobs themselves go through a consumer group as in [section 18](#18-redis-streams-deep-dive).
+Real output:
+
+```text
+browser got     : Your masala dosa   <- connection drops here
+after reconnect : is on the way!
+full answer     : Your masala dosa is on the way!
+```
+
+This uses plain `XREAD` (no group) because **every** reader should see every piece. The long AI jobs themselves go through a consumer group, as in [section 18](#18-streams-the-kitchen-order-rail).
 
 ---
 
 # Part 7 — Wrap-up
 
-## 26. Testing
+## 26. Testing your Redis code
 
-**Unit tests** with `fakeredis`, an in-memory fake that needs no server:
+**Quick unit tests** with `fakeredis`, a pretend Redis that runs inside Python (no server needed):
 
 ```python
 import fakeredis
 
-r = fakeredis.FakeRedis(decode_responses=True)   # pip install "fakeredis[lua]" for scripts
+fake = fakeredis.FakeRedis(decode_responses=True)   # pip install "fakeredis[lua]" for Lua scripts
+fake.set("hello", "world")
+print(fake.get("hello"))                             # world
 ```
 
-**Integration tests** against a real Redis, especially for Lua scripts, Streams and timing behaviour:
+**Real tests** against a real Redis, especially for Lua scripts, Streams and timing. `testcontainers` starts Redis in Docker for your tests:
 
 ```python
 import pytest
@@ -2433,77 +3230,99 @@ def redis_client():
         yield container.get_client(decode_responses=True)
 
 @pytest.fixture(autouse=True)
-def clean_db(redis_client):
+def clean(redis_client):
     redis_client.flushdb()
 
-def test_lock_is_exclusive(redis_client):
-    a, b = RedisLock(redis_client, "job"), RedisLock(redis_client, "job")
+def test_only_one_worker_gets_the_lock(redis_client):
+    a = RedisLock(redis_client, "job")
+    b = RedisLock(redis_client, "job")
     assert a.acquire()
     assert not b.acquire(wait_s=0.2)
-    assert not b.release()             # cannot release someone else's lock
+    assert not b.release()          # can't release someone else's lock
     assert a.release()
 ```
 
-What to test for stream consumers:
+What to test for stream workers:
 
-- A crash before `XACK` leads to redelivery (simulate by reading and not acking, then run the reclaimer with a small `min-idle-time`).
-- Running the handler twice on the same message changes state only once.
-- Poison messages end up in the DLQ after N deliveries.
-- After a run, `XPENDING` is empty and business totals match the input (like the demo).
-
----
-
-## 27. Common mistakes checklist
-
-| Mistake | Fix |
-|---|---|
-| Cache keys without TTL | Always set `ex`; add jitter |
-| Plain `SET` silently removed a TTL | Pass `ex` again or `keepttl=True` |
-| `KEYS *` in production code | `SCAN` / `scan_iter` |
-| Huge hashes / lists / sets | Bound them, bucket them, delete with `UNLINK` |
-| Read-then-write race (`GET` then `SET`) | `INCR`, `SET NX`, `WATCH`, or a Lua script |
-| Lock released with plain `DEL` | Compare-and-delete Lua with a unique token |
-| New connection per request | One connection pool per process |
-| `socket_timeout` shorter than `BLOCK` | `socket_timeout` > `BLOCK` time |
-| Pub/Sub used for jobs that must not be lost | Streams with consumer groups |
-| `XACK` before the work is done | Ack only after the side effect is committed |
-| Assuming streams give exactly-once | At-least-once + idempotent handler keyed on `event_id` |
-| Never reclaiming pending messages | `XAUTOCLAIM` loop in every worker or a reclaimer |
-| `min-idle-time` shorter than a batch takes | Raise it, lower `COUNT`, or heartbeat with `XCLAIM JUSTID` |
-| No poison-message handling | Delivery-count check + dead-letter stream + alert |
-| Stream never trimmed | `MAXLEN ~` on `XADD` or periodic `XTRIM MINID` |
-| `XGROUP DELCONSUMER` on a consumer with pending messages | Claim first, then delete |
-| Same consumer name in two processes | `hostname-pid` or pod name |
-| Cache and queues on one instance with `allkeys-lru` | Separate instances or `volatile-*` policy |
-| Multi-key operations failing in Cluster | Hash tags `{...}`, pass all keys to scripts |
-| Redis open to the network with no auth | Private network, ACL users, TLS |
-| `pickle` for cached objects | JSON / msgpack |
+- A worker that **crashes before `XACK`** → the message is delivered again (read without acking, then run the take-over code with a small idle time).
+- Running the same message **twice** changes data only **once**.
+- A **bad message** ends in the dead-letter stream after N tries.
+- After a run, **nothing is pending** and totals match the input (like the kitchen demo in [18.16](#1816-full-runnable-demo-three-cooks-a-crash-and-a-bad-order)).
 
 ---
 
-## 28. Command cheat sheet
+## 27. Top 20 mistakes
 
-| Area | Commands |
+| # | Mistake | Fix |
+|---|---|---|
+| 1 | Cache keys with no TTL | Always set `ex`, add a little random jitter |
+| 2 | A plain `SET` silently removed the TTL | Pass `ex` again or use `keepttl=True` |
+| 3 | `KEYS *` in production | `SCAN` / `scan_iter` |
+| 4 | Huge lists, hashes or sets | Keep them bounded, split them, delete with `UNLINK` |
+| 5 | `GET` then `SET` (two users overwrite each other) | `INCR`, `SET NX`, `WATCH`, or a Lua script |
+| 6 | Releasing a lock with plain `DEL` | Compare-and-delete Lua script with your own token |
+| 7 | New connection for every request | One connection pool per process |
+| 8 | `socket_timeout` shorter than `BLOCK` | Make `socket_timeout` longer than the `BLOCK` wait |
+| 9 | Pub/Sub for things that must not be lost | Streams with consumer groups |
+| 10 | `XACK` before the work is really done | Ack only after the result is saved |
+| 11 | Believing streams never repeat work | At-least-once + "already done?" check on `event_id` |
+| 12 | Nobody takes over abandoned tickets | Run `XAUTOCLAIM` regularly |
+| 13 | Claim time shorter than a batch takes | Raise it, lower `COUNT`, or send heartbeats (`XCLAIM JUSTID`) |
+| 14 | Bad messages retried forever | Delivery-count limit + dead-letter stream + alert |
+| 15 | Streams never trimmed | `MAXLEN ~` on `XADD`, or `XTRIM MINID` |
+| 16 | Deleting a consumer that still has pending messages | Take them over first, then delete |
+| 17 | Two processes with the same consumer name | Use `hostname-pid` or the pod name |
+| 18 | Cache and queues on one server with `allkeys-lru` | Separate servers, or `volatile-*` with TTLs only on cache keys |
+| 19 | Multi-key commands failing in Cluster | Hash tags `{...}`, and pass all keys to scripts |
+| 20 | Redis open to the network without a password | Private network, ACL users, TLS |
+
+---
+
+## 28. Cheat sheet
+
+| Type / area | Commands you'll use most |
 |---|---|
-| Strings | `SET k v EX s NX`, `GET`, `MGET`, `INCR`, `INCRBY`, `DECRBY`, `GETDEL` |
-| Keys | `DEL`, `UNLINK`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`, `SCAN`, `TYPE`, `RENAME` |
-| Hashes | `HSET`, `HGET`, `HMGET`, `HGETALL`, `HINCRBY`, `HDEL`, `HSCAN`, `HEXPIRE` (7.4+) |
-| Lists | `LPUSH`, `RPUSH`, `LPOP`, `BRPOP`, `LMOVE`, `LRANGE`, `LTRIM`, `LLEN` |
-| Sets | `SADD`, `SREM`, `SISMEMBER`, `SCARD`, `SINTER`, `SUNION`, `SSCAN` |
-| Sorted sets | `ZADD`, `ZINCRBY`, `ZRANGE`, `ZREVRANGE`, `ZRANK`, `ZRANGEBYSCORE`, `ZREMRANGEBYSCORE`, `ZPOPMIN` |
-| Streams | `XADD`, `XLEN`, `XRANGE`, `XREAD`, `XGROUP CREATE`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO`, `XTRIM`, `XDEL` |
-| Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `PSUBSCRIBE`, `SPUBLISH`, `SSUBSCRIBE` |
-| Probabilistic | `PFADD`, `PFCOUNT`, `PFMERGE`, `SETBIT`, `GETBIT`, `BITCOUNT` |
+| String | `SET k v EX 60 NX`, `GET`, `MGET`, `INCR`, `INCRBY`, `DECRBY` |
+| Any key | `DEL`, `UNLINK`, `EXISTS`, `EXPIRE`, `TTL`, `PERSIST`, `SCAN`, `TYPE` |
+| Hash | `HSET`, `HGET`, `HMGET`, `HGETALL`, `HINCRBY`, `HDEL`, `HSCAN` |
+| List | `LPUSH`, `RPUSH`, `LPOP`, `BLPOP`, `LRANGE`, `LTRIM`, `LLEN` |
+| Set | `SADD`, `SREM`, `SISMEMBER`, `SCARD`, `SINTER`, `SUNION` |
+| Sorted set | `ZADD`, `ZINCRBY`, `ZREVRANGE ... WITHSCORES`, `ZREVRANK`, `ZSCORE`, `ZRANGEBYSCORE`, `ZREM` |
+| Stream | `XADD`, `XLEN`, `XRANGE`, `XGROUP CREATE`, `XREADGROUP`, `XACK`, `XPENDING`, `XAUTOCLAIM`, `XCLAIM`, `XINFO`, `XTRIM` |
+| Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `PSUBSCRIBE` |
+| Counting | `PFADD`, `PFCOUNT`, `PFMERGE`, `SETBIT`, `GETBIT`, `BITCOUNT` |
 | Geo | `GEOADD`, `GEOSEARCH`, `GEODIST` |
-| Atomicity | `MULTI`, `EXEC`, `WATCH`, `EVAL`, `EVALSHA`, `FCALL` |
-| Ops | `INFO`, `SLOWLOG GET`, `LATENCY DOCTOR`, `MEMORY USAGE`, `CLIENT LIST`, `CONFIG GET`, `ACL SETUSER` |
+| Safety | `MULTI`, `EXEC`, `WATCH`, `EVAL` / `register_script` |
+| Health | `INFO`, `SLOWLOG GET`, `MEMORY USAGE`, `CLIENT LIST`, `--bigkeys` |
 
-### Suggested learning path
+**Which pattern for which problem?**
 
-1. Strings, hashes, TTL and cache-aside
-2. Sorted sets, rate limiting, locks, idempotency keys
-3. Pipelines, transactions and Lua
-4. Streams: groups, `XREADGROUP`, `XACK`, pending, `XAUTOCLAIM`, DLQ (run the demo in 18.9)
-5. Persistence, eviction, memory
-6. Sentinel and Cluster, security, monitoring
-7. AI patterns: caching, budgets, resumable streaming
+| Problem | Pattern | Section |
+|---|---|---|
+| Slow page | Cache-aside + TTL | [6](#6-caching) |
+| Logged-in users across servers | Sessions | [7](#7-login-sessions) |
+| Too many requests | Rate limiting | [8](#8-rate-limiting) |
+| Job must run on one server only | Lock | [9](#9-locks-one-worker-at-a-time) |
+| Double payments | Idempotency key | [10](#10-idempotency-the-double-click-problem) |
+| Top 10 lists | Sorted set | [11](#11-leaderboards-and-counters) |
+| "Do this in an hour" | Delayed jobs | [12](#12-delayed-jobs-do-this-later) |
+| Check-then-change safely | Lua script | [16](#16-lua-scripts-small-programs-inside-redis) |
+| Live pop-ups | Pub/Sub | [17](#17-pubsub-the-loudspeaker) |
+| Background work that must not be lost | Streams + consumer group | [18](#18-streams-the-kitchen-order-rail) |
+
+---
+
+## 29. Practice exercises
+
+Try these in order. Each one builds on a section of the guide.
+
+1. **Recently viewed** (section 4.3): keep the last 10 dishes each user viewed, newest first, with no duplicates. *Hint: `LREM` the dish before `LPUSH`, then `LTRIM`.*
+2. **OTP with 3 tries** (sections 5, 4.2): store an OTP for 5 minutes and allow only 3 wrong guesses. *Hint: a hash with `code` and `tries`, `HINCRBY` on each wrong guess, `EXPIRE` once.*
+3. **Menu cache** (section 6): cache the menu for 5 minutes and delete the cache when an admin changes a price. Print "from cache" or "from database" to check it works.
+4. **Login limit** (section 8): allow 5 login attempts per 15 minutes per user, then reply "try again later".
+5. **Flash sale** (section 16): 100 dosas at half price, 1,000 buyers at once. Write a Lua script that never sells more than 100. Test it with many threads.
+6. **Kitchen queue** (section 18): run two copies of `worker.py`, add 20 orders, then kill one worker in the middle (`Ctrl+C` stops it cleanly, `kill -9` simulates a crash). Check with `XPENDING` that its tickets are taken over and nothing is left pending. *Hint: lower `CLAIM_AFTER_MS` and `RECLAIM_EVERY_S` to a few seconds while testing, so you don't wait a minute.*
+7. **No double cooking** (section 18.6): make a worker crash right after the work but before `XACK`. Show that the "already done?" check stops the order being cooked twice.
+8. **Leaderboard page** (section 11): show the top 10 dishes this week and "your favourite dish is at position N".
+
+**Suggested learning path:** strings, hashes and TTL → caching → sorted sets, rate limits, locks, idempotency → pipelines, transactions, Lua → Streams (run the kitchen demo!) → saving to disk, memory, security → Cluster → AI patterns.
