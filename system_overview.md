@@ -398,4 +398,5 @@ moment it exists, and work carries on from there.
   step by step, with what changes in Redis and Postgres.
 - [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md): the worker for developers,
   every Redis command and SQL statement.
-- [README.md](README.md): how to install and start it.
+- [how_to_run.md](how_to_run.md): how to install it, start it and look after it, step by
+  step.

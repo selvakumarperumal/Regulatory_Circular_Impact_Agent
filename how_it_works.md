@@ -21,7 +21,8 @@ picture, and shows what changes in the database and what you see in the console.
 >   the thinking, with what goes through the queue and the database at each step.
 > - [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md): for developers, the worker in
 >   18 steps, then every function, Redis command and SQL statement.
-> - [README.md](README.md): how to install and start it.
+> - [how_to_run.md](how_to_run.md): how to install it, start it and look after it, step by
+>   step.
 
 **Contents**
 
@@ -2973,6 +2974,7 @@ docker compose logs -f reader worker # watch the agent think
 
 Then open http://localhost:8080 and **create an account for your company**. If it says
 **Bad Gateway**, the api isn't running: see [When things go wrong](#19-when-things-go-wrong).
+Every step, with what to check after each one, is in [how_to_run.md](how_to_run.md).
 
 **…make it look for new circulars now?** Restart the watcher; a round starts at once:
 

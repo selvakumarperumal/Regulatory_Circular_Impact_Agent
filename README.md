@@ -69,6 +69,9 @@ One folder per service. Each Python service has its own `pyproject.toml`, `uv.lo
 
 ## Run it
 
+> 🚀 **Step by step**, with a check after each step and what to do when a start goes wrong:
+> [how_to_run.md](how_to_run.md). The short version follows.
+
 You need these first:
 
 - Docker with the NVIDIA runtime.
@@ -124,6 +127,9 @@ read, so a first start doesn't work through years of history.
 
 ## Where things are explained
 
+- **[how_to_run.md](how_to_run.md): how to run it.** What to install, the first start step
+  by step, how to check that every part works, then stopping, updating, backups, and
+  fixing a start that goes wrong.
 - **[system_overview.md](system_overview.md): the whole system on one page.** Each part
   (watcher, task queue, reader, worker, api, console) with its steps in a line or two.
 - **[how_it_works.md](how_it_works.md): start here.** The whole app in plain words, with a
