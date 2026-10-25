@@ -1130,6 +1130,10 @@ Nothing is marked failed, and no gap is opened twice.
 
 ### A PDF is read only once
 
+> 🔁 **Everything about repeated work** (OCR, summaries, embeddings, "does it apply?",
+> verdicts, gaps and the tasks themselves), tested again on 2026-10-25, is in
+> [repeated_tasks.md](repeated_tasks.md).
+
 Reading a PDF is the slow, costly part, so several checks stand between a `circular.read`
 task and the GPU. A page goes to OCR only if nothing has read it before:
 

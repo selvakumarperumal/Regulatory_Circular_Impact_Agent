@@ -23,6 +23,8 @@ picture, and shows what changes in the database and what you see in the console.
 >   18 steps, then every function, Redis command and SQL statement.
 > - [how_to_run.md](how_to_run.md): how to install it, start it and look after it, step by
 >   step.
+> - [repeated_tasks.md](repeated_tasks.md): what's done once and what's reused: how many
+>   times a circular is OCR'd, what a new policy costs, and how no task runs twice.
 
 **Contents**
 

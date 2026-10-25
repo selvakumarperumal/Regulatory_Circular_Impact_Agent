@@ -141,6 +141,9 @@ read, so a first start doesn't work through years of history.
 - **[how_the_worker_works.md](how_the_worker_works.md): how the worker works.** Two stories,
   a new circular and a new policy, with what goes through the Redis task queue and what
   changes in the database at each step, and how several workers and companies share it.
+- **[repeated_tasks.md](repeated_tasks.md): what's done once, what's reused.** How many
+  times a new circular is OCR'd (once), what a new policy reuses and what it costs, every
+  way a task could run twice and what stops it, with tests, and how each fix came about.
 - [backend/worker/INTERNALS.md](backend/worker/INTERNALS.md): the worker for developers:
   everything it does in 18 steps, then every function, Redis command, SQL statement and
   commit.
