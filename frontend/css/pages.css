@@ -322,10 +322,16 @@ button.how-line:hover { background: rgba(255, 255, 255, 0.03); }
 .how-legend svg { width: 22px; height: 13px; flex: none; overflow: visible; }
 .how-legend svg path { fill: color-mix(in srgb, var(--k) 18%, transparent); stroke: var(--k); stroke-width: 5; stroke-linejoin: round; }
 .how-legend svg .lid { fill: color-mix(in srgb, var(--k) 38%, transparent); }
+.how-legend svg .rules { fill: none; stroke-width: 4; }
+.how-legend svg .dots { fill: none; stroke-width: 7; stroke-linecap: round; }
 
 .how-svg .group .frame { fill: rgba(148, 163, 184, 0.022); stroke: rgba(148, 163, 184, 0.15); stroke-dasharray: 4 6; }
 .how-svg .group .tag rect { fill: #0b1220; stroke: rgba(148, 163, 184, 0.22); }
 .how-svg .group .tag text { font: 700 10.5px var(--sans); letter-spacing: 0.12em; text-transform: uppercase; fill: #7d8fa8; }
+/* A group of one part's pieces (Redis, Postgres) takes that part's colour */
+.how-svg .group.tinted .frame { fill: color-mix(in srgb, var(--k) 3%, transparent); stroke: color-mix(in srgb, var(--k) 30%, transparent); }
+.how-svg .group.tinted .tag rect { stroke: color-mix(in srgb, var(--k) 40%, transparent); }
+.how-svg .group.tinted .tag text { fill: color-mix(in srgb, var(--k) 80%, #94a3b8); }
 .how-svg .edge { fill: none; stroke: rgba(148, 163, 184, 0.11); stroke-width: 1.6; stroke-linecap: round; }
 .how-svg.quiet .edge { stroke: transparent; }
 .how-svg.quiet .edge.route { stroke: rgba(148, 163, 184, 0.2); stroke-dasharray: 2 5; }
@@ -333,7 +339,8 @@ button.how-line:hover { background: rgba(255, 255, 255, 0.03); }
 .how-svg .edge.on, .how-svg.quiet .edge.on { stroke: var(--k); stroke-width: 2; stroke-dasharray: 7 7; animation: how-flow 0.7s linear infinite; }
 .how-svg .edge.on.back { animation-direction: reverse; }
 @keyframes how-flow { to { stroke-dashoffset: -14; } }
-/* Each part's shape (player.js, SHAPE): a soft sheen on top, a cylinder's rim, a pipe's end, a chip's pins */
+/* Each part's shape (player.js, SHAPE): a soft sheen on top, a cylinder's or bucket's rim, a pipe's end, a chip's
+   pins, a program box's inner lines, a window's bar and dots */
 .how-svg .node > .shape {
   fill: color-mix(in srgb, var(--k) 10%, #0a0f1c); stroke: color-mix(in srgb, var(--k) 45%, transparent); stroke-width: 1.4;
   stroke-linejoin: round; transition: stroke 0.25s, filter 0.25s;
@@ -342,7 +349,9 @@ button.how-line:hover { background: rgba(255, 255, 255, 0.03); }
 .how-svg .node > .lid { fill: color-mix(in srgb, var(--k) 22%, #0a0f1c); stroke: color-mix(in srgb, var(--k) 50%, transparent); stroke-width: 1.2; }
 .how-svg .node > .pins { fill: none; stroke: color-mix(in srgb, var(--k) 50%, transparent); stroke-width: 2; stroke-linecap: round; }
 .how-svg .node.on > .shape { stroke: var(--k); stroke-width: 2; filter: drop-shadow(0 0 12px color-mix(in srgb, var(--k) 45%, transparent)); }
-.how-svg .node.on > .lid, .how-svg .node.on > .pins { stroke: var(--k); }
+.how-svg .node > .rules { fill: none; stroke: color-mix(in srgb, var(--k) 45%, transparent); stroke-width: 1.2; }
+.how-svg .node > .dots { fill: none; stroke: color-mix(in srgb, var(--k) 70%, transparent); stroke-width: 3.4; stroke-linecap: round; }
+.how-svg .node.on > .lid, .how-svg .node.on > .pins, .how-svg .node.on > .rules, .how-svg .node.on > .dots { stroke: var(--k); }
 .how-svg .node-title { font: 600 16px var(--display); fill: var(--ink); text-anchor: middle; letter-spacing: -0.01em; }
 .how-svg .node-sub { font: 500 13px var(--sans); fill: var(--muted); text-anchor: middle; }
 .how-svg .node-sub.mono { font: 500 11.5px var(--mono); }

@@ -6,7 +6,7 @@
  * stepping back and changing the speed only draw another moment.
  *
  * A scene: { id, tab, hint, heading, lead, label, refDoc, size: [w, h], nodes, edges,
- *            groups: [[x, y, w, h, label]], tables: { id: { title, store, cols } },
+ *            groups: [[x, y, w, h, label, kind?]], tables: { id: { title, store, cols } },
  *            start: { sub, slots, badge, rows }, stories, steps, quietEdges, backbone }
  * A step:  { story, dur, ref, title, text, code, py, focus: [node ids], tables: [table ids],
  *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
@@ -26,10 +26,14 @@ import { $, $$, html, put } from "../../lib/html.js";
 import { icon } from "../../ui/icons.js";
 import { explain } from "./explain.js";
 
-// The same colours as the diagrams in the docs.
+// The same colours as the diagrams in the docs. The last line is for a scene that gives each
+// part its own colour and shape: the regulators, the watcher, S3, the reader and workers (one
+// program), Gemini, nginx and the console's pages. Redis, Postgres, OCR, the api and your
+// team keep queue, data, gpu, svc and start.
 export const KIND = {
   svc: "#2dd4bf", data: "#818cf8", ext: "#c084fc", gpu: "#fb923c", queue: "#38bdf8",
   start: "#a7ef6f", ask: "#fbbf24", gap: "#fb7185", bad: "#fb7185", ok: "#34d399", step: "#94a3b8",
+  regulator: "#e7d7b8", watcher: "#facc15", s3: "#4ade80", agent: "#f472b6", llm: "#c084fc", nginx: "#cbd5e1", page: "#60a5fa",
 };
 
 // The log panel's line types. Each line is [type, the real text, what it means in plain words].
@@ -49,12 +53,17 @@ export const node = (x, y, w, h, kind, title, sub = "", opts = {}) => ({ x, y, w
 
 // Each kind of part has its own shape, as in a flowchart: our code a rounded box, a person,
 // a start or a finish a pill, a table a cylinder, a Redis list a pipe, an outside service a
-// parallelogram, the GPU a chip, a check a hexagon, a failure a flag.
+// parallelogram, the GPU a chip, a check a hexagon, a failure a flag. And for the parts that
+// have a colour of their own: the regulators a document, the watcher an eye, S3 a bucket,
+// the reader and workers a program box (a line inside each end), Gemini a speech bubble,
+// nginx a hexagon (its logo), a console page a browser window.
 const SHAPE = { svc: "box", step: "box", start: "pill", ok: "pill", data: "db", gap: "db", queue: "pipe",
-                ext: "para", gpu: "chip", ask: "hex", bad: "flag" };
+                ext: "para", gpu: "chip", ask: "hex", bad: "flag",
+                regulator: "doc", watcher: "eye", s3: "bucket", agent: "sub", llm: "bubble", nginx: "hex", page: "window" };
 const shapeOf = (n) => n.shape || SHAPE[n.kind] || "box";
 
-/** A shape's sizes: corner radius, a cylinder's rim, a pipe's end, how far a side slants. */
+/** A shape's sizes: corner radius, a cylinder's rim, a pipe's end, how far a side slants, a
+ * document's wave, a bucket's taper, a program box's inner lines, a bubble's tail, a window's bar. */
 function form(n) {
   const { w, h } = n;
   switch (shapeOf(n)) {
@@ -65,6 +74,11 @@ function form(n) {
     case "para": return { s: Math.min(12, h * 0.26) };
     case "chip": return { c: Math.min(10, h * 0.24) };
     case "flag": return { k: Math.min(12, h * 0.26), r: 10 };
+    case "doc": return { a: Math.min(5, h * 0.1), r: n.inline ? 7 : 10 };
+    case "bucket": return { ry: Math.min(6, h * 0.14), k: Math.min(12, w * 0.06) };
+    case "sub": return { r: n.inline ? 9 : 12, b: 9 };
+    case "bubble": return { r: n.inline ? 9 : 12, t: 6 };
+    case "window": return { r: n.inline ? 8 : 12, bar: n.inline ? 9 : 13 };
     default: return { r: n.inline ? 9 : 12 };
   }
 }
@@ -76,21 +90,41 @@ function lean(n, side, d) {
   const f = form(n), half = n.h / 2, a = Math.min(Math.abs(d), half);
   const corner = (r) => (a > half - r ? r - Math.sqrt(Math.max(0, r * r - (a - (half - r)) ** 2)) : 0);
   switch (shapeOf(n)) {
-    case "box": case "pill": return corner(f.r);
+    case "box": case "pill": case "sub": case "bubble": case "window": return corner(f.r);
     case "hex": return (f.i * a) / half;
     case "para": return (f.s * (side === "l" ? half - d : half + d)) / n.h;
     case "pipe": return f.rc * (1 - Math.sqrt(Math.max(0, 1 - (a / half) ** 2)));
     case "chip": return Math.max(0, a - (half - f.c));
     case "flag": return side === "l" ? f.k * (1 - a / half) : corner(f.r);
+    case "doc": return d < 0 ? corner(f.r) : 0;   // round top corners, a straight side down to the wave
+    case "eye": return eye(n).find(([, hh]) => hh >= a)?.[0] ?? n.w / 2;
+    case "bucket": return f.k * Math.min(1, Math.max(0, (d + half - f.ry) / (n.h - 1.8 * f.ry)));
     default: return 0;                            // a cylinder's sides are straight
   }
+}
+
+/** How far below its box's top (or above its bottom) a node's outline is, at d from its middle
+ * line: where an edge meets an eye's curved top or bottom. */
+function sag(n, d) {
+  if (shapeOf(n) !== "eye") return 0;
+  const from = n.w / 2 - Math.abs(d);             // how far from its nearer end
+  return n.h / 2 - (eye(n).findLast(([x]) => x <= from)?.[1] ?? 0);
+}
+
+/** An eye's outline, sampled from its end to its middle: [how far in from the end, its half height]. */
+function eye(n) {
+  const { w, h } = n, k = w * 0.18, c = (2 * h) / 3;
+  return range(25).map((i) => {
+    const t = i / 48, u = 1 - t;
+    return [3 * t * u * u * k + 3 * t * t * u * (w - k) + t ** 3 * w, 3 * t * u * c];
+  });
 }
 
 const box = (x0, y0, w, h, r) => `M${x0 + r},${y0} h${w - 2 * r} a${r},${r} 0 0 1 ${r},${r} v${h - 2 * r} `
   + `a${r},${r} 0 0 1 ${-r},${r} h${2 * r - w} a${r},${r} 0 0 1 ${-r},${-r} v${2 * r - h} a${r},${r} 0 0 1 ${r},${-r} Z`;
 
-/** A node's outline, and the extra lines some shapes have: a cylinder's rim, a pipe's open
- * end, a chip's pins. */
+/** A node's outline, and the extra lines some shapes have: a cylinder's or a bucket's rim, a
+ * pipe's open end, a chip's pins, a program box's inner lines, a window's bar and dots. */
 function outline(n) {
   const { x, y, w, h } = n, f = form(n);
   const x0 = x - w / 2, x1 = x + w / 2, y0 = y - h / 2, y1 = y + h / 2;
@@ -119,6 +153,34 @@ function outline(n) {
       const { k, r } = f;
       return { d: `M${x0},${y0} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y0 + r} V${y1 - r} A${r},${r} 0 0 1 ${x1 - r},${y1} H${x0} L${x0 + k},${y} Z` };
     }
+    case "doc": {                                 // a page whose bottom edge is a wave
+      const { a, r } = f;
+      return { d: `M${x0},${y1 - a} V${y0 + r} A${r},${r} 0 0 1 ${x0 + r},${y0} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y0 + r} `
+        + `V${y1 - a} Q${x1 - w / 4},${y1 + a} ${x},${y1 - a} T${x0},${y1 - a} Z` };
+    }
+    case "eye": {                                 // an almond: two curves from end to end
+      const k = w * 0.18, c = (2 * h) / 3;
+      return { d: `M${x0},${y} C${x0 + k},${y - c} ${x1 - k},${y - c} ${x1},${y} C${x1 - k},${y + c} ${x0 + k},${y + c} ${x0},${y} Z` };
+    }
+    case "bucket": {                              // an open rim on top, narrower at the bottom
+      const { ry, k } = f, rx = w / 2, rb = ry * 0.8;
+      return { d: `M${x0},${y0 + ry} A${rx},${ry} 0 0 1 ${x1},${y0 + ry} L${x1 - k},${y1 - rb} A${rx - k},${rb} 0 0 1 ${x0 + k},${y1 - rb} Z`,
+               lid: `M${x0},${y0 + ry} A${rx},${ry} 0 0 0 ${x1},${y0 + ry} A${rx},${ry} 0 0 0 ${x0},${y0 + ry} Z` };
+    }
+    case "sub": {                                 // a flowchart's "program": a line inside each end
+      const { r, b } = f, e = r - Math.sqrt(r * r - (r - b) ** 2);
+      return { d: box(x0, y0, w, h, r), rules: `M${x0 + b},${y0 + e} V${y1 - e} M${x1 - b},${y0 + e} V${y1 - e}` };
+    }
+    case "bubble": {                              // a speech bubble, its tail under the left end
+      const { r, t } = f;
+      return { d: `M${x0 + r},${y0} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y0 + r} V${y1 - r} A${r},${r} 0 0 1 ${x1 - r},${y1} `
+        + `H${x0 + 30} L${x0 + 15},${y1 + t} L${x0 + 19},${y1} H${x0 + r} A${r},${r} 0 0 1 ${x0},${y1 - r} V${y0 + r} A${r},${r} 0 0 1 ${x0 + r},${y0} Z` };
+    }
+    case "window": {                              // a browser window: a bar along the top, three dots in it
+      const { r, bar } = f;
+      return { d: box(x0, y0, w, h, r), rules: `M${x0},${y0 + bar} H${x1}`,
+               dots: range(3).map((i) => `M${x0 + 8 + i * 6},${y0 + bar / 2} h0.01`).join(" ") };
+    }
     default: return { d: box(x0, y0, w, h, f.r) };
   }
 }
@@ -126,21 +188,24 @@ function outline(n) {
 /** Where a node's text goes, clear of its shape's slanted or rounded sides: the centre line,
  * the room for its sub-line, the number's place, and how far a cylinder's rim pushes it down. */
 function textBox(n) {
-  const { x, w } = n, band = n.inline ? 7 : 12;
+  const { x, w } = n, band = n.inline ? 7 : 12, shape = shapeOf(n), f = form(n);
   const side = (s) => Math.max(lean(n, s, -band), lean(n, s, band));
-  const il = side("l"), ir = side("r") + (shapeOf(n) === "pipe" ? form(n).rc : 0);
+  const inner = shape === "sub" ? f.b : 0;      // clear of a program box's inner lines
+  const il = side("l") + inner, ir = side("r") + inner + (shape === "pipe" ? f.rc : 0);
   const x0 = x - w / 2, x1 = x + w / 2;
   const numX = n.num ? x0 + 20 + lean(n, "l", 0) * 0.9 : 0;
   const left = n.num ? numX + 21 : x0 + 8 + il, right = x1 - 8 - ir;
-  return { il, ir, numX, cx: (left + right) / 2, room: right - left, dy: shapeOf(n) === "db" ? form(n).ry * 0.75 : 0 };
+  // down a little below a rim or a window's bar, up a little above a document's wave
+  const dy = { db: f.ry * 0.75, bucket: f.ry * 0.75, window: f.bar / 2 - 1, doc: -f.a / 2 }[shape] ?? 0;
+  return { il, ir, numX, cx: (left + right) / 2, room: right - left, dy };
 }
 
 /** Path helpers for a scene. at(id, side, offset) is a point on a node's outline; via(a, y, b)
  * runs from a to b along the horizontal corridor at height y (between rows of boxes). */
 export function geometry(nodes) {
   const at = (id, side, d = 0) => {
-    const n = nodes[id], { x, y, w, h } = n, e = lean(n, side, d);
-    return { l: [x - w / 2 + e, y + d], r: [x + w / 2 - e, y + d], t: [x + d, y - h / 2], b: [x + d, y + h / 2] }[side];
+    const n = nodes[id], { x, y, w, h } = n, e = lean(n, side, d), v = sag(n, d);
+    return { l: [x - w / 2 + e, y + d], r: [x + w / 2 - e, y + d], t: [x + d, y - h / 2 + v], b: [x + d, y + h / 2 - v] }[side];
   };
   const line = (a, b) => `M${a} L${b}`;
   const curve = (a, c1, c2, b) => `M${a} C${c1} ${c2} ${b}`;
@@ -215,6 +280,8 @@ function nodeSvg(id, n) {
   const sw = slots ? Math.min(78, (w - 24 - t.il - t.ir - (slots - 1) * gap) / slots) : 0;
   const sx = x + (t.il - t.ir) / 2 - (slots * sw + (slots - 1) * gap) / 2;
   // inline: a one-line row (a table, a service): the title on the left, the line on the right
+  // the ↗ of a part with its own scene: its top right corner, or an eye's right end, where there's room
+  const open = shapeOf(n) === "eye" ? [x + w / 2 - 18, y + 4.5] : [x + w / 2 - 12 - t.ir, top + 17 + t.dy * 1.6];
   const [tx, sx2, ty, sy] = n.inline ? [x - w / 2 + 14 + t.il, x + w / 2 - 14 - t.ir, y + 5 + t.dy, y + 5 + t.dy]
     : [t.cx, t.cx, (slots ? top + 22 : y - 3) + t.dy, (slots ? top + 38 : y + 15) + t.dy];
   return html`<g class="node${n.link ? " link" : ""}${n.inline ? " inline" : ""}${num ? " numbered" : ""}" data-node="${id}"
@@ -222,6 +289,7 @@ function nodeSvg(id, n) {
     ${n.link ? html`<title>${title}: click to see it in detail</title>` : ""}
     <path class="shape" d="${o.d}" /><path class="sheen" d="${o.d}" />
     ${o.lid ? html`<path class="lid" d="${o.lid}" />` : ""}${o.pins ? html`<path class="pins" d="${o.pins}" />` : ""}
+    ${o.rules ? html`<path class="rules" d="${o.rules}" />` : ""}${o.dots ? html`<path class="dots" d="${o.dots}" />` : ""}
     ${num ? html`<g class="node-num" transform="translate(${t.numX} ${y})"><circle r="13" /><text y="4.5">${num}</text></g>` : ""}
     <text class="node-title" x="${tx}" y="${ty}">${title}</text>
     <text class="node-sub${n.mono ? " mono" : ""}" data-sub="${id}" x="${sx2}" y="${sy}"></text>
@@ -230,7 +298,7 @@ function nodeSvg(id, n) {
         <rect width="${sw}" height="24" rx="7" /><text x="${sw / 2}" y="16.5">·</text></g>`) : ""}
     ${n.badge ? html`<g class="count-badge" data-badge="${id}" transform="translate(${x + w / 2 - 6 - t.ir / 2} ${top + 6})">
       <circle r="12" /><text y="4.5"></text></g>` : ""}
-    ${n.link ? html`<text class="node-open" x="${x + w / 2 - 12 - t.ir}" y="${top + 17 + t.dy * 1.6}">↗</text>` : ""}
+    ${n.link ? html`<text class="node-open" x="${open[0]}" y="${open[1]}">↗</text>` : ""}
   </g>`;
 }
 
@@ -248,7 +316,8 @@ function sceneSvg(scene) {
         viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse"
         orient="auto-start-reverse"><path d="M1,1.2 L9.4,5 L1,8.8 L2.8,5 Z" fill="${c}" /></marker>`)}
     </defs>
-    <g class="groups">${(scene.groups || []).map(([x, y, gw, gh, label]) => html`<g class="group">
+    <g class="groups">${(scene.groups || []).map(([x, y, gw, gh, label, kind]) => html`<g class="group${kind ? " tinted" : ""}"
+        ${kind ? html`style="--k: ${KIND[kind]}"` : ""}>
       <rect class="frame" x="${x}" y="${y}" width="${gw}" height="${gh}" rx="16" />
       <g class="tag" transform="translate(${x + 14} ${y})"><rect y="-10" height="20" rx="10" /><text x="10" y="3.6">${label}</text></g></g>`)}</g>
     <g class="edges">${Object.entries(scene.edges).map(([id, d]) => html`<path class="edge${backbone.has(id) ? " backbone" : ""}"
@@ -272,7 +341,8 @@ const LEGEND = [["svc", "our code"], ["start", "you, a start, an end"], ["data",
 /** A legend key: the kind's own shape and colour, small. */
 function keyIcon(kind) {
   const o = outline(node(50, 30, 92, 48, kind));
-  return html`<svg viewBox="0 0 100 60" aria-hidden="true"><path d="${o.d}" />${o.lid ? html`<path class="lid" d="${o.lid}" />` : ""}</svg>`;
+  return html`<svg viewBox="0 0 100 60" aria-hidden="true"><path d="${o.d}" />${o.lid ? html`<path class="lid" d="${o.lid}" />` : ""}
+    ${o.rules ? html`<path class="rules" d="${o.rules}" />` : ""}${o.dots ? html`<path class="dots" d="${o.dots}" />` : ""}</svg>`;
 }
 
 /** One table of the "rows now" panel. Rows or cells that differ from the step's start are lit. */

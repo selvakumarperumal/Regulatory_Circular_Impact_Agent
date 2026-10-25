@@ -2467,6 +2467,28 @@ flowchart TD
   parallelogram; OCR on the GPU a chip; a check a hexagon; a gap or a failure a flag. The
   main paths stay faintly drawn with their arrows, and a moving note lights its path, with
   an arrowhead where it's going.
+- **On the Whole system tab, each part has a colour and a shape of its own**, so you can
+  tell them apart at a glance:
+
+  | Part | Shape | Colour |
+  |---|---|---|
+  | the regulators (RBI, SEBI, IRDAI) | a document, its bottom edge a wave | paper |
+  | the watcher | an eye | yellow |
+  | S3, the PDFs | a bucket | green |
+  | Redis: the lanes, the marks, the pending lists, `rci:dead` | a pipe | sky blue |
+  | the reader and the workers (one program) | a program box, a line inside each end | pink |
+  | OCR on the GPU | a chip | orange |
+  | Gemini | a speech bubble | purple |
+  | Postgres: every table | a cylinder | indigo |
+  | the api | a rounded box | teal |
+  | nginx | a hexagon, like its logo | silver |
+  | the console's pages | a browser window | blue |
+  | your team | a pill | lime |
+
+  Redis, Postgres, Gemini and OCR keep the colours they have in these guides' diagrams and
+  in the Underneath panel. The Redis, Postgres and console groups take their part's colour.
+  The notes moving along the arrows keep the colour of what they carry: green for an
+  answer, rose for a gap or a failure.
 - **Each picture is medium-sized** (at most 1160 pixels wide), with room between its parts.
   **Full screen** (the button, or F) puts it on the left, as large as the screen allows, and
   the rows and the log beside it.
