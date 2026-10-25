@@ -4,20 +4,20 @@
 import { geometry, node } from "./player.js";
 
 const nodes = {
-  page: node(139, 122, 206, 72, "start", "console page", "Sign in"),
-  storage: node(139, 280, 206, 62, "data", "localStorage", "empty", { mono: true }),
-  poll: node(139, 432, 206, 62, "svc", "page timer", "off", { idle: "off" }),
-  nginx: node(367, 282, 130, 72, "svc", "nginx :8080", "/api/* → api", { mono: true }),
-  app: node(604, 122, 208, 62, "svc", "FastAPI app", "match the route"),
-  auth: node(852, 122, 208, 62, "ask", "CurrentUser", "JWT · HS256 · 12 h"),
-  valid: node(604, 282, 208, 62, "ask", "body check", "Pydantic · 422 if wrong"),
-  handler: node(852, 282, 208, 62, "svc", "route handler", "routes/*.py", { mono: true }),
-  resp: node(604, 452, 208, 62, "ok", "the answer", "JSON + status code"),
-  save: node(852, 420, 208, 62, "svc", "save()", "commit · 409 if taken", { mono: true }),
-  enq: node(852, 546, 208, 62, "queue", "enqueue()", "after the commit", { mono: true }),
-  pg: node(1112, 152, 196, 92, "data", "Postgres", "users · policies · gaps"),
-  lane: node(1112, 356, 196, 92, "queue", "main lane", "rci:tasks", { slots: 2, mono: true, link: "redis" }),
-  worker: node(1112, 522, 196, 62, "svc", "worker", "waiting", { idle: "waiting", link: "worker" }),
+  page: node(139, 122, 206, 72, "page", "console page", "Sign in", { tag: "HTML · JS modules" }),
+  storage: node(139, 280, 206, 62, "page", "localStorage", "empty", { shape: "box", mono: true }),
+  poll: node(139, 432, 206, 62, "page", "page timer", "off", { shape: "box", idle: "off" }),
+  nginx: node(367, 282, 130, 72, "nginx", "nginx :8080", "/api/* → api", { mono: true, tag: ["1.29 · alpine", "c"] }),
+  app: node(604, 122, 208, 62, "svc", "FastAPI app", "match the route", { tag: "uvicorn" }),
+  auth: node(852, 122, 208, 62, "svc", "CurrentUser", "JWT · HS256 · 12 h", { shape: "hex", tag: "PyJWT" }),
+  valid: node(604, 282, 208, 62, "svc", "body check", "Pydantic · 422 if wrong", { shape: "hex" }),
+  handler: node(852, 282, 208, 62, "svc", "route handler", "routes/*.py", { mono: true, tag: "SQLModel" }),
+  resp: node(604, 452, 208, 62, "svc", "the answer", "JSON + status code", { shape: "pill" }),
+  save: node(852, 420, 208, 62, "svc", "save()", "commit · 409 if taken", { mono: true, tag: "psycopg 3" }),
+  enq: node(852, 546, 208, 62, "svc", "enqueue()", "after the commit", { mono: true, tag: "redis-py" }),
+  pg: node(1112, 152, 196, 92, "data", "Postgres", "users · policies · gaps", { tag: "Postgres 17" }),
+  lane: node(1112, 356, 196, 92, "queue", "main lane", "rci:tasks", { slots: 2, mono: true, tag: "Redis 7" }),
+  worker: node(1112, 522, 196, 62, "agent", "worker", "waiting", { idle: "waiting", link: "worker", tag: "LANES=main" }),
 };
 
 const { at, line, curve } = geometry(nodes);
@@ -288,8 +288,11 @@ export default {
   lead: "What happens when you use the console: signing in, then one policy saved from the button to the worker and back, every hop through nginx, the token check, the body check, the database and the queue. Then edits, gaps, and what happens when Redis is down.",
   label: "The api: the console page sends requests through nginx to FastAPI, which checks the login token and the body, runs the route handler, saves to Postgres and only after the commit queues a task in Redis for a worker, then answers; the page polls until the worker has checked the policy.",
   size: [1240, 620],
-  groups: [[16, 40, 246, 532, "your browser"], [290, 196, 154, 172, "frontend container"],
-           [480, 40, 498, 556, "the api · FastAPI on uvicorn :8000"], [1004, 40, 216, 556, "behind it"]],
+  groups: [[16, 40, 246, 532, "your browser", "page"], [290, 196, 154, 172, "frontend container", "nginx"],
+           [480, 40, 498, 556, "the api · FastAPI on uvicorn :8000", "svc"], [1004, 40, 216, 556, "behind it"]],
+  // Each part its own colour and shape (player.js, KIND and SHAPE); the api's own parts in its colour
+  legend: [["page", "console page", "window"], ["page", "in your browser", "box"], ["nginx", "nginx"], ["svc", "api"],
+           ["svc", "a check", "hex"], ["svc", "the answer", "pill"], ["data", "Postgres"], ["queue", "Redis"], ["agent", "worker"]],
   nodes,
   edges,
   quietEdges: true,

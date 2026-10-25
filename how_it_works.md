@@ -2391,7 +2391,7 @@ everything your company sees, and can change their own password here.
 
 ### How it works
 
-Five animations of the system, one per tab. Each step moves small labelled notes along the
+Four animations of the system, one per tab. Each step moves small labelled notes along the
 arrows and changes what each part says. Under the picture, **The rows now** shows the
 database and Redis rows that step changed (lit), like the tables in the guides, and
 **Underneath** explains each thing that happens behind the scenes in plain words (say, "A mark
@@ -2415,60 +2415,32 @@ flowchart TD
         sys -->|"click the watcher"| wa("<b>Watcher</b> · 33 steps<br/>the watcher guide's 9 steps<br/>each way it can fail")
         sys -->|"click the reader<br/>or a worker"| wo("<b>Worker</b> · 48 steps<br/>INTERNALS.md's 18 steps<br/>with its tables")
         sys -->|"click the api"| ap("<b>API</b> · 17 steps<br/>sign in · save a policy<br/>edits · gaps · Redis down")
-        sys -->|"click a lane, the marks<br/>or the pending lists"| rd[["<b>Redis tutorial</b> · 62 steps<br/>zero to advanced, in Python:<br/>types · streams · scripts<br/>persistence · Cluster"]]
     end
     classDef svc fill:#0e2a2c,stroke:#2dd4bf,color:#ccfbf1
     classDef ok fill:#0b2a1c,stroke:#34d399,color:#d1fae5
     class sys ok
     classDef queue fill:#0c2231,stroke:#38bdf8,color:#e0f2fe
     class wa,wo,ap svc
-    class rd queue
     style canvas fill:#0b1020,stroke:#1e293b,color:#0b1020
 ```
 
 - **Play, pause, step** (also ← and →, and Space), restart, or change the speed (1×, 2×,
   0.5×). Click any step in the list below the picture to jump to it.
-- **The Whole system tab** puts every part on one medium-sized picture (the regulators, the
+- **The Whole system tab** puts every part on one picture (the regulators, the
   watcher, Redis's lanes, marks and pending lists, the reader and the workers, OCR and
   Gemini, every Postgres table, your team, the console's pages, nginx and the api) and
   walks through 7 stories: a new circular end to end; a company signing up and describing
   itself; a new policy, from the form to the gap it finds; editing a policy; working a gap
   until it's closed; what happens when something goes wrong; and Reprocess.
-- **The Redis tab is a general Redis tutorial**, from zero to advanced, with Python
-  (redis-py). It doesn't use this app: its example is a small shop with users, a leaderboard,
-  an `orders` stream, two workers and a chat channel. There are 62 steps in 13 stories:
-  - what Redis is, the RESP protocol, one command at a time, and the connection pool;
-  - strings with expiry and counters; lists as queues; hashes;
-  - sets and sorted sets; bitmaps, HyperLogLog and geo; pub/sub and keyspace notifications;
-  - streams and consumer groups, with claims and dead letters;
-  - pipelines, `MULTI … EXEC`, `WATCH`, Lua scripts and functions;
-  - the usual patterns: cache-aside, a lock, rate limiting;
-  - memory, eviction, RDB and the AOF; replicas, Sentinel, Cluster and hash tags;
-  - security with ACL users, monitoring, big keys, asyncio, client-side caching over RESP3,
-    and Redis 8's built-in JSON and search.
-
-  Each step shows its Python in a large box beside the explanation and lights the line
-  that's running. The animation plays at half the other tabs' pace, and the speed button
-  still works. Under the picture, **Inside Redis now** shows the keys and structures the
-  step changed; this tab has no Underneath panel. The snippets were run on Redis 8 with
-  redis-py 8, and the answers shown are the real ones. The **Copy** button copies a step's
-  code.
-- **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`,
-  `#/how/redis`), so you can send someone straight to one. Clicking a lane, the marks, the
-  pending lists or `rci:dead` in another tab opens the Redis tab.
+- **Each tab has its own address** (`#/how/watcher`, `#/how/worker`, `#/how/api`), so you
+  can send someone straight to one.
 - **The Worker tab follows [INTERNALS.md](backend/worker/INTERNALS.md)**, and the Watcher tab
   [how_the_watcher_works.md](how_the_watcher_works.md): their numbered boxes are the guides'
   steps, each caption names the step it shows, and the example is the guides' own
   (circular 98; company 1 and company 2). The log lines, Redis commands and SQL are the ones
   the services print and run.
-- **Each kind of part has its own shape**, as in a flowchart, and the legend under the
-  picture shows them: our code is a rounded box; you, a start or an end a pill; a table or
-  a store a cylinder; a Redis lane or list a pipe; Gemini and the regulators' sites a
-  parallelogram; OCR on the GPU a chip; a check a hexagon; a gap or a failure a flag. The
-  main paths stay faintly drawn with their arrows, and a moving note lights its path, with
-  an arrowhead where it's going.
-- **On the Whole system tab, each part has a colour and a shape of its own**, so you can
-  tell them apart at a glance:
+- **Each part has a colour and a shape of its own**, on every tab, so you can tell them
+  apart at a glance. The legend under each picture shows the ones it uses:
 
   | Part | Shape | Colour |
   |---|---|---|
@@ -2486,12 +2458,29 @@ flowchart TD
   | your team | a pill | lime |
 
   Redis, Postgres, Gemini and OCR keep the colours they have in these guides' diagrams and
-  in the Underneath panel. The Redis, Postgres and console groups take their part's colour.
-  The notes moving along the arrows keep the colour of what they carry: green for an
-  answer, rose for a gap or a failure.
-- **Each picture is medium-sized** (at most 1160 pixels wide), with room between its parts.
-  **Full screen** (the button, or F) puts it on the left, as large as the screen allows, and
-  the rows and the log beside it.
+  in the Underneath panel.
+  - **A program's own steps** (the Watcher tab's 9, the Worker tab's 18, the api's parts)
+    take that program's colour: yellow for the watcher, pink for the reader and workers,
+    teal for the api. Their shape says what kind of step it is: a box for an action, a
+    hexagon for a check, a pill for a start or an end. A failure is always a rose flag.
+  - **Each part says what it runs**, on a small tag on its outline: `Python · httpx` on
+    the watcher, `Floci · :4566` on S3, `LANES=pdf` on the reader and `LANES=main` on the
+    workers, `feedparser` or `BeautifulSoup` on each regulator's site, `uvicorn`, `PyJWT`,
+    `SQLModel`, `psycopg 3` and `redis-py` on the api's parts. The group labels carry the
+    versions and ports: `Redis 7 · streams · :6379`, `Postgres 17 · 11 tables`,
+    `Gemini 3.5 Flash · vLLM on the GPU`.
+  - **Small details** finish the shapes: a document's folded corner, a ring on each Redis
+    pipe (a stream is a pipe of entries), nginx's hexagon inside a hexagon, a big browser
+    window's address bar.
+  - A group of one part's pieces takes that part's colour (Redis, Postgres, the console, a
+    program's steps). The notes moving along the arrows keep the colour of what they carry:
+    green for an answer, rose for a gap or a failure, lime for a web request.
+
+  The main paths stay faintly drawn with their arrows, and a moving note lights its path,
+  with an arrowhead where it's going.
+- **Each picture is as wide as the page**, so on a big screen it fills it. **Full screen**
+  (the button, or F) puts it on the left, as large as the screen allows, and the rows and
+  the log beside it.
 - With your system set to **reduce motion**, it starts paused and each step shows its end
   state.
 

@@ -227,27 +227,10 @@ a.xbar:hover .name { color: var(--accent); }
 .how-tabs a.on { border-color: rgba(167, 239, 111, 0.45); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(167, 239, 111, 0.15); }
 .how-tabs a.on b { color: var(--accent-strong); }
 
-#view:has(.how-tabs) { max-width: 1800px; }          /* a bigger picture on wide screens */
+#view:has(.how-tabs) { max-width: none; }            /* the whole width of the screen */
 .how { display: grid; gap: 20px; }
 .how-stage { padding: 18px 20px 16px; }
 .how-caption { min-height: 132px; }
-.how-caption.with-py { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.35fr); gap: 0 26px; align-items: start; }
-.how-py { margin: 0; border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; min-width: 0; }
-.how-py figcaption { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--line);
-                     font-size: 12px; color: var(--muted); }
-.how-py figcaption b { font-size: 11.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #fcd34d; }
-.how-py figcaption button { margin-left: auto; }
-.how-py pre { margin: 0; height: 344px; overflow: auto; padding: 10px 0; font: 500 14px/22px var(--mono); color: #d5deeb;
-              scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
-.how-py .ln { display: block; min-height: 22px; padding: 0 16px; white-space: pre; border-left: 3px solid transparent; transition: background 0.2s; }
-.how-py .ln.on { background: rgba(252, 211, 77, 0.09); border-left-color: #fcd34d; }
-.how-py i { font-style: normal; }
-.how-py i.c { color: #7c8ba3; font-style: italic; }
-.how-py i.s { color: #a7ef6f; }
-.how-py i.n { color: #fdba74; }
-.how-py i.k { color: #c084fc; }
-.how-py i.f { color: #5eead4; }
-@media (max-width: 1100px) { .how-caption.with-py { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 .how-story { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
 .how-caption h2 { margin-top: 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .how-ref { padding: 2px 9px; border-radius: 999px; font: 700 10.5px var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
@@ -258,12 +241,12 @@ a.xbar:hover .name { color: var(--accent); }
                  text-transform: uppercase; color: var(--muted); background: var(--surface-3); vertical-align: 1px; }
 .how-canvas { margin-top: 12px; overflow-x: auto; }     /* phones: scroll the picture sideways */
 .how-svg {
-  display: block; width: 100%; max-width: 1160px; height: auto; margin: 0 auto; border-radius: 12px; border: 1px solid var(--line);
+  display: block; width: 100%; height: auto; margin: 0 auto; border-radius: 12px; border: 1px solid var(--line);
   background: radial-gradient(ellipse at 50% 45%, rgba(56, 189, 248, 0.05), transparent 70%),
               radial-gradient(circle, rgba(148, 163, 184, 0.08) 1px, transparent 1.4px) 0 0 / 22px 22px, #070b14;
 }
 .how-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
-.how-panels.log-only, .how-panels.rows-only { grid-template-columns: minmax(0, 1fr); }
+.how-panels.log-only { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1150px) { .how-panels { grid-template-columns: minmax(0, 1fr); } }
 .how-rows, .how-log { border-radius: 12px; border: 1px solid var(--line); background: #060910; overflow: hidden; min-width: 0; }
 .how-log { display: flex; flex-direction: column; }
@@ -351,6 +334,11 @@ button.how-line:hover { background: rgba(255, 255, 255, 0.03); }
 .how-svg .node.on > .shape { stroke: var(--k); stroke-width: 2; filter: drop-shadow(0 0 12px color-mix(in srgb, var(--k) 45%, transparent)); }
 .how-svg .node > .rules { fill: none; stroke: color-mix(in srgb, var(--k) 45%, transparent); stroke-width: 1.2; }
 .how-svg .node > .dots { fill: none; stroke: color-mix(in srgb, var(--k) 70%, transparent); stroke-width: 3.4; stroke-linecap: round; }
+.how-svg .node > .addr { fill: none; stroke: color-mix(in srgb, var(--k) 20%, transparent); stroke-width: 6; stroke-linecap: round; }
+/* A part's tag: what it runs, on its outline */
+.how-svg .node-tag rect { fill: #0b1220; stroke: color-mix(in srgb, var(--k) 45%, transparent); stroke-width: 1; }
+.how-svg .node-tag text { font: 650 10.5px var(--sans); letter-spacing: 0.03em; fill: color-mix(in srgb, var(--k) 70%, #cbd5e1); text-anchor: middle; }
+.how-svg .node.on .node-tag rect { stroke: var(--k); }
 .how-svg .node.on > .lid, .how-svg .node.on > .pins, .how-svg .node.on > .rules, .how-svg .node.on > .dots { stroke: var(--k); }
 .how-svg .node-title { font: 600 16px var(--display); fill: var(--ink); text-anchor: middle; letter-spacing: -0.01em; }
 .how-svg .node-sub { font: 500 13px var(--sans); fill: var(--muted); text-anchor: middle; }

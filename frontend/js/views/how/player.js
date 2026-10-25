@@ -8,13 +8,10 @@
  * A scene: { id, tab, hint, heading, lead, label, refDoc, size: [w, h], nodes, edges,
  *            groups: [[x, y, w, h, label, kind?]], tables: { id: { title, store, cols } },
  *            start: { sub, slots, badge, rows }, stories, steps, quietEdges, backbone }
- * A step:  { story, dur, ref, title, text, code, py, focus: [node ids], tables: [table ids],
+ * A step:  { story, dur, ref, title, text, code, focus: [node ids], tables: [table ids],
  *            moves: [[label, "from>to", start, end, kind], …],   (start, end: 0 to 1)
- *            marks: [[moment, { sub, slots, badge, rows, log, py }], …] }
- * py: the step's Python, an array of lines, shown beside the caption when the scene sets
- * python: true; a mark's py (a line number, or [first, last]) lights the lines running.
- * A scene may also name its labels: codeLabel ("In the code"), rowsTitle, rowsHint, and its
- * own legend, [[kind, label], …]; underneath: false leaves out the Underneath panel.
+ *            marks: [[moment, { sub, slots, badge, rows, log }], …] }
+ * A scene may also have its own legend, [[kind, label, shape?], …]. A node's tag says what it runs.
  * A log line: [type, the real log line, SQL or command, what it means in plain words]. The
  * panel under the picture shows the plain words first, the real line under them. The line
  * that's open shows the real line in full and then each of its parts with what it means
@@ -39,7 +36,7 @@ export const KIND = {
 // The log panel's line types. Each line is [type, the real text, what it means in plain words].
 const LOG = {
   http: ["request", "#a7ef6f"], sql: ["Postgres", "#818cf8"], redis: ["Redis", "#38bdf8"], s3: ["S3", "#a5b4fc"],
-  cmd: ["Redis", "#38bdf8"], llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warning", "#fbbf24"],
+  llm: ["Gemini", "#c084fc"], ocr: ["OCR", "#fb923c"], log: ["log", "#5eead4"], warn: ["warning", "#fbbf24"],
   error: ["error", "#fb7185"], app: ["app", "#cbd5e1"],
 };
 const LOG_LINES = 8;
@@ -74,9 +71,9 @@ function form(n) {
     case "para": return { s: Math.min(12, h * 0.26) };
     case "chip": return { c: Math.min(10, h * 0.24) };
     case "flag": return { k: Math.min(12, h * 0.26), r: 10 };
-    case "doc": return { a: Math.min(5, h * 0.1), r: n.inline ? 7 : 10 };
+    case "doc": return { a: Math.min(5, h * 0.1), r: n.inline ? 7 : 10, e: n.inline ? 8 : 12 };
     case "bucket": return { ry: Math.min(6, h * 0.14), k: Math.min(12, w * 0.06) };
-    case "sub": return { r: n.inline ? 9 : 12, b: 9 };
+    case "sub": return { r: n.inline ? 9 : 12, b: 7 };
     case "bubble": return { r: n.inline ? 9 : 12, t: 6 };
     case "window": return { r: n.inline ? 8 : 12, bar: n.inline ? 9 : 13 };
     default: return { r: n.inline ? 9 : 12 };
@@ -96,7 +93,8 @@ function lean(n, side, d) {
     case "pipe": return f.rc * (1 - Math.sqrt(Math.max(0, 1 - (a / half) ** 2)));
     case "chip": return Math.max(0, a - (half - f.c));
     case "flag": return side === "l" ? f.k * (1 - a / half) : corner(f.r);
-    case "doc": return d < 0 ? corner(f.r) : 0;   // round top corners, a straight side down to the wave
+    case "doc":                                   // a round top left, a folded top right, straight down to the wave
+      return d >= 0 ? 0 : side === "r" ? Math.max(0, a - (half - f.e)) : corner(f.r);
     case "eye": return eye(n).find(([, hh]) => hh >= a)?.[0] ?? n.w / 2;
     case "bucket": return f.k * Math.min(1, Math.max(0, (d + half - f.ry) / (n.h - 1.8 * f.ry)));
     default: return 0;                            // a cylinder's sides are straight
@@ -137,9 +135,12 @@ function outline(n) {
     case "pipe": {
       const { rc } = f, ry = h / 2;
       return { d: `M${x0 + rc},${y0} H${x1 - rc} A${rc},${ry} 0 0 1 ${x1 - rc},${y1} H${x0 + rc} A${rc},${ry} 0 0 1 ${x0 + rc},${y0} Z`,
-               lid: `M${x1 - rc},${y0} A${rc},${ry} 0 0 0 ${x1 - rc},${y1} A${rc},${ry} 0 0 0 ${x1 - rc},${y0} Z` };
+               lid: `M${x1 - rc},${y0} A${rc},${ry} 0 0 0 ${x1 - rc},${y1} A${rc},${ry} 0 0 0 ${x1 - rc},${y0} Z`,
+               rules: n.inline ? "" : `M${x0 + rc + 9},${y0} A${rc},${ry} 0 0 1 ${x0 + rc + 9},${y1}` };   // a ring: one of its segments
     }
-    case "hex": return { d: `M${x0 + f.i},${y0} H${x1 - f.i} L${x1},${y} L${x1 - f.i},${y1} H${x0 + f.i} L${x0},${y} Z` };
+    case "hex": return { d: `M${x0 + f.i},${y0} H${x1 - f.i} L${x1},${y} L${x1 - f.i},${y1} H${x0 + f.i} L${x0},${y} Z`,
+      rules: n.kind !== "nginx" ? "" : `M${x0 + f.i + 3},${y0 + 5} H${x1 - f.i - 3} L${x1 - 6},${y} L${x1 - f.i - 3},${y1 - 5} `
+        + `H${x0 + f.i + 3} L${x0 + 6},${y} Z` };                       // nginx's logo: a hexagon in a hexagon
     case "para": return { d: `M${x0 + f.s},${y0} H${x1} L${x1 - f.s},${y1} H${x0} Z` };
     case "chip": {
       const { c } = f, step = (w - 2 * c - 24) / 3;
@@ -154,9 +155,10 @@ function outline(n) {
       return { d: `M${x0},${y0} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y0 + r} V${y1 - r} A${r},${r} 0 0 1 ${x1 - r},${y1} H${x0} L${x0 + k},${y} Z` };
     }
     case "doc": {                                 // a page whose bottom edge is a wave
-      const { a, r } = f;
-      return { d: `M${x0},${y1 - a} V${y0 + r} A${r},${r} 0 0 1 ${x0 + r},${y0} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y0 + r} `
-        + `V${y1 - a} Q${x1 - w / 4},${y1 + a} ${x},${y1 - a} T${x0},${y1 - a} Z` };
+      const { a, r, e } = f;
+      return { d: `M${x0},${y1 - a} V${y0 + r} A${r},${r} 0 0 1 ${x0 + r},${y0} H${x1 - e} L${x1},${y0 + e} `
+        + `V${y1 - a} Q${x1 - w / 4},${y1 + a} ${x},${y1 - a} T${x0},${y1 - a} Z`,
+               rules: `M${x1 - e},${y0} V${y0 + e} H${x1}` };                    // the fold
     }
     case "eye": {                                 // an almond: two curves from end to end
       const k = w * 0.18, c = (2 * h) / 3;
@@ -179,7 +181,8 @@ function outline(n) {
     case "window": {                              // a browser window: a bar along the top, three dots in it
       const { r, bar } = f;
       return { d: box(x0, y0, w, h, r), rules: `M${x0},${y0 + bar} H${x1}`,
-               dots: range(3).map((i) => `M${x0 + 8 + i * 6},${y0 + bar / 2} h0.01`).join(" ") };
+               dots: range(3).map((i) => `M${x0 + 8 + i * 6},${y0 + bar / 2} h0.01`).join(" "),
+               addr: n.inline ? "" : `M${x0 + 34},${y0 + bar / 2} H${x1 - 12}` };    // its address field
     }
     default: return { d: box(x0, y0, w, h, f.r) };
   }
@@ -190,7 +193,7 @@ function outline(n) {
 function textBox(n) {
   const { x, w } = n, band = n.inline ? 7 : 12, shape = shapeOf(n), f = form(n);
   const side = (s) => Math.max(lean(n, s, -band), lean(n, s, band));
-  const inner = shape === "sub" ? f.b : 0;      // clear of a program box's inner lines
+  const inner = shape === "sub" ? f.b : n.kind === "nginx" ? 6 : 0;   // clear of inner lines
   const il = side("l") + inner, ir = side("r") + inner + (shape === "pipe" ? f.rc : 0);
   const x0 = x - w / 2, x1 = x + w / 2;
   const numX = n.num ? x0 + 20 + lean(n, "l", 0) * 0.9 : 0;
@@ -198,6 +201,23 @@ function textBox(n) {
   // down a little below a rim or a window's bar, up a little above a document's wave
   const dy = { db: f.ry * 0.75, bucket: f.ry * 0.75, window: f.bar / 2 - 1, doc: -f.a / 2 }[shape] ?? 0;
   return { il, ir, numX, cx: (left + right) / 2, room: right - left, dy };
+}
+
+/** Where a part's tag (what it runs: "Redis 7", "Python · httpx") sits, once its width tw is
+ * known: on its outline, at the bottom right, or "c" the bottom middle, "t" the top right, "tc"
+ * the top middle, or a number: that far right of the bottom middle (clear of the edges there).
+ * It follows a curved edge: an eye's, a cylinder's or a bucket's. (A document's wave is down at
+ * its box's bottom on the right, where the tag goes.) */
+function tagSpot(n, tw) {
+  const align = [].concat(n.tag)[1] ?? "r", shape = shapeOf(n), f = form(n);
+  const top = typeof align === "string" && align.startsWith("t"), { x, y, w, h } = n, side = h / 2 - 1;
+  const dx = typeof align === "number" ? align : align.endsWith("c") ? 0 : w / 2 - lean(n, "r", top ? -side : side) - 16 - tw / 2;
+  const round = (rx, ry) => ry * (1 - Math.sqrt(Math.max(0, 1 - (dx / rx) ** 2)));
+  let edge = h / 2 - sag(n, dx);
+  if (shape === "db" || shape === "bucket") {
+    edge -= top || shape === "db" ? round(w / 2, f.ry) : round(w / 2 - f.k, f.ry * 0.8);
+  }
+  return [x + dx, y + (top ? -edge : edge)];
 }
 
 /** Path helpers for a scene. at(id, side, offset) is a point on a node's outline; via(a, y, b)
@@ -224,14 +244,13 @@ const range = (n) => [...Array(n).keys()];
 function apply(s, change) {
   for (const [key, value] of Object.entries(change)) {
     if (key === "log") s.log.push(...(typeof value[0] === "string" ? [value] : value));
-    else if (key === "py") s.py = value;
     else Object.assign(s[key], value);
   }
 }
 
 /** The state at a moment: the start, every mark of the earlier steps, and this step's up to p. */
 function stateAt(scene, step, p) {
-  const s = { sub: {}, slots: {}, badge: {}, rows: {}, log: [], py: null };
+  const s = { sub: {}, slots: {}, badge: {}, rows: {}, log: [] };
   for (const [id, n] of Object.entries(scene.nodes)) {
     s.sub[id] = n.sub;
     if (n.slots) s.slots[id] = [];
@@ -242,33 +261,8 @@ function stateAt(scene, step, p) {
     const marks = [...(st.marks || [])].sort((a, b) => a[0] - b[0]);
     for (const [t, change] of marks) if (k < step || t <= p) apply(s, change);
   });
-  if (!scene.steps[step].marks?.some(([t, change]) => t <= p && "py" in change)) s.py = null;   // lit lines are this step's
   return s;
 }
-
-// ── Python ─────────────────────────────────────────────────────────────────
-
-const PY_WORDS = new Set(["import", "from", "as", "def", "return", "with", "for", "in", "if", "elif", "else", "try", "except",
-  "finally", "while", "True", "False", "None", "async", "await", "lambda", "and", "or", "not", "is", "raise", "class", "pass",
-  "break", "continue", "yield", "global"]);
-const PY_TOKEN = /(#.*$)|([rbf]?"(?:[^"\\]|\\.)*"|[rbf]?'(?:[^'\\]|\\.)*')|\b(\d[\d_]*(?:\.\d+)?)\b|([A-Za-z_]\w*)(?=\s*\()|([A-Za-z_]\w*)/g;
-
-/** A line of Python, coloured: comments, strings, numbers, keywords and calls. */
-function pyLine(line) {
-  const out = [];
-  let at = 0;
-  for (const m of line.matchAll(PY_TOKEN)) {
-    if (m.index > at) out.push(line.slice(at, m.index));
-    const [word, comment, string, number, call, name] = m;
-    const cls = comment ? "c" : string ? "s" : number ? "n" : PY_WORDS.has(call || name) ? "k" : call ? "f" : "";
-    out.push(cls ? html`<i class="${cls}">${word}</i>` : word);
-    at = m.index + word.length;
-  }
-  out.push(line.slice(at));
-  return out;
-}
-
-const pyLines = (py) => (Array.isArray(py) ? py : String(py ?? "").split("\n"));
 
 // ── Drawing ────────────────────────────────────────────────────────────────
 
@@ -290,6 +284,8 @@ function nodeSvg(id, n) {
     <path class="shape" d="${o.d}" /><path class="sheen" d="${o.d}" />
     ${o.lid ? html`<path class="lid" d="${o.lid}" />` : ""}${o.pins ? html`<path class="pins" d="${o.pins}" />` : ""}
     ${o.rules ? html`<path class="rules" d="${o.rules}" />` : ""}${o.dots ? html`<path class="dots" d="${o.dots}" />` : ""}
+    ${o.addr ? html`<path class="addr" d="${o.addr}" />` : ""}
+    ${n.tag ? html`<g class="node-tag" data-tag="${id}"><rect y="-9" height="18" rx="9" /><text y="3.6">${[].concat(n.tag)[0]}</text></g>` : ""}
     ${num ? html`<g class="node-num" transform="translate(${t.numX} ${y})"><circle r="13" /><text y="4.5">${num}</text></g>` : ""}
     <text class="node-title" x="${tx}" y="${ty}">${title}</text>
     <text class="node-sub${n.mono ? " mono" : ""}" data-sub="${id}" x="${sx2}" y="${sy}"></text>
@@ -338,9 +334,9 @@ function stepList(scene) {
 const LEGEND = [["svc", "our code"], ["start", "you, a start, an end"], ["data", "a table, a store"], ["queue", "a task, Redis"],
                 ["ext", "Gemini, outside sites"], ["gpu", "OCR on the GPU"], ["ask", "a check"], ["bad", "a gap, a failure"]];
 
-/** A legend key: the kind's own shape and colour, small. */
-function keyIcon(kind) {
-  const o = outline(node(50, 30, 92, 48, kind));
+/** A legend key: the kind's own shape (or the one given) and colour, small. */
+function keyIcon(kind, shape) {
+  const o = outline(node(50, 30, 92, 48, kind, "", "", { shape }));
   return html`<svg viewBox="0 0 100 60" aria-hidden="true"><path d="${o.d}" />${o.lid ? html`<path class="lid" d="${o.lid}" />` : ""}
     ${o.rules ? html`<path class="rules" d="${o.rules}" />` : ""}${o.dots ? html`<path class="dots" d="${o.dots}" />` : ""}</svg>`;
 }
@@ -365,18 +361,13 @@ export function play(scene, root) {
   put(root, html`
     <div class="how">
       <section class="panel how-stage">
-        <div class="how-caption${scene.python ? " with-py" : ""}" aria-live="polite">
+        <div class="how-caption" aria-live="polite">
           <div class="how-words">
             <div class="how-story" id="how-story"></div>
             <h2 id="how-title"></h2>
             <p id="how-text"></p>
             <p class="how-code" id="how-code"></p>
           </div>
-          ${scene.python ? html`<figure class="how-py">
-            <figcaption><b>Python</b><span>what this step runs, with redis-py</span>
-              <button type="button" class="btn ghost sm" id="how-copy">Copy</button></figcaption>
-            <pre id="how-py"></pre>
-          </figure>` : ""}
         </div>
         <div class="how-canvas">${sceneSvg(scene)}</div>
         <div class="how-bar"><i id="how-progress"></i></div>
@@ -388,17 +379,17 @@ export function play(scene, root) {
           <button class="btn ghost sm" id="how-speed" title="Speed">1×</button>
           <span class="how-count" id="how-count"></span>
           <button class="btn ghost sm" id="how-full" title="Full screen (F)">${icon("expand")}Full screen</button>
-          <ul class="how-legend">${(scene.legend ?? LEGEND).map(([k, label]) => html`<li style="--k: ${KIND[k]}">${keyIcon(k)}${label}</li>`)}</ul>
+          <ul class="how-legend">${(scene.legend ?? LEGEND).map(([k, label, shape]) => html`<li style="--k: ${KIND[k]}">${keyIcon(k, shape)}${label}</li>`)}</ul>
         </div>
-        <div class="how-panels${scene.tables ? "" : " log-only"}${scene.underneath === false ? " rows-only" : ""}">
+        <div class="how-panels${scene.tables ? "" : " log-only"}">
           ${scene.tables ? html`<div class="how-rows" aria-live="polite">
-            <div class="how-panel-head"><b>${scene.rowsTitle ?? "The rows now"}</b><span>${scene.rowsHint ?? "what this step changed is lit"}</span></div>
+            <div class="how-panel-head"><b>The rows now</b><span>what this step changed is lit</span></div>
             <div id="how-tables"></div>
           </div>` : ""}
-          ${scene.underneath === false ? "" : html`<div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
+          <div class="how-log" role="log" aria-label="What the logs, Redis and Postgres see">
             <div class="how-panel-head"><b>Underneath</b><span>what the programs really do, in plain words. The newest line is taken apart piece by piece; click any line to open it</span></div>
             <ol id="how-log"></ol>
-          </div>`}
+          </div>
         </div>
       </section>
       <aside class="panel how-steps"><ol>${stepList(scene)}</ol></aside>
@@ -415,7 +406,7 @@ export function play(scene, root) {
   const widths = new Map();
   const shown = new Map();                        // text element → the text last put in it
   let step = 0, p = reduced ? 1 : 0, playing = !reduced, speed = 1, last = null;
-  let shownStep = -1, shownLog = "", shownRows = "", shownPy = "", before = null;
+  let shownStep = -1, shownLog = "", shownRows = "", before = null;
   let chosen = -1, logLength = 0;                 // the log line opened by a click, or -1: this step's newest
 
   /** Put text in an SVG text element, cut with "…" to fit `max` pixels. */
@@ -434,8 +425,16 @@ export function play(scene, root) {
     const title = $(`[data-node="${id}"] .node-title`, svg);
     return [id, textBox(n).room - (n.inline ? 26 + title.getComputedTextLength() : 0)];
   }));
-  // Each group's label sits on its border, on a tag as wide as the label
-  const tags = () => $$(".group .tag", svg).forEach((g) => $("rect", g).setAttribute("width", $("text", g).getComputedTextLength() + 20));
+  // Each group's label sits on its border, on a tag as wide as the label; a part's tag on its outline
+  const tags = () => {
+    $$(".group .tag", svg).forEach((g) => $("rect", g).setAttribute("width", $("text", g).getComputedTextLength() + 20));
+    $$(".node-tag", svg).forEach((g) => {
+      const tw = $("text", g).getComputedTextLength() + 18, rect = $("rect", g);
+      rect.setAttribute("width", tw);
+      rect.setAttribute("x", -tw / 2);
+      g.setAttribute("transform", `translate(${tagSpot(scene.nodes[g.dataset.tag], tw)})`);
+    });
+  };
   tags();
   document.fonts?.ready.then(tags);
   const faint = (id) => (pathOf[id].classList.contains("backbone") ? "marker-end faint" : "");
@@ -462,7 +461,6 @@ export function play(scene, root) {
    * line is open: the one clicked, else this step's newest. It shows the real line in full
    * and then each of its parts with what that part means. */
   function showLog(lines, fresh) {
-    if (scene.underneath === false) return;
     if (lines.length !== logLength) chosen = -1;
     logLength = lines.length;
     const newest = lines.length - 1;
@@ -516,12 +514,7 @@ export function play(scene, root) {
       $("#how-story", root).textContent = scene.stories[st.story];
       put($("#how-title", root), html`${st.ref ? html`<span class="how-ref">${scene.refDoc} · ${st.ref}</span>` : ""}${st.title}`);
       $("#how-text", root).textContent = st.text;
-      put($("#how-code", root), st.code ? html`<span>${scene.codeLabel ?? "In the code"}</span>${st.code}` : html``);
-      if (scene.python) {
-        put($("#how-py", root), html`${pyLines(st.py).map((l, i) => html`<span class="ln" data-ln="${i + 1}">${pyLine(l)}</span>`)}`);
-        $("#how-py", root).scrollTop = 0;
-        shownPy = "";
-      }
+      put($("#how-code", root), st.code ? html`<span>In the code</span>${st.code}` : html``);
       $("#how-count", root).textContent = `step ${step + 1} of ${steps.length}`;
       $$(".how-step", root).forEach((b) => b.classList.toggle("on", +b.dataset.step === step));
       const routes = new Set(st.moves.map(([, name]) => edgeFor(name).id));
@@ -546,12 +539,6 @@ export function play(scene, root) {
     }
     showLog(s.log, before.log.length);
     showTables(st, s);
-    if (scene.python && JSON.stringify(s.py) !== shownPy) {
-      shownPy = JSON.stringify(s.py);
-      const [a, b] = Array.isArray(s.py) ? s.py : [s.py, s.py];
-      $$("#how-py .ln", root).forEach((ln) => ln.classList.toggle("on", s.py !== null && +ln.dataset.ln >= a && +ln.dataset.ln <= b));
-      $("#how-py .ln.on", root)?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
 
     const lit = new Set(st.focus || []);
     const busyEdges = new Map();
@@ -631,21 +618,11 @@ export function play(scene, root) {
   $("#how-next", root).addEventListener("click", () => go(step + 1));
   $("#how-restart", root).addEventListener("click", () => go(0, { play: true }));
   $("#how-full", root).addEventListener("click", toggleFull);
-  $("#how-copy", root)?.addEventListener("click", async (e) => {
-    const button = e.currentTarget;
-    try {
-      await navigator.clipboard.writeText(pyLines(steps[step].py).join("\n"));
-      button.textContent = "Copied";
-    } catch {
-      button.textContent = "Select and copy";
-    }
-    setTimeout(() => { button.textContent = "Copy"; }, 1600);
-  });
   $("#how-speed", root).addEventListener("click", (e) => {
     speed = speed === 1 ? 2 : speed === 2 ? 0.5 : 1;
     e.currentTarget.textContent = `${speed}×`;
   });
-  $("#how-log", root)?.addEventListener("click", (e) => {
+  $("#how-log", root).addEventListener("click", (e) => {
     const line = e.target.closest("[data-line]");
     if (!line) return;
     chosen = +line.dataset.line;                  // open it, and pause so it can be read

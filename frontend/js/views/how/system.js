@@ -12,12 +12,12 @@ const SHA = "3f9a…c1";
 
 const nodes = {
   // the regulators and the watcher
-  reg: node(88, 104, 150, 58, "regulator", "regulators", "RBI · SEBI · IRDAI"),
-  watcher: node(272, 104, 150, 58, "watcher", "watcher", "every 60 min", { link: "watcher" }),
+  reg: node(88, 104, 150, 58, "regulator", "regulators", "RBI · SEBI · IRDAI", { tag: "RSS · HTML · PDF" }),
+  watcher: node(272, 104, 150, 58, "watcher", "watcher", "every 60 min", { link: "watcher", tag: ["Python · httpx", 22] }),
   // Redis's bookkeeping
-  marks: node(104, 268, 150, 52, "queue", "marks", "no duplicates", { link: "redis" }),
-  pending: node(292, 268, 168, 52, "queue", "pending lists", "who has what", { link: "redis" }),
-  dead: node(198, 356, 180, 52, "queue", "rci:dead", "tasks given up", { link: "redis" }),
+  marks: node(104, 268, 150, 52, "queue", "marks", "no duplicates"),
+  pending: node(292, 268, 168, 52, "queue", "pending lists", "who has what"),
+  dead: node(198, 356, 180, 52, "queue", "rci:dead", "tasks given up"),
   // your team and the console's pages, in the sidebar's order
   team: node(62, 600, 92, 64, "start", "your team", "browser"),
   overview: node(235, 486, 198, 34, "page", "Overview", "at a glance", { inline: true }),
@@ -28,12 +28,12 @@ const nodes = {
   nginx: node(402, 548, 100, 56, "nginx", "nginx", ":8080"),
   api: node(402, 662, 84, 64, "svc", "api", "FastAPI", { link: "api" }),
   // reading circulars, and checking them
-  s3: node(575, 50, 196, 38, "s3", "S3", "the PDFs", { inline: true }),
-  pdf: node(575, 142, 196, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true, link: "redis" }),
-  reader: node(790, 142, 140, 64, "agent", "reader", W, { idle: W, link: "worker" }),
-  main: node(600, 522, 240, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true, link: "redis" }),
-  w1: node(800, 470, 136, 60, "agent", "worker 1", W, { idle: W, link: "worker" }),
-  w2: node(800, 578, 136, 60, "agent", "worker 2", W, { idle: W, link: "worker" }),
+  s3: node(575, 50, 196, 38, "s3", "S3", "the PDFs", { inline: true, tag: ["Floci · :4566", "c"] }),
+  pdf: node(575, 142, 196, 84, "queue", "PDF lane", "rci:tasks:pdf", { slots: 2, mono: true }),
+  reader: node(790, 142, 140, 64, "agent", "reader", W, { idle: W, link: "worker", tag: ["LANES=pdf", 30] }),
+  main: node(600, 522, 240, 84, "queue", "main lane", "rci:tasks", { slots: 3, mono: true }),
+  w1: node(800, 470, 136, 60, "agent", "worker 1", W, { idle: W, link: "worker", tag: "LANES=main" }),
+  w2: node(800, 578, 136, 60, "agent", "worker 2", W, { idle: W, link: "worker", tag: "LANES=main" }),
   // what they call, and where everything is kept
   ocr: node(1062, 80, 304, 34, "gpu", "OCR · GPU", "a page at a time", { inline: true }),
   chat: node(1062, 124, 304, 34, "llm", "Gemini chat", "JSON answers", { inline: true }),
@@ -663,8 +663,9 @@ export default {
   lead: "Every part, and everything it does: a new circular from the regulator's site to a gap on your Gaps page; a company signing up and describing itself; a new policy, the full process; editing a policy; working a gap until it's closed; what happens when something goes wrong; and Reprocess. Click the watcher, the reader, a worker or the api to see that part in detail.",
   label: "The system: the regulators and the watcher top left; Redis's marks, pending lists and rci:dead below them; your team, the console's pages, nginx and the api bottom left; S3, the PDF lane and the reader top middle; the main lane and two workers below; OCR and Gemini top right; and the Postgres tables on the right.",
   size: [1240, 750],
-  groups: [[16, 196, 424, 196, "Redis", "queue"], [124, 450, 222, 254, "the console", "page"], [900, 40, 324, 166, "Gemini and the GPU"],
-           [900, 234, 324, 386, "Postgres", "data"]],
+  groups: [[16, 196, 424, 196, "Redis 7 · streams · :6379", "queue"], [124, 450, 222, 254, "the console · plain JS", "page"],
+           [900, 40, 324, 166, "Gemini 3.5 Flash · vLLM on the GPU"],
+           [900, 234, 324, 386, "Postgres 17 · 11 tables", "data"]],
   // Each part its own colour and shape (player.js, KIND and SHAPE)
   legend: [["start", "your team"], ["page", "console pages"], ["nginx", "nginx"], ["svc", "api"], ["regulator", "regulators"],
            ["watcher", "watcher"], ["s3", "S3"], ["queue", "Redis"], ["agent", "reader, workers"], ["gpu", "OCR (GPU)"],
